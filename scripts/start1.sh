@@ -6,6 +6,10 @@
 # 不建议直接改 Python 控制逻辑或场景生成逻辑。
 # set -e
 
+# 根据脚本所在位置推导工作空间根目录（scripts/ 的上一级）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # 防重复执行锁（彻底杜绝二次执行杀进程）
 LOCK_FILE="/tmp/start_drone.lock"
 if [ -f "$LOCK_FILE" ]; then
@@ -16,7 +20,7 @@ echo $$ > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # 强制创建日志目录，避免tee报错
-LOG_DIR=~/ws_xtd2/logs
+LOG_DIR=${WS_ROOT}/logs
 mkdir -p "$LOG_DIR" || { echo "[ERROR] 无法创建日志目录 $LOG_DIR"; exit 1; }
 
 # 环境变量配置
@@ -77,10 +81,10 @@ COMM_AVOID_Z_TRACK_TOL=${COMM_AVOID_Z_TRACK_TOL:-0.35}
 DYNAMIC_OBS_ENABLE=${DYNAMIC_OBS_ENABLE:-1}
 DYNAMIC_OBS_VISUALIZE_GZ=${DYNAMIC_OBS_VISUALIZE_GZ:-1}
 DYNAMIC_OBS_WORLD=${DYNAMIC_OBS_WORLD:-${GZ_WORLD}}
-OBSTACLE_CONFIG=${OBSTACLE_CONFIG:-~/ws_xtd2/scripts/obstacles.yaml}
+OBSTACLE_CONFIG=${OBSTACLE_CONFIG:-${WS_ROOT}/scripts/obstacles.yaml}
 # 墙体模式参数保留用于后续实验；当前默认无墙验证(DYNAMIC_OBS_ENABLE=0)不会启动该链路
 DYNAMIC_OBS_MODE=${DYNAMIC_OBS_MODE:-static_wall}
-DYNAMIC_OBS_SCENE_CONFIG=${DYNAMIC_OBS_SCENE_CONFIG:-~/ws_xtd2/scripts/scenes/easy_crossing.yaml}
+DYNAMIC_OBS_SCENE_CONFIG=${DYNAMIC_OBS_SCENE_CONFIG:-${WS_ROOT}/scripts/scenes/easy_crossing.yaml}
 DYNAMIC_OBS_START_CENTER_X=${DYNAMIC_OBS_START_CENTER_X:-35.0}
 DYNAMIC_OBS_START_CENTER_Y=${DYNAMIC_OBS_START_CENTER_Y:-6.0}
 DYNAMIC_OBS_ACTIVE_CENTER_X=${DYNAMIC_OBS_ACTIVE_CENTER_X:-5.5}
@@ -153,7 +157,7 @@ PY
   [ -z "${USER_SET_DYNAMIC_OBS_WALL_SEGMENT_SPACING}" ] && [ -n "${SCENE_WALL_SEGMENT_SPACING:-}" ] && DYNAMIC_OBS_WALL_SEGMENT_SPACING="${SCENE_WALL_SEGMENT_SPACING}"
 fi
 if [ "${DYNAMIC_OBS_MODE}" != "scene" ] && [ -f "${OBSTACLE_CONFIG/#\~/$HOME}" ]; then
-  eval "$(python3 ~/ws_xtd2/scripts/obstacle_config.py --shell "${OBSTACLE_CONFIG}")"
+  eval "$(python3 ${WS_ROOT}/scripts/obstacle_config.py --shell "${OBSTACLE_CONFIG}")"
 fi
 START_WALL_CLEARANCE=${START_WALL_CLEARANCE:-8.0}
 MISSION_START_X=${MISSION_START_X:-$(awk "BEGIN{printf \"%.2f\", ${DYNAMIC_OBS_WALL_X} - ${START_WALL_CLEARANCE}}")}
@@ -257,8 +261,9 @@ sleep 5
 
 # 编译+环境配置
 echo "[INFO] build + source..."
-cd ~/ws_xtd2 || { echo "[ERROR] 无法进入工作目录 ~/ws_xtd2"; exit 1; }
+cd "${WS_ROOT}" || { echo "[ERROR] 无法进入工作目录 ${WS_ROOT}"; exit 1; }
 source /opt/ros/jazzy/setup.bash || { echo "[ERROR] 无法加载ROS 2环境"; exit 1; }
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 colcon build --packages-select xtd2_communication --symlink-install || { echo "[ERROR] 编译失败"; exit 1; }
 source install/setup.bash || { echo "[ERROR] 无法加载工作空间环境"; exit 1; }
 
@@ -284,13 +289,13 @@ for ((i=1; i<=NUM_DRONES; i++)); do
   spawn_enu_y=${spawn_ned_x}
   if [ $i -eq 1 ]; then
     launch_job "PX4_$i" "
-cd ~/PX4-Autopilot;
+cd ${WS_ROOT}/firmware/PX4-Autopilot;
 PX4_UXRCE_DDS_PORT=${DDS_PORT} PX4_GZ_WORLD=${GZ_WORLD} PX4_GZ_MODEL_POSE=\"${spawn_enu_x},${spawn_enu_y}\" PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 ./build/px4_sitl_default/bin/px4 -i ${i} | tee ${LOG_DIR}/px4_${i}.log;
 exec bash
 "
   else
     launch_job "PX4_$i" "
-cd ~/PX4-Autopilot;
+cd ${WS_ROOT}/firmware/PX4-Autopilot;
 PX4_UXRCE_DDS_PORT=${DDS_PORT} PX4_GZ_WORLD=${GZ_WORLD} PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE=\"${spawn_enu_x},${spawn_enu_y}\" PX4_SIM_MODEL=gz_x500 ./build/px4_sitl_default/bin/px4 -i ${i} | tee ${LOG_DIR}/px4_${i}.log;
 exec bash
 "
@@ -335,7 +340,7 @@ for ((id=1; id<=NUM_DRONES; id++)); do
   echo "[MAP] id=${id} -> control_ns=${ns} -> gazebo_model=x500_${id} -> ${px4_ns} -> target_sys_id=${target_sys_id} -> ${role} -> ${avoid_role}"
 
   launch_job "Comm_${id}" "
-cd ~/ws_xtd2;
+cd ${WS_ROOT};
 source /opt/ros/jazzy/setup.bash;
 source install/setup.bash;
 ros2 run xtd2_communication multirotor_communication --model gz_x500 --id ${id} --namespace ${ns} --px4-ns ${px4_ns} --target-sys-id ${target_sys_id} ${avoid_args} 2>&1 | tee ${LOG_DIR}/comm_${id}.log;
@@ -346,30 +351,30 @@ sleep 5
 
 echo "[INFO] start state_exchange..."
 launch_job "StateExchange" "
-cd ~/ws_xtd2;
+cd ${WS_ROOT};
 source /opt/ros/jazzy/setup.bash;
 source install/setup.bash;
-python3 ~/ws_xtd2/scripts/swarm_state_exchange.py --num-drones ${NUM_DRONES} --rate 15 --spawned-formation ${USE_SPAWNED_FORMATION} --mission-start-x ${MISSION_START_X} --base-y ${DYNAMIC_OBS_WALL_Y} --y-spacing ${DYNAMIC_OBS_TARGET_Y_SPACING} --leader-id ${LEADER_ID} 2>&1 | tee ${LOG_DIR}/state_exchange.log;
+python3 ${WS_ROOT}/scripts/swarm_state_exchange.py --num-drones ${NUM_DRONES} --rate 15 --spawned-formation ${USE_SPAWNED_FORMATION} --mission-start-x ${MISSION_START_X} --base-y ${DYNAMIC_OBS_WALL_Y} --y-spacing ${DYNAMIC_OBS_TARGET_Y_SPACING} --leader-id ${LEADER_ID} 2>&1 | tee ${LOG_DIR}/state_exchange.log;
 exec bash
 "
 if [ "${SWARM_MODE}" = "hybrid" ]; then
   echo "[INFO] SWARM_MODE=hybrid, start local_avoid_orca..."
   launch_job "LocalORCA" "
-cd ~/ws_xtd2;
+cd ${WS_ROOT};
 source /opt/ros/jazzy/setup.bash;
 source install/setup.bash;
-python3 ~/ws_xtd2/scripts/local_avoid_orca.py --num-drones ${NUM_DRONES} --safe-radius ${ORCA_SAFE_RADIUS} --max-speed ${ORCA_MAX_SPEED} --gain ${ORCA_GAIN} --obs-gain ${ORCA_OBS_GAIN} --obs-influence-radius ${ORCA_OBS_INFLUENCE_RADIUS} --enable-after-z ${ORCA_ENABLE_AFTER_Z} --use-world-state ${ORCA_USE_WORLD_STATE} 2>&1 | tee ${LOG_DIR}/local_orca.log;
+python3 ${WS_ROOT}/scripts/local_avoid_orca.py --num-drones ${NUM_DRONES} --safe-radius ${ORCA_SAFE_RADIUS} --max-speed ${ORCA_MAX_SPEED} --gain ${ORCA_GAIN} --obs-gain ${ORCA_OBS_GAIN} --obs-influence-radius ${ORCA_OBS_INFLUENCE_RADIUS} --enable-after-z ${ORCA_ENABLE_AFTER_Z} --use-world-state ${ORCA_USE_WORLD_STATE} 2>&1 | tee ${LOG_DIR}/local_orca.log;
 exec bash
 "
   # 无墙目标点验证：默认不启动动态障碍节点；如需恢复墙体验证再打开 DYNAMIC_OBS_ENABLE=1
   if [ "${DYNAMIC_OBS_ENABLE}" = "1" ]; then
     echo "[INFO] dynamic obstacle scene clock: mode=${DYNAMIC_OBS_SCENE_CLOCK_MODE}, num_drones=${DYNAMIC_OBS_SCENE_START_NUM_DRONES}, z_threshold=${DYNAMIC_OBS_SCENE_START_Z_THRESHOLD}, stable_sec=${DYNAMIC_OBS_SCENE_START_STABLE_SEC}"
     launch_job "DynamicObstacles" "
-cd ~/ws_xtd2;
+cd ${WS_ROOT};
 source /opt/ros/jazzy/setup.bash;
 source install/setup.bash;
   # DYNAMIC_OBS_MODE=static_wall uses obstacles.yaml; DYNAMIC_OBS_MODE=scene uses scenes/*.yaml.
-  python3 ~/ws_xtd2/scripts/dynamic_obstacle_source.py --rate 10 --world ${DYNAMIC_OBS_WORLD} --visualize-gz ${DYNAMIC_OBS_VISUALIZE_GZ} --mode ${DYNAMIC_OBS_MODE} --scene-config ${DYNAMIC_OBS_SCENE_CONFIG} --obstacle-config ${OBSTACLE_CONFIG} --wall-x ${DYNAMIC_OBS_WALL_X} --wall-y ${DYNAMIC_OBS_WALL_Y} --wall-z ${DYNAMIC_OBS_WALL_Z} --wall-length ${DYNAMIC_OBS_WALL_LENGTH} --wall-thickness ${DYNAMIC_OBS_WALL_THICKNESS} --wall-height ${DYNAMIC_OBS_WALL_HEIGHT} --wall-segment-spacing ${DYNAMIC_OBS_WALL_SEGMENT_SPACING} --second-wall-enable ${SECOND_WALL_ENABLE} --second-wall-dx ${SECOND_WALL_DX} --second-wall-dy ${SECOND_WALL_DY} --rear-wall-length ${REAR_WALL_LENGTH} --third-wall-enable ${THIRD_WALL_ENABLE} --target-ball-enable 1 --target-ball-num-drones ${NUM_DRONES} --target-ball-leader-id ${LEADER_ID} --target-ball-target-x ${DYNAMIC_OBS_TARGET_X} --target-ball-base-y ${DYNAMIC_OBS_TARGET_Y_BASE} --target-ball-target-z ${MISSION_Z} --target-ball-y-spacing ${DYNAMIC_OBS_TARGET_Y_SPACING} --scene-clock-mode ${DYNAMIC_OBS_SCENE_CLOCK_MODE} --scene-start-num-drones ${DYNAMIC_OBS_SCENE_START_NUM_DRONES} --scene-start-z-threshold ${DYNAMIC_OBS_SCENE_START_Z_THRESHOLD} --scene-start-stable-sec ${DYNAMIC_OBS_SCENE_START_STABLE_SEC} 2>&1 | tee ${LOG_DIR}/dynamic_obstacles.log;
+  python3 ${WS_ROOT}/scripts/dynamic_obstacle_source.py --rate 10 --world ${DYNAMIC_OBS_WORLD} --visualize-gz ${DYNAMIC_OBS_VISUALIZE_GZ} --mode ${DYNAMIC_OBS_MODE} --scene-config ${DYNAMIC_OBS_SCENE_CONFIG} --obstacle-config ${OBSTACLE_CONFIG} --wall-x ${DYNAMIC_OBS_WALL_X} --wall-y ${DYNAMIC_OBS_WALL_Y} --wall-z ${DYNAMIC_OBS_WALL_Z} --wall-length ${DYNAMIC_OBS_WALL_LENGTH} --wall-thickness ${DYNAMIC_OBS_WALL_THICKNESS} --wall-height ${DYNAMIC_OBS_WALL_HEIGHT} --wall-segment-spacing ${DYNAMIC_OBS_WALL_SEGMENT_SPACING} --second-wall-enable ${SECOND_WALL_ENABLE} --second-wall-dx ${SECOND_WALL_DX} --second-wall-dy ${SECOND_WALL_DY} --rear-wall-length ${REAR_WALL_LENGTH} --third-wall-enable ${THIRD_WALL_ENABLE} --target-ball-enable 1 --target-ball-num-drones ${NUM_DRONES} --target-ball-leader-id ${LEADER_ID} --target-ball-target-x ${DYNAMIC_OBS_TARGET_X} --target-ball-base-y ${DYNAMIC_OBS_TARGET_Y_BASE} --target-ball-target-z ${MISSION_Z} --target-ball-y-spacing ${DYNAMIC_OBS_TARGET_Y_SPACING} --scene-clock-mode ${DYNAMIC_OBS_SCENE_CLOCK_MODE} --scene-start-num-drones ${DYNAMIC_OBS_SCENE_START_NUM_DRONES} --scene-start-z-threshold ${DYNAMIC_OBS_SCENE_START_Z_THRESHOLD} --scene-start-stable-sec ${DYNAMIC_OBS_SCENE_START_STABLE_SEC} 2>&1 | tee ${LOG_DIR}/dynamic_obstacles.log;
 exec bash
 "
   fi
@@ -392,7 +397,7 @@ for ((id=1; id<=NUM_DRONES; id++)); do
   fi
   
   launch_job "WarmupSP_${id}" "
-cd ~/ws_xtd2;
+cd ${WS_ROOT};
 source /opt/ros/jazzy/setup.bash;
 source install/setup.bash;
 # 单行紧凑YAML格式，彻底解决解析错误
@@ -407,7 +412,7 @@ sleep "${WARMUP_SEC}"
 
 # 集群控制窗口：简化为原始流程，避免复杂控制引发不稳定
 CONTROL_CMD=$(cat <<EOF
-cd ~/ws_xtd2
+cd ${WS_ROOT}
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 (
@@ -463,11 +468,11 @@ if [ ${AUTO_ARM_OFFBOARD} -eq 1 ]; then
 
   if [ ${ENABLE_FIXED_MISSION} -eq 1 ]; then
     echo '[Control] START WALL-FOLLOW MISSION...'
-    python3 ~/ws_xtd2/scripts/multi_waypoint2.py ${NUM_DRONES} 32 ${LEADER_ID} ${DYNAMIC_OBS_WALL_X} ${DYNAMIC_OBS_WALL_Y} ${DYNAMIC_OBS_WALL_LENGTH} ${DYNAMIC_OBS_TARGET_X} full wall_follow ${DYNAMIC_OBS_TARGET_Y_SPACING} ${TAKEOFF_Z} ${MISSION_Z} ${FORMATION_KP} ${LEADER_TRACK_KP} ${MAX_FOLLOWER_SPEED} ${MAX_LEADER_SPEED} ${USE_HEADING_OFFSETS} ${LF_STATE_TIMEOUT} ${USE_VIRTUAL_LEADER} ${FORMATION_METRICS_CSV} ${MISSION_START_X} ${USE_SPAWNED_FORMATION} ${DYNAMIC_OBS_TARGET_Y_BASE}
+    python3 ${WS_ROOT}/scripts/multi_waypoint2.py ${NUM_DRONES} 32 ${LEADER_ID} ${DYNAMIC_OBS_WALL_X} ${DYNAMIC_OBS_WALL_Y} ${DYNAMIC_OBS_WALL_LENGTH} ${DYNAMIC_OBS_TARGET_X} full wall_follow ${DYNAMIC_OBS_TARGET_Y_SPACING} ${TAKEOFF_Z} ${MISSION_Z} ${FORMATION_KP} ${LEADER_TRACK_KP} ${MAX_FOLLOWER_SPEED} ${MAX_LEADER_SPEED} ${USE_HEADING_OFFSETS} ${LF_STATE_TIMEOUT} ${USE_VIRTUAL_LEADER} ${FORMATION_METRICS_CSV} ${MISSION_START_X} ${USE_SPAWNED_FORMATION} ${DYNAMIC_OBS_TARGET_Y_BASE}
     echo '[Control] mission done'
   else
     echo '[Control] hybrid mode: start wall-follow mission with avoid arbitration active'
-    python3 ~/ws_xtd2/scripts/multi_waypoint2.py ${NUM_DRONES} 32 ${LEADER_ID} ${DYNAMIC_OBS_WALL_X} ${DYNAMIC_OBS_WALL_Y} ${DYNAMIC_OBS_WALL_LENGTH} ${DYNAMIC_OBS_TARGET_X} full wall_follow ${DYNAMIC_OBS_TARGET_Y_SPACING} ${TAKEOFF_Z} ${MISSION_Z} ${FORMATION_KP} ${LEADER_TRACK_KP} ${MAX_FOLLOWER_SPEED} ${MAX_LEADER_SPEED} ${USE_HEADING_OFFSETS} ${LF_STATE_TIMEOUT} ${USE_VIRTUAL_LEADER} ${FORMATION_METRICS_CSV} ${MISSION_START_X} ${USE_SPAWNED_FORMATION} ${DYNAMIC_OBS_TARGET_Y_BASE}
+    python3 ${WS_ROOT}/scripts/multi_waypoint2.py ${NUM_DRONES} 32 ${LEADER_ID} ${DYNAMIC_OBS_WALL_X} ${DYNAMIC_OBS_WALL_Y} ${DYNAMIC_OBS_WALL_LENGTH} ${DYNAMIC_OBS_TARGET_X} full wall_follow ${DYNAMIC_OBS_TARGET_Y_SPACING} ${TAKEOFF_Z} ${MISSION_Z} ${FORMATION_KP} ${LEADER_TRACK_KP} ${MAX_FOLLOWER_SPEED} ${MAX_LEADER_SPEED} ${USE_HEADING_OFFSETS} ${LF_STATE_TIMEOUT} ${USE_VIRTUAL_LEADER} ${FORMATION_METRICS_CSV} ${MISSION_START_X} ${USE_SPAWNED_FORMATION} ${DYNAMIC_OBS_TARGET_Y_BASE}
     echo '[Control] hybrid staged mission done'
   fi
 fi

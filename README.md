@@ -29,15 +29,7 @@
 ### 1. 克隆本仓库
 
 ```bash
-git clone git@github.com:MurphyAurora/UAV.git ~/ws_xtd2
-cd ~/ws_xtd2
-```
-
-如果没有配置 GitHub SSH，也可以使用 HTTPS：
-
-```bash
-git clone https://github.com/MurphyAurora/UAV.git ~/ws_xtd2
-cd ~/ws_xtd2
+git clone http://139.129.23.153:14629/softdev/px4_ws
 ```
 
 ### 2. 安装外部依赖
@@ -57,10 +49,6 @@ cd ~/ws_xtd2
 https://github.com/andy-zhuo-02/XTDrone2
 ```
 
-注意：`start1.sh` 默认假设 PX4-Autopilot 位于：
-`text
-~/PX4-Autopilot
-`
 
 如果 PX4 路径不同，需要修改 `scripts/start1.sh` 中对应路径。
 
@@ -80,7 +68,7 @@ xtd2_communication
 目录结构应至少包含：
 
 ```text
-ws_xtd2/
+px4_ws/
 ├── src/
 │   ├── xtd2_communication/
 │   ├── xtd2_msgs/
@@ -90,11 +78,34 @@ ws_xtd2/
 
 ### 4. 编译工作空间
 
+依赖安装
 ```bash
-cd ~/ws_xtd2
+sudo apt install ros-jazzy-tf-transformations
+sudo apt install ros-jazzy-rmw-cyclonedds-cpp
+```
+
+```bash
+cd ~/px4_ws
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
+```
+
+编译 Micro-XRCE-DDS-Agent
+```bash 
+cd lib/Micro-XRCE-DDS-Agent
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+```
+
+编译 px4 sitl
+
+```bash
+px4_ws/firmware/PX4-Autopilot
+make px4_sitl_default
 ```
 
 如果编译失败，优先检查：
@@ -107,7 +118,7 @@ source install/setup.bash
 ### 5. 运行实验
 
 ```bash
-cd ~/ws_xtd2/scripts
+cd ~/px4_ws/scripts
 chmod +x start1.sh
 SWARM_MODE=hybrid AVOID_SCOPE=none USE_VIRTUAL_LEADER=1 TARGET_SYS_IDS_STR=2,3,4 bash start1.sh 3
 ```
@@ -122,7 +133,7 @@ SWARM_MODE=hybrid AVOID_SCOPE=none USE_VIRTUAL_LEADER=1 TARGET_SYS_IDS_STR=2,3,4
 ### 6. 查看运行日志
 
 ```bash
-grep -n "A\\* planner\\|planner-path-table\\|mission result" ~/ws_xtd2/logs/control_cluster.log
+grep -n "A\\* planner\\|planner-path-table\\|mission result" ~/px4_ws/logs/control_cluster.log
 ```
 
 如果看到：
@@ -168,7 +179,7 @@ mission result: SUCCESS
 ```
 ## 仓库结构
 ```text
-ws_xtd2/
+px4_ws/
 ├── scripts/                         # 集群实验脚本与任务控制代码
 │   ├── start1.sh                    # 主启动脚本
 │   ├── multi_waypoint2.py           # 虚拟领航者、A* 全局路径规划、航点执行
@@ -265,7 +276,7 @@ PX4 SITL 执行飞行
 ## 日志查看
 
 运行日志位于：
-`~/ws_xtd2/logs/`
+`~/px4_ws/logs/`
 
 重要日志：
 ```
@@ -279,11 +290,11 @@ formation_metrics.csv    编队误差指标
 ```
 查看 A* 是否生效：
 
-`grep -n "A\\* planner\\|planner-path-table\\|astar_wp" ~/ws_xtd2/logs/control_cluster.log`
+`grep -n "A\\* planner\\|planner-path-table\\|astar_wp" ~/px4_ws/logs/control_cluster.log`
 
 查看任务是否成功：
 
-`grep -n "mission result" ~/ws_xtd2/logs/control_cluster.log`
+`grep -n "mission result" ~/px4_ws/logs/control_cluster.log`
 
 
 ## 成功判定
@@ -309,7 +320,7 @@ GitHub 不再支持使用账号密码进行 HTTPS push。建议使用 SSH key，
 
 确认已经重新运行任务，并检查：
 
-`grep -n "A\\* planner" ~/ws_xtd2/logs/control_cluster.log`
+`grep -n "A\\* planner" ~/px4_ws/logs/control_cluster.log`
 
 ### 3. 无人机没有绕墙
 检查：

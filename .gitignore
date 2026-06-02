@@ -3,7 +3,6 @@ install/
 log/
 logs/
 .codex
-Micro-XRCE-DDS-Agent/
 
 __pycache__/
 *.pyc

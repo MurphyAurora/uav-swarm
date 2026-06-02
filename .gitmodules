@@ -1,0 +1,12 @@
+[submodule "src/px4_msgs"]
+	path = src/px4_msgs
+	url = https://github.com/PX4/px4_msgs.git
+[submodule "firmware/PX4-Autopilot"]
+	path = firmware/PX4-Autopilot
+	url = https://github.com/PX4/PX4-Autopilot
+[submodule "src/XTDrone2"]
+	path = src/XTDrone2
+	url = https://github.com/andy-zhuo-02/XTDrone2
+[submodule "lib/Micro-XRCE-DDS-Agent"]
+	path = lib/Micro-XRCE-DDS-Agent
+	url = https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
