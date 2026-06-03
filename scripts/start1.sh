@@ -64,6 +64,7 @@ ARM_OFFBOARD_MAX_RETRIES=${ARM_OFFBOARD_MAX_RETRIES:-6}
 ARM_RETRY_SLEEP=${ARM_RETRY_SLEEP:-0.6}
 OFFBOARD_RETRY_SLEEP=${OFFBOARD_RETRY_SLEEP:-0.8}
 VEHICLE_STATUS_TIMEOUT_SEC=${VEHICLE_STATUS_TIMEOUT_SEC:-4}
+PX4_DISABLE_GCS_ARM_CHECK=${PX4_DISABLE_GCS_ARM_CHECK:-1}
 SWARM_MODE=${SWARM_MODE:-hybrid}
 AVOID_SCOPE=${AVOID_SCOPE:-leader}
 AVOID_TIMEOUT=${AVOID_TIMEOUT:-0.25}
@@ -263,7 +264,7 @@ sleep 5
 echo "[INFO] build + source..."
 cd "${WS_ROOT}" || { echo "[ERROR] 无法进入工作目录 ${WS_ROOT}"; exit 1; }
 source /opt/ros/jazzy/setup.bash || { echo "[ERROR] 无法加载ROS 2环境"; exit 1; }
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
 colcon build --packages-select xtd2_communication --symlink-install || { echo "[ERROR] 编译失败"; exit 1; }
 source install/setup.bash || { echo "[ERROR] 无法加载工作空间环境"; exit 1; }
 
@@ -281,6 +282,16 @@ sleep 3
 
 # 启动PX4（全部加&后台运行，避免阻塞）
 echo "[INFO] start PX4..."
+if [ "${PX4_DISABLE_GCS_ARM_CHECK}" = "1" ]; then
+  px4_post_file="${WS_ROOT}/firmware/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/airframes/4001_gz_x500.post"
+  mkdir -p "$(dirname "${px4_post_file}")"
+  printf '%s\n' \
+    '#!/bin/sh' \
+    '# Simulation-only: allow offboard tests without a QGroundControl heartbeat.' \
+    'param set NAV_DLL_ACT 0' \
+    > "${px4_post_file}"
+  echo "[INFO] PX4 post config: NAV_DLL_ACT=0 (${px4_post_file})"
+fi
 for ((i=1; i<=NUM_DRONES; i++)); do
   DDS_PORT=$((START_PORT + i*10))
   spawn_ned_x=${MISSION_START_X}
@@ -428,7 +439,7 @@ if [ ${AUTO_ARM_OFFBOARD} -eq 1 ]; then
       arm_out=\$(ros2 service call /xtdrone2/x500_\${i}/cmd xtd2_msgs/srv/XTD2Cmd "{command: 'ARM'}" 2>&1)
       echo "\$arm_out"
       sleep ${ARM_RETRY_SLEEP}
-      armed_state=\$(timeout ${VEHICLE_STATUS_TIMEOUT_SEC}s ros2 topic echo --once /\${px4_ns}/fmu/out/vehicle_status_v1 2>/dev/null | grep "arming_state:" || true)
+      armed_state=\$(timeout ${VEHICLE_STATUS_TIMEOUT_SEC}s ros2 topic echo --once /\${px4_ns}/fmu/out/vehicle_status_v4 2>/dev/null | grep "arming_state:" || true)
       echo "[Control] \${px4_ns} \${armed_state:-arming_state: <timeout>}"
       if ! echo "\$armed_state" | grep -q "arming_state: 2"; then
         echo "[Control] x500_\${i} not armed yet, retry ARM"
@@ -437,7 +448,7 @@ if [ ${AUTO_ARM_OFFBOARD} -eq 1 ]; then
       off_out=\$(ros2 service call /xtdrone2/x500_\${i}/cmd xtd2_msgs/srv/XTD2Cmd "{command: 'OFFBOARD'}" 2>&1)
       echo "\$off_out"
       sleep ${OFFBOARD_RETRY_SLEEP}
-      nav_state=\$(timeout ${VEHICLE_STATUS_TIMEOUT_SEC}s ros2 topic echo --once /\${px4_ns}/fmu/out/vehicle_status_v1 2>/dev/null | grep "nav_state:" || true)
+      nav_state=\$(timeout ${VEHICLE_STATUS_TIMEOUT_SEC}s ros2 topic echo --once /\${px4_ns}/fmu/out/vehicle_status_v4 2>/dev/null | grep "nav_state:" || true)
       echo "[Control] \${px4_ns} \${nav_state:-nav_state: <timeout>}"
       if echo "\$off_out" | grep -q "success=True" && echo "\$nav_state" | grep -q "nav_state: 14"; then
         ok=1
