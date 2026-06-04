@@ -92,7 +92,7 @@ class MissionController(Node):
         if self._state == 'WARMUP' and elapsed >= self.warmup_sec:
             self.get_logger().info(f'Warmup done ({elapsed:.1f}s), starting ARM sequence')
             self._state = 'ARMING'
-            self._warmup_timer.cancel()
+            # self._warmup_timer.cancel()
             # Run ARM/OFFBOARD in a timer callback to avoid blocking
             self._arm_timer = self.create_timer(0.1, self._arming_step)
             self._arm_drone_idx = 0
