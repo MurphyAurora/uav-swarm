@@ -1,0 +1,90 @@
+# XTDrone2 Swarm Simulation Parameters
+# All configurable parameters for the swarm simulation launch pipeline.
+# Override any value via launch arguments: ros2 launch xtd2_mission ... param:=value
+
+# ===== Core =====
+num_drones: 5
+gz_world: "default"
+start_port: 8888
+px4_sys_id_base: 2
+# px4_dir is auto-detected from workspace; override if needed:
+# px4_dir: ""
+ws_root: ""  # auto-detected
+
+# ===== Swarm mode =====
+swarm_mode: "hybrid"
+avoid_scope: "leader"
+auto_arm_offboard: true
+
+# ===== Warmup / takeoff =====
+warmup_sec: 25.0
+takeoff_z: -2.0
+mission_z: -3.0
+vertical_takeoff: true
+
+# ===== ARM / OFFBOARD =====
+arm_to_offboard_delay: 0.8
+inter_drone_gap: 0.2
+post_offboard_hold_sec: 3.0
+arm_offboard_max_retries: 6
+arm_retry_sleep: 0.6
+offboard_retry_sleep: 0.8
+vehicle_status_timeout_sec: 4.0
+
+# ===== Formation =====
+leader_id: 3
+formation_kp: 0.45
+leader_track_kp: 0.45
+max_follower_speed: 0.85
+max_leader_speed: 0.85
+use_heading_offsets: false
+lf_state_timeout: 4.0
+use_virtual_leader: true
+use_spawned_formation: true
+
+# ===== Obstacles =====
+dynamic_obs_enable: true
+dynamic_obs_mode: "static_wall"
+obstacle_config: ""
+scene_config: ""
+dynamic_obs_visualize_gz: true
+dynamic_obs_wall_x: 3.0
+dynamic_obs_wall_y: 1.0
+dynamic_obs_wall_z: 0.9
+dynamic_obs_wall_length: 30.0
+dynamic_obs_wall_thickness: 0.25
+dynamic_obs_wall_height: 4.8
+dynamic_obs_wall_segment_spacing: 0.6
+dynamic_obs_target_x: 30.0
+dynamic_obs_target_y_base: 26.0
+dynamic_obs_target_y_spacing: 1.8
+second_wall_enable: true
+second_wall_dx: 15.0
+second_wall_dy: 109.0
+rear_wall_gap: 18.0
+rear_wall_length: 200.0
+third_wall_enable: true
+start_wall_clearance: 8.0
+
+# ===== ORCA =====
+orca_safe_radius: 1.2
+orca_max_speed: 0.22
+orca_gain: 0.45
+orca_obs_gain: 0.85
+orca_obs_influence_radius: 2.2
+orca_enable_after_z: -0.6
+orca_use_world_state: false
+
+# ===== Path planner =====
+path_planner_mode: "astar"
+astar_grid_resolution: 1.0
+astar_smooth_enable: true
+
+# ===== Mission =====
+mission_start_x: -5.0
+duration: 32
+eval_mode: "full"
+mission_mode: "wall_follow"
+
+# ===== PX4 safety =====
+px4_disable_gcs_arm_check: true

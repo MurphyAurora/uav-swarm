@@ -1,0 +1,68 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <model name="static_obstacle_wall">
+    <static>true</static>
+    <link name="wall_link">
+      <collision name="wall_collision">
+        <geometry>
+          <box>
+            <size>0.25 5.0 1.8</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="wall_visual">
+        <geometry>
+          <box>
+            <size>0.25 5.0 1.8</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.55 0.55 0.55 1</ambient>
+          <diffuse>0.55 0.55 0.55 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <link name="wall_link_rear_right">
+      <pose>15.0 -109.0 0 0 0 0</pose>
+      <collision name="wall_collision_rear_right">
+        <geometry>
+          <box>
+            <size>0.25 200.0 1.8</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="wall_visual_rear_right">
+        <geometry>
+          <box>
+            <size>0.25 200.0 1.8</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.50 0.50 0.50 1</ambient>
+          <diffuse>0.50 0.50 0.50 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <link name="wall_link_rear_left">
+      <pose>15.0 109.0 0 0 0 0</pose>
+      <collision name="wall_collision_rear_left">
+        <geometry>
+          <box>
+            <size>0.25 200.0 1.8</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="wall_visual_rear_left">
+        <geometry>
+          <box>
+            <size>0.25 200.0 1.8</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.50 0.50 0.50 1</ambient>
+          <diffuse>0.50 0.50 0.50 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

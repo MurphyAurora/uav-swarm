@@ -104,7 +104,7 @@ sudo ldconfig
 编译 px4 sitl
 
 ```bash
-px4_ws/firmware/PX4-Autopilot
+cd px4_ws/firmware/PX4-Autopilot
 make px4_sitl_default
 ```
 
@@ -117,6 +117,12 @@ make px4_sitl_default
 
 ### 5. 运行实验
 
+```bash
+source install/setup.bash
+ros2 launch xtd2_mission swarm_simulation_launch.py
+```
+
+或者
 ```bash
 cd ~/px4_ws/scripts
 chmod +x start1.sh
