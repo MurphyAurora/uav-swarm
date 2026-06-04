@@ -14,6 +14,7 @@ import argparse
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.task import Future
 from geometry_msgs.msg import Pose
 from xtd2_msgs.srv import XTD2Cmd
@@ -182,7 +183,7 @@ class MissionController(Node):
                 )
 
     def _send_offboard(self, drone_idx, arm_attempt):
-        ns = self.namespaces[drone_idx]
+        ns = self.px4_namespaces[drone_idx]
         drone_id = drone_idx + 1
         client = self._get_cmd_client(ns)
 
@@ -194,7 +195,7 @@ class MissionController(Node):
         )
 
     def _offboard_done(self, future, drone_idx, arm_attempt):
-        ns = self.namespaces[drone_idx]
+        ns = self.px4_namespaces[drone_idx]
         drone_id = drone_idx + 1
         try:
             result = future.result()
@@ -272,7 +273,12 @@ class MissionController(Node):
                 received['msg'] = msg
                 done['flag'] = True
 
-        sub = self.create_subscription(msg_type, topic, cb, 10)
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        sub = self.create_subscription(msg_type, topic, cb, qos)
         start = time.time()
         while not done['flag'] and (time.time() - start) < timeout:
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -285,22 +291,31 @@ class MissionController(Node):
         """Start the multi_waypoint2 mission logic."""
         self.get_logger().info('Starting mission via multi_waypoint2')
         from xtd2_mission.multi_waypoint2 import main as mission_main
+
+        # Build argv for multi_waypoint2: it reads positional args from sys.argv
+        mission_argv = [
+            'multi_waypoint2',
+            str(self.num_drones),
+            '15.0',                          # duration
+            str(int(self.get_parameter('leader_id').value)) if self.has_parameter('leader_id') else '1',
+            str(self.get_parameter('wall_x').value) if self.has_parameter('wall_x') else '3.0',
+            str(self.get_parameter('wall_y').value) if self.has_parameter('wall_y') else '1.0',
+        ]
+
+        old_argv = sys.argv
+        sys.argv = mission_argv
         try:
             mission_main()
         except Exception as e:
             self.get_logger().error(f'Mission failed: {e}')
+        finally:
+            sys.argv = old_argv
         self._state = 'DONE'
         self.get_logger().info('MissionController DONE')
 
 
 def main():
-    rclpy.init(args=sys.argv)
-
-    parser = argparse.ArgumentParser(description='XTDrone2 Mission Controller')
-    # All parameters are passed via ROS 2 parameter system (--ros-args),
-    # but we also accept a few CLI args for convenience.
-    args, _ = parser.parse_known_args()
-
+    rclpy.init()
     node = MissionController()
     rclpy.spin(node)
     node.destroy_node()

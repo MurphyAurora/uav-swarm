@@ -1262,7 +1262,11 @@ def main():
             mission_z = float(config_target['z'])
             y_spacing = float(config_target['y_spacing'])
 
-    rclpy.init()
+    if not rclpy.ok():
+        _own_context = True
+        rclpy.init()
+    else:
+        _own_context = False
     node = FixedPointMission(
         num_drones=num_drones,
         leader_id=leader_id,
@@ -1530,7 +1534,8 @@ def main():
     if node.metrics_file is not None:
         node.metrics_file.close()
     node.destroy_node()
-    rclpy.shutdown()
+    if _own_context:
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
