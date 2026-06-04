@@ -5,6 +5,28 @@ suite:
   version: 1
   description: Three-level dynamic-obstacle smoke benchmark.
 
+coordination_defaults:
+  architecture: engineering_semi_distributed
+  local_controller_per_uav: true
+  state_exchange_topic: /xtdrone2/swarm/state_exchange
+  local_view_topic_template: /xtdrone2/x500_{id}/local_view
+  estimator:
+    name: virtual_reference_consensus
+    enabled: true
+    source: neighbor_swarm_state
+  virtual_leader:
+    enabled: true
+    shared_velocity: true
+    lag_guard: true
+    lag_limit: 2.2
+  safety:
+    unified_avoidance_scope: all
+    rear_speed_constraint: true
+    world_frame_avoidance: true
+  metrics:
+    log_consensus_delta: true
+    log_local_view_health: true
+
 scenarios:
   - scenes/easy_crossing.yaml
   - scenes/medium_multi_crossing.yaml
