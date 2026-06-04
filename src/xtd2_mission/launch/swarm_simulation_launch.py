@@ -76,6 +76,9 @@ def generate_launch_description():
         'start_delay', 'ws_root',
         # Mission
         'swarm_mode', 'warmup_sec', 'takeoff_z', 'mission_z', 'vertical_takeoff',
+        'formation_kp', 'leader_track_kp', 'max_follower_speed',
+        'max_leader_speed', 'use_heading_offsets', 'lf_state_timeout',
+        'use_virtual_leader',
         'arm_to_offboard_delay', 'inter_drone_gap', 'post_offboard_hold_sec',
         'arm_offboard_max_retries', 'arm_retry_sleep', 'offboard_retry_sleep',
         'vehicle_status_timeout_sec', 'auto_arm_offboard', 'use_spawned_formation',
@@ -89,6 +92,12 @@ def generate_launch_description():
         'orca_obs_influence_radius', 'orca_enable_after_z', 'orca_use_world_state',
         'path_planner_mode', 'astar_grid_resolution', 'astar_smooth_enable',
         'mission_start_x', 'duration', 'eval_mode', 'mission_mode',
+        'engineering_semi_distributed', 'semi_distributed_enable',
+        'consensus_graph_mode', 'consensus_neighbor_radius',
+        'consensus_correction_gain', 'consensus_max_correction',
+        'virtual_lag_limit', 'local_controller_ref_timeout',
+        'local_controller_view_timeout', 'rear_speed_constraint',
+        'rear_safe_gap', 'rear_lateral_window', 'rear_max_brake',
     ]))
 
     args = _declare_args(all_param_names, defaults)
@@ -297,12 +306,38 @@ def _build_mission_nodes(lc, num_drones):
         f'--base-y {wall_y} '
         f'--y-spacing {target_y_spacing} '
         f'--leader-id {leader_id} '
+        f'--graph-mode {lc("consensus_graph_mode")} '
+        f'--neighbor-radius {lc("consensus_neighbor_radius")} '
         f'--ros-args -r __node:=swarm_state_exchange'
     )
     actions.append(ExecuteProcess(
         cmd=['bash', '-c', setup_cmd + state_exchange_args],
         output='log', name='swarm_state_exchange',
     ))
+
+    # --- 1b. Per-UAV local semi-distributed controllers ---
+    if lc('engineering_semi_distributed') == '1':
+        local_env = (
+            f'export SEMI_DISTRIBUTED_ENABLE={lc("semi_distributed_enable")} && '
+            f'export CONSENSUS_CORRECTION_GAIN={lc("consensus_correction_gain")} && '
+            f'export CONSENSUS_MAX_CORRECTION={lc("consensus_max_correction")} && '
+            f'export LOCAL_CONTROLLER_REF_TIMEOUT={lc("local_controller_ref_timeout")} && '
+            f'export LOCAL_CONTROLLER_VIEW_TIMEOUT={lc("local_controller_view_timeout")} && '
+            f'export REAR_SPEED_CONSTRAINT={lc("rear_speed_constraint")} && '
+            f'export REAR_SAFE_GAP={lc("rear_safe_gap")} && '
+            f'export REAR_LATERAL_WINDOW={lc("rear_lateral_window")} && '
+            f'export REAR_MAX_BRAKE={lc("rear_max_brake")} && '
+        )
+        for i in range(1, num_drones + 1):
+            local_cmd = (
+                local_env
+                + f'ros2 run xtd2_mission uav_local_controller --id {i} '
+                + f'--ros-args -r __node:=x500_{i}_local_controller'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + local_cmd],
+                output='log', name=f'local_controller_{i}',
+            ))
 
     # --- 2. Local ORCA (hybrid mode only) ---
     if swarm_mode == 'hybrid':
@@ -385,6 +420,26 @@ def _build_mission_nodes(lc, num_drones):
         'post_offboard_hold_sec': post_offboard_hold,
         'vehicle_status_timeout_sec': float(lc('vehicle_status_timeout_sec')),
         'auto_arm_offboard': lc('auto_arm_offboard') == '1',
+        'duration': float(lc('duration')),
+        'leader_id': leader_id,
+        'wall_x': float(lc('dynamic_obs_wall_x')),
+        'wall_y': float(lc('dynamic_obs_wall_y')),
+        'wall_length': float(lc('dynamic_obs_wall_length')),
+        'target_x': float(lc('dynamic_obs_target_x')),
+        'eval_mode': lc('eval_mode'),
+        'mission_mode': lc('mission_mode'),
+        'y_spacing': target_y_spacing,
+        'mission_z': float(lc('mission_z')),
+        'formation_kp': float(lc('formation_kp')),
+        'leader_track_kp': float(lc('leader_track_kp')),
+        'max_follower_speed': float(lc('max_follower_speed')),
+        'max_leader_speed': float(lc('max_leader_speed')),
+        'use_heading_offsets': lc('use_heading_offsets') == '1',
+        'lf_state_timeout': float(lc('lf_state_timeout')),
+        'use_virtual_leader': lc('use_virtual_leader') == '1',
+        'mission_start_x': mission_start_x,
+        'use_spawned_formation': lc('use_spawned_formation') == '1',
+        'target_y_base': float(lc('dynamic_obs_target_y_base')),
     }
     params_file = os.path.join(tempfile.gettempdir(), f'launch_params_{os.getpid()}.yaml')
     with open(params_file, 'w') as f:
@@ -411,6 +466,17 @@ def _build_mission_nodes(lc, num_drones):
         'THIRD_WALL_ENABLE': lc('third_wall_enable'),
         'OBSTACLE_CONFIG': lc('obstacle_config'),
         'DYNAMIC_OBS_MODE': lc('dynamic_obs_mode'),
+        'ENGINEERING_SEMI_DISTRIBUTED': lc('engineering_semi_distributed'),
+        'SEMI_DISTRIBUTED_ENABLE': lc('semi_distributed_enable'),
+        'CONSENSUS_CORRECTION_GAIN': lc('consensus_correction_gain'),
+        'CONSENSUS_MAX_CORRECTION': lc('consensus_max_correction'),
+        'VIRTUAL_LAG_LIMIT': lc('virtual_lag_limit'),
+        'LOCAL_CONTROLLER_REF_TIMEOUT': lc('local_controller_ref_timeout'),
+        'LOCAL_CONTROLLER_VIEW_TIMEOUT': lc('local_controller_view_timeout'),
+        'REAR_SPEED_CONSTRAINT': lc('rear_speed_constraint'),
+        'REAR_SAFE_GAP': lc('rear_safe_gap'),
+        'REAR_LATERAL_WINDOW': lc('rear_lateral_window'),
+        'REAR_MAX_BRAKE': lc('rear_max_brake'),
     }
     env_exports = ' && '.join(f'export {k}={v}' for k, v in env_vars.items()) + ' && '
     mission_cmd = (

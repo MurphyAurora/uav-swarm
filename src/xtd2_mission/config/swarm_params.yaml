@@ -66,6 +66,22 @@ rear_wall_length: 200.0
 third_wall_enable: true
 start_wall_clearance: 8.0
 
+
+# ===== Semi-distributed consensus =====
+engineering_semi_distributed: true
+semi_distributed_enable: true
+consensus_graph_mode: "line"
+consensus_neighbor_radius: 0.0
+consensus_correction_gain: 0.25
+consensus_max_correction: 0.35
+virtual_lag_limit: 2.2
+local_controller_ref_timeout: 0.6
+local_controller_view_timeout: 1.0
+rear_speed_constraint: true
+rear_safe_gap: 1.45
+rear_lateral_window: 0.9
+rear_max_brake: 0.55
+
 # ===== ORCA =====
 orca_safe_radius: 1.2
 orca_max_speed: 0.22

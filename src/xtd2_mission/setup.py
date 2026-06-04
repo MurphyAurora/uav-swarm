@@ -31,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'swarm_state_exchange = xtd2_mission.swarm_state_exchange:main',
+            'uav_local_controller = xtd2_mission.uav_local_controller:main',
             'local_avoid_orca = xtd2_mission.local_avoid_orca:main',
             'dynamic_obstacle_source = xtd2_mission.dynamic_obstacle_source:main',
             'multi_waypoint2 = xtd2_mission.multi_waypoint2:main',

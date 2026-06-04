@@ -39,6 +39,27 @@ class MissionController(Node):
         self.declare_parameter('post_offboard_hold_sec', 3.0)
         self.declare_parameter('vehicle_status_timeout_sec', 4.0)
         self.declare_parameter('auto_arm_offboard', True)
+        self.declare_parameter('duration', 32.0)
+        self.declare_parameter('leader_id', 1)
+        self.declare_parameter('wall_x', 3.0)
+        self.declare_parameter('wall_y', 1.0)
+        self.declare_parameter('wall_length', 30.0)
+        self.declare_parameter('target_x', 30.0)
+        self.declare_parameter('eval_mode', 'full')
+        self.declare_parameter('mission_mode', 'wall_follow')
+        self.declare_parameter('y_spacing', 1.8)
+        self.declare_parameter('mission_z', -3.0)
+        self.declare_parameter('formation_kp', 0.45)
+        self.declare_parameter('leader_track_kp', 0.45)
+        self.declare_parameter('max_follower_speed', 0.85)
+        self.declare_parameter('max_leader_speed', 0.85)
+        self.declare_parameter('use_heading_offsets', False)
+        self.declare_parameter('lf_state_timeout', 4.0)
+        self.declare_parameter('use_virtual_leader', True)
+        self.declare_parameter('formation_metrics_csv', '')
+        self.declare_parameter('mission_start_x', -5.0)
+        self.declare_parameter('use_spawned_formation', True)
+        self.declare_parameter('target_y_base', 26.0)
 
         # Read parameters
         self.num_drones = self.get_parameter('num_drones').value
@@ -55,6 +76,27 @@ class MissionController(Node):
         self.post_offboard_hold_sec = self.get_parameter('post_offboard_hold_sec').value
         self.status_timeout = self.get_parameter('vehicle_status_timeout_sec').value
         self.auto_arm_offboard = self.get_parameter('auto_arm_offboard').value
+        self.duration = self.get_parameter('duration').value
+        self.leader_id = self.get_parameter('leader_id').value
+        self.wall_x = self.get_parameter('wall_x').value
+        self.wall_y = self.get_parameter('wall_y').value
+        self.wall_length = self.get_parameter('wall_length').value
+        self.target_x = self.get_parameter('target_x').value
+        self.eval_mode = self.get_parameter('eval_mode').value
+        self.mission_mode = self.get_parameter('mission_mode').value
+        self.y_spacing = self.get_parameter('y_spacing').value
+        self.mission_z = self.get_parameter('mission_z').value
+        self.formation_kp = self.get_parameter('formation_kp').value
+        self.leader_track_kp = self.get_parameter('leader_track_kp').value
+        self.max_follower_speed = self.get_parameter('max_follower_speed').value
+        self.max_leader_speed = self.get_parameter('max_leader_speed').value
+        self.use_heading_offsets = self.get_parameter('use_heading_offsets').value
+        self.lf_state_timeout = self.get_parameter('lf_state_timeout').value
+        self.use_virtual_leader = self.get_parameter('use_virtual_leader').value
+        self.formation_metrics_csv = self.get_parameter('formation_metrics_csv').value
+        self.mission_start_x = self.get_parameter('mission_start_x').value
+        self.use_spawned_formation = self.get_parameter('use_spawned_formation').value
+        self.target_y_base = self.get_parameter('target_y_base').value
 
         # --- Warmup publishers ---
         self.warmup_pubs = {}
@@ -296,10 +338,28 @@ class MissionController(Node):
         mission_argv = [
             'multi_waypoint2',
             str(self.num_drones),
-            '15.0',                          # duration
-            str(int(self.get_parameter('leader_id').value)) if self.has_parameter('leader_id') else '1',
-            str(self.get_parameter('wall_x').value) if self.has_parameter('wall_x') else '3.0',
-            str(self.get_parameter('wall_y').value) if self.has_parameter('wall_y') else '1.0',
+            str(float(self.duration)),
+            str(int(self.leader_id)),
+            str(float(self.wall_x)),
+            str(float(self.wall_y)),
+            str(float(self.wall_length)),
+            str(float(self.target_x)),
+            str(self.eval_mode),
+            str(self.mission_mode),
+            str(float(self.y_spacing)),
+            str(float(self.takeoff_z)),
+            str(float(self.mission_z)),
+            str(float(self.formation_kp)),
+            str(float(self.leader_track_kp)),
+            str(float(self.max_follower_speed)),
+            str(float(self.max_leader_speed)),
+            '1' if bool(self.use_heading_offsets) else '0',
+            str(float(self.lf_state_timeout)),
+            '1' if bool(self.use_virtual_leader) else '0',
+            str(self.formation_metrics_csv or ''),
+            str(float(self.mission_start_x)),
+            '1' if bool(self.use_spawned_formation) else '0',
+            str(float(self.target_y_base)),
         ]
 
         old_argv = sys.argv
