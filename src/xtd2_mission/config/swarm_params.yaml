@@ -39,8 +39,9 @@ max_follower_speed: 0.85
 max_leader_speed: 0.85
 use_heading_offsets: false
 lf_state_timeout: 4.0
-use_virtual_leader: true
+use_virtual_leader: false
 use_spawned_formation: true
+virtual_lag_limit: 6.0
 
 # ===== Obstacles =====
 dynamic_obs_enable: true

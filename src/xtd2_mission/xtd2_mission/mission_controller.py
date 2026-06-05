@@ -11,12 +11,14 @@ import os
 import sys
 import time
 import argparse
+import subprocess
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.task import Future
 from geometry_msgs.msg import Pose
+from px4_msgs.msg import VehicleStatus
 from xtd2_msgs.srv import XTD2Cmd
 
 
@@ -39,6 +41,28 @@ class MissionController(Node):
         self.declare_parameter('post_offboard_hold_sec', 3.0)
         self.declare_parameter('vehicle_status_timeout_sec', 4.0)
         self.declare_parameter('auto_arm_offboard', True)
+        self.declare_parameter('leader_id', 1)
+        self.declare_parameter('wall_x', 3.0)
+        self.declare_parameter('wall_y', 1.0)
+        self.declare_parameter('wall_length', 5.0)
+        self.declare_parameter('target_x', 30.0)
+        self.declare_parameter('target_y', 26.0)
+        self.declare_parameter('duration', 15.0)
+        self.declare_parameter('eval_mode', 'cross_only')
+        self.declare_parameter('mission_mode', 'wall_follow')
+        self.declare_parameter('y_spacing', 1.8)
+        self.declare_parameter('mission_z', -3.0)
+        self.declare_parameter('formation_kp', 0.55)
+        self.declare_parameter('leader_track_kp', 0.45)
+        self.declare_parameter('max_follower_speed', 1.0)
+        self.declare_parameter('max_leader_speed', 0.8)
+        self.declare_parameter('use_heading_offsets', True)
+        self.declare_parameter('lf_state_timeout', 1.0)
+        self.declare_parameter('use_virtual_leader', True)
+        self.declare_parameter('virtual_lag_limit', 4.0)
+        self.declare_parameter('metrics_csv_path', '')
+        self.declare_parameter('mission_start_x', 0.0)
+        self.declare_parameter('use_spawned_formation', False)
 
         # Read parameters
         self.num_drones = self.get_parameter('num_drones').value
@@ -55,6 +79,28 @@ class MissionController(Node):
         self.post_offboard_hold_sec = self.get_parameter('post_offboard_hold_sec').value
         self.status_timeout = self.get_parameter('vehicle_status_timeout_sec').value
         self.auto_arm_offboard = self.get_parameter('auto_arm_offboard').value
+        self.leader_id = int(self.get_parameter('leader_id').value)
+        self.wall_x = float(self.get_parameter('wall_x').value)
+        self.wall_y = float(self.get_parameter('wall_y').value)
+        self.wall_length = float(self.get_parameter('wall_length').value)
+        self.target_x = float(self.get_parameter('target_x').value)
+        self.target_y = float(self.get_parameter('target_y').value)
+        self.duration = float(self.get_parameter('duration').value)
+        self.eval_mode = str(self.get_parameter('eval_mode').value)
+        self.mission_mode = str(self.get_parameter('mission_mode').value)
+        self.y_spacing = float(self.get_parameter('y_spacing').value)
+        self.mission_z = float(self.get_parameter('mission_z').value)
+        self.formation_kp = float(self.get_parameter('formation_kp').value)
+        self.leader_track_kp = float(self.get_parameter('leader_track_kp').value)
+        self.max_follower_speed = float(self.get_parameter('max_follower_speed').value)
+        self.max_leader_speed = float(self.get_parameter('max_leader_speed').value)
+        self.use_heading_offsets = bool(self.get_parameter('use_heading_offsets').value)
+        self.lf_state_timeout = float(self.get_parameter('lf_state_timeout').value)
+        self.use_virtual_leader = bool(self.get_parameter('use_virtual_leader').value)
+        self.virtual_lag_limit = float(self.get_parameter('virtual_lag_limit').value)
+        self.metrics_csv_path = str(self.get_parameter('metrics_csv_path').value)
+        self.mission_start_x = float(self.get_parameter('mission_start_x').value)
+        self.use_spawned_formation = bool(self.get_parameter('use_spawned_formation').value)
 
         # --- Warmup publishers ---
         self.warmup_pubs = {}
@@ -64,6 +110,26 @@ class MissionController(Node):
 
         # --- Service clients (created on demand) ---
         self._cmd_clients = {}
+
+        # --- PX4 status cache ---
+        self._latest_vehicle_status = {}
+        self._status_subs = []
+        status_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        for px4_ns in self.px4_namespaces:
+            for suffix in ('vehicle_status_v4', 'vehicle_status'):
+                topic = f'/{px4_ns}/fmu/out/{suffix}'
+                self._status_subs.append(
+                    self.create_subscription(
+                        VehicleStatus,
+                        topic,
+                        lambda msg, ns=px4_ns: self._vehicle_status_cb(ns, msg),
+                        status_qos,
+                    )
+                )
 
         # --- State ---
         self._state = 'WARMUP'
@@ -76,6 +142,9 @@ class MissionController(Node):
         )
 
     # ---- Warmup ----
+
+    def _vehicle_status_cb(self, px4_ns, msg):
+        self._latest_vehicle_status[px4_ns] = msg
 
     def _warmup_callback(self):
         """Publish warmup setpoints at 20Hz for all drones."""
@@ -122,11 +191,11 @@ class MissionController(Node):
         self._arm_timer.cancel()
 
         if self._arm_drone_idx >= self.num_drones:
-            # All drones done
+            # All drones done; keep the existing warmup timer publishing the
+            # OFFBOARD hold setpoint until _warmup_callback starts mission.
             self.get_logger().info('All drones ARM+OFFBOARD sequence complete')
             self._state = 'OFFBOARD_HOLD'
             self._hold_start = time.time()
-            self._warmup_timer = self.create_timer(0.05, self._warmup_callback)
             return
 
         ns = self.px4_namespaces[self._arm_drone_idx]  # service 在 /xtdrone2/px4_i/cmd
@@ -237,79 +306,77 @@ class MissionController(Node):
                 )
 
     def _check_arming_state(self, px4_ns):
-        """Check vehicle_status for arming_state == 2 (ARMED)."""
-        from px4_msgs.msg import VehicleStatus
-        topic = f'/{px4_ns}/fmu/out/vehicle_status_v4'
-        msg = self._wait_for_topic(topic, VehicleStatus, self.status_timeout)
-        if msg is not None:
-            return msg.arming_state == 2
-        # Fallback: try vehicle_status (without _v4)
-        topic2 = f'/{px4_ns}/fmu/out/vehicle_status'
-        msg = self._wait_for_topic(topic2, VehicleStatus, self.status_timeout)
-        if msg is not None:
-            return msg.arming_state == 2
-        return False
+        """Check cached vehicle_status for arming_state == 2 (ARMED)."""
+        msg = self._latest_vehicle_status.get(px4_ns)
+        return msg is not None and msg.arming_state == 2
 
     def _check_offboard_state(self, px4_ns):
-        """Check vehicle_status for nav_state == 14 (OFFBOARD)."""
-        from px4_msgs.msg import VehicleStatus
-        topic = f'/{px4_ns}/fmu/out/vehicle_status_v4'
-        msg = self._wait_for_topic(topic, VehicleStatus, self.status_timeout)
-        if msg is not None:
-            return msg.nav_state == 14
-        topic2 = f'/{px4_ns}/fmu/out/vehicle_status'
-        msg = self._wait_for_topic(topic2, VehicleStatus, self.status_timeout)
-        if msg is not None:
-            return msg.nav_state == 14
-        return False
-
-    def _wait_for_topic(self, topic, msg_type, timeout):
-        """Wait for one message on a topic with timeout."""
-        received = {'msg': None}
-        done = {'flag': False}
-
-        def cb(msg):
-            if not done['flag']:
-                received['msg'] = msg
-                done['flag'] = True
-
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-        )
-        sub = self.create_subscription(msg_type, topic, cb, qos)
-        start = time.time()
-        while not done['flag'] and (time.time() - start) < timeout:
-            rclpy.spin_once(self, timeout_sec=0.1)
-        self.destroy_subscription(sub)
-        return received['msg']
+        """Check cached vehicle_status for nav_state == 14 (OFFBOARD)."""
+        msg = self._latest_vehicle_status.get(px4_ns)
+        return msg is not None and msg.nav_state == 14
 
     # ---- Mission ----
 
     def _start_mission(self):
-        """Start the multi_waypoint2 mission logic."""
+        """Start the multi_waypoint2 mission logic as an independent ROS process."""
         self.get_logger().info('Starting mission via multi_waypoint2')
-        from xtd2_mission.multi_waypoint2 import main as mission_main
 
-        # Build argv for multi_waypoint2: it reads positional args from sys.argv
-        mission_argv = [
+        mission_cmd = [
+            'ros2',
+            'run',
+            'xtd2_mission',
             'multi_waypoint2',
             str(self.num_drones),
-            '15.0',                          # duration
-            str(int(self.get_parameter('leader_id').value)) if self.has_parameter('leader_id') else '1',
-            str(self.get_parameter('wall_x').value) if self.has_parameter('wall_x') else '3.0',
-            str(self.get_parameter('wall_y').value) if self.has_parameter('wall_y') else '1.0',
+            str(self.duration),
+            str(self.leader_id),
+            str(self.wall_x),
+            str(self.wall_y),
+            str(self.wall_length),
+            str(self.target_x),
+            self.eval_mode,
+            self.mission_mode,
+            str(self.y_spacing),
+            str(self.takeoff_z),
+            str(self.mission_z),
+            str(self.formation_kp),
+            str(self.leader_track_kp),
+            str(self.max_follower_speed),
+            str(self.max_leader_speed),
+            '1' if self.use_heading_offsets else '0',
+            str(self.lf_state_timeout),
+            '1' if self.use_virtual_leader else '0',
+            self.metrics_csv_path,
+            str(self.mission_start_x),
+            '1' if self.use_spawned_formation else '0',
+            str(self.target_y),
+            str(self.virtual_lag_limit),
         ]
 
-        old_argv = sys.argv
-        sys.argv = mission_argv
         try:
-            mission_main()
+            self._mission_process = subprocess.Popen(mission_cmd, env=os.environ.copy())
+            self.get_logger().info(
+                f'Mission process started: pid={self._mission_process.pid}, cmd={" ".join(mission_cmd)}'
+            )
         except Exception as e:
-            self.get_logger().error(f'Mission failed: {e}')
-        finally:
-            sys.argv = old_argv
+            self.get_logger().error(f'Mission failed to start: {e}')
+            self._state = 'DONE'
+            return
+
+        self._state = 'MISSION_RUNNING'
+        self._mission_watch_timer = self.create_timer(1.0, self._watch_mission_process)
+
+    def _watch_mission_process(self):
+        proc = getattr(self, '_mission_process', None)
+        if proc is None:
+            return
+        rc = proc.poll()
+        if rc is None:
+            return
+        self._mission_watch_timer.cancel()
+        if rc == 0:
+            self.get_logger().info('Mission process exited successfully')
+        else:
+            self.get_logger().error(f'Mission process exited with code {rc}')
         self._state = 'DONE'
         self.get_logger().info('MissionController DONE')
 

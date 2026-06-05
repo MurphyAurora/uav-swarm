@@ -65,6 +65,7 @@ def generate_launch_description():
     defaults['px4_dir'] = os.path.join(_ws_root, 'firmware', 'PX4-Autopilot')
     defaults['ws_root'] = _ws_root
     defaults['start_delay'] = '0'
+    defaults.setdefault('px4_use_versioned_local_position', '0')
 
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
@@ -73,7 +74,7 @@ def generate_launch_description():
         'px4_disable_gcs_arm_check', 'leader_id', 'dynamic_obs_wall_x',
         'dynamic_obs_wall_y', 'dynamic_obs_target_y_spacing', 'start_wall_clearance',
         # Comm
-        'start_delay', 'ws_root',
+        'start_delay', 'ws_root', 'px4_use_versioned_local_position',
         # Mission
         'swarm_mode', 'warmup_sec', 'takeoff_z', 'mission_z', 'vertical_takeoff',
         'arm_to_offboard_delay', 'inter_drone_gap', 'post_offboard_hold_sec',
@@ -89,6 +90,9 @@ def generate_launch_description():
         'orca_obs_influence_radius', 'orca_enable_after_z', 'orca_use_world_state',
         'path_planner_mode', 'astar_grid_resolution', 'astar_smooth_enable',
         'mission_start_x', 'duration', 'eval_mode', 'mission_mode',
+        'formation_kp', 'leader_track_kp', 'max_follower_speed',
+        'max_leader_speed', 'use_heading_offsets', 'lf_state_timeout',
+        'use_virtual_leader', 'virtual_lag_limit',
     ]))
 
     args = _declare_args(all_param_names, defaults)
@@ -216,7 +220,7 @@ def _build_px4_sitl(lc, num_drones):
 # Comm nodes
 # ---------------------------------------------------------------------------
 
-def _comm_remappings(px4_ns, xtd2_ns):
+def _comm_remappings(px4_ns, xtd2_ns, use_versioned_local_position=False):
     xtd2_topics = [
         'cmd_pose_local_ned', 'cmd_pose_local_flu',
         'cmd_vel_ned', 'cmd_vel_flu',
@@ -229,12 +233,17 @@ def _comm_remappings(px4_ns, xtd2_ns):
     parts.append(
         f'-r /xtdrone2/{px4_ns}/debug/vehicle_state:=/xtdrone2/{xtd2_ns}/debug/vehicle_state'
     )
+    if use_versioned_local_position:
+        parts.append(
+            f'-r /{px4_ns}/fmu/out/vehicle_local_position:=/{px4_ns}/fmu/out/vehicle_local_position_v1'
+        )
     return ' '.join(parts)
 
 
 def _build_comm_nodes(lc, num_drones):
     actions = []
     ws_root = lc('ws_root')
+    use_versioned_local_position = lc('px4_use_versioned_local_position') == '1'
 
     setup_cmd = (
         f'source /opt/ros/jazzy/setup.bash && '
@@ -245,7 +254,11 @@ def _build_comm_nodes(lc, num_drones):
     for i in range(1, num_drones + 1):
         px4_ns = f'px4_{i}'
         xtd2_ns = f'x500_{i}'
-        remap_str = _comm_remappings(px4_ns, xtd2_ns)
+        remap_str = _comm_remappings(
+            px4_ns,
+            xtd2_ns,
+            use_versioned_local_position=use_versioned_local_position,
+        )
 
         cmd_str = (
             f'{setup_cmd}'
@@ -376,6 +389,7 @@ def _build_mission_nodes(lc, num_drones):
         'px4_namespaces': px4_namespaces,
         'warmup_sec': warmup_sec,
         'takeoff_z': float(lc('takeoff_z')),
+        'mission_z': float(lc('mission_z')),
         'vertical_takeoff': lc('vertical_takeoff') == '1',
         'arm_offboard_max_retries': int(lc('arm_offboard_max_retries')),
         'arm_retry_sleep': float(lc('arm_retry_sleep')),
@@ -385,6 +399,26 @@ def _build_mission_nodes(lc, num_drones):
         'post_offboard_hold_sec': post_offboard_hold,
         'vehicle_status_timeout_sec': float(lc('vehicle_status_timeout_sec')),
         'auto_arm_offboard': lc('auto_arm_offboard') == '1',
+        'leader_id': leader_id,
+        'wall_x': wall_x,
+        'wall_y': wall_y,
+        'wall_length': float(lc('dynamic_obs_wall_length')),
+        'target_x': float(lc('dynamic_obs_target_x')),
+        'target_y': float(lc('dynamic_obs_target_y_base')),
+        'duration': float(lc('duration')),
+        'eval_mode': lc('eval_mode'),
+        'mission_mode': lc('mission_mode'),
+        'y_spacing': target_y_spacing,
+        'formation_kp': float(lc('formation_kp')),
+        'leader_track_kp': float(lc('leader_track_kp')),
+        'max_follower_speed': float(lc('max_follower_speed')),
+        'max_leader_speed': float(lc('max_leader_speed')),
+        'use_heading_offsets': lc('use_heading_offsets') == '1',
+        'lf_state_timeout': float(lc('lf_state_timeout')),
+        'use_virtual_leader': lc('use_virtual_leader') == '1',
+        'virtual_lag_limit': float(lc('virtual_lag_limit')),
+        'use_spawned_formation': lc('use_spawned_formation') == '1',
+        'mission_start_x': mission_start_x,
     }
     params_file = os.path.join(tempfile.gettempdir(), f'launch_params_{os.getpid()}.yaml')
     with open(params_file, 'w') as f:

@@ -870,22 +870,30 @@ class FixedPointMission(Node):
         allow_marker_update=True,
         use_virtual_leader=True,
         state_timeout_sec=1.0,
+        virtual_lag_limit=4.0,
         reach_tolerance=0.8,
         reach_hold_sec=0.8,
         stage_timeout_factor=3.0,
+        direct_pose_mode=False,
     ):
         sleep_dt = 1.0 / hz
         max_duration = max(float(duration), float(duration) * float(stage_timeout_factor))
         self.get_logger().info(
             f"{stage_name}: 领航跟随闭环阶段，计划 {duration:.1f}s, 超时 {max_duration:.1f}s, 发布频率 {hz:.1f}Hz, "
             f"Kp={formation_kp:.2f}, leader_Kp={leader_kp:.2f}, heading_offset={use_heading_offsets}, "
-            f"virtual_leader={use_virtual_leader}, state_timeout={state_timeout_sec:.2f}s, "
+            f"virtual_leader={use_virtual_leader}, direct_pose_mode={direct_pose_mode}, "
+            f"state_timeout={state_timeout_sec:.2f}s, virtual_lag_limit={virtual_lag_limit:.2f}m, "
             f"reach_tol={reach_tolerance:.2f}, hold={reach_hold_sec:.1f}s"
         )
         self.get_logger().info(
             f"{stage_name}: leader=x500_{self.leader_id} target=({leader_target[0]:.2f},{leader_target[1]:.2f},{leader_target[2]:.2f})"
         )
-        if use_virtual_leader:
+        if direct_pose_mode:
+            self.get_logger().info(
+                f"{stage_name}: direct velocity mode; every drone tracks the same local waypoint. "
+                f"This matches spawned-formation launches where spawn positions encode spacing."
+            )
+        elif use_virtual_leader:
             self.get_logger().info(
                 f"{stage_name}: virtual leader is an independent moving reference; "
                 f"all physical drones track the virtual reference with formation offsets"
@@ -895,10 +903,10 @@ class FixedPointMission(Node):
                 f"{stage_name}: physical leader-following mode; followers track x500_{self.leader_id} actual position"
             )
         for drone_id in range(1, self.num_drones + 1):
-            if (not use_virtual_leader) and drone_id == self.leader_id:
+            if (not direct_pose_mode) and (not use_virtual_leader) and drone_id == self.leader_id:
                 continue
             dx, dy, dz = follower_offsets[drone_id]
-            role_text = 'member' if use_virtual_leader else 'follower'
+            role_text = 'direct' if direct_pose_mode else ('member' if use_virtual_leader else 'follower')
             self.get_logger().info(
                 f"{stage_name}: {role_text}=x500_{drone_id} offset=({dx:.2f},{dy:.2f},{dz:.2f})"
             )
@@ -965,7 +973,18 @@ class FixedPointMission(Node):
             base_y = float(metric_state['y'])
             base_z = float(metric_state['z'])
             leader_heading = float(metric_state.get('heading', 0.0))
-            if use_virtual_leader:
+            if direct_pose_mode:
+                leader_ref = (
+                    float(leader_target[0]),
+                    float(leader_target[1]),
+                    float(leader_target[2]),
+                )
+                virtual_vel = (0.0, 0.0, 0.0)
+                leader_ff = (0.0, 0.0, 0.0)
+                formation_ref = leader_ref
+                formation_ff = (0.0, 0.0, 0.0)
+                virtual_ref = leader_ref
+            elif use_virtual_leader:
                 max_virtual_lag = 0.0
                 max_virtual_lag_drone = 0
                 all_virtual_states_fresh = True
@@ -988,8 +1007,8 @@ class FixedPointMission(Node):
                     if lag_dist > max_virtual_lag:
                         max_virtual_lag = lag_dist
                         max_virtual_lag_drone = lag_drone_id
-                virtual_lag_limit = max(1.8, reach_tolerance * 2.0)
-                if all_virtual_states_fresh and max_virtual_lag <= virtual_lag_limit:
+                active_virtual_lag_limit = max(float(virtual_lag_limit), reach_tolerance * 2.0)
+                if all_virtual_states_fresh and max_virtual_lag <= active_virtual_lag_limit:
                     virtual_ref, virtual_vel = self._advance_virtual_point(
                         virtual_ref,
                         leader_target,
@@ -1005,7 +1024,7 @@ class FixedPointMission(Node):
                             self.get_logger().warn(
                                 f'{stage_name}: virtual leader paused, '
                                 f'max_lag=x500_{max_virtual_lag_drone}:{max_virtual_lag:.2f}m '
-                                f'> limit={virtual_lag_limit:.2f}m'
+                                f'> limit={active_virtual_lag_limit:.2f}m'
                             )
                         else:
                             self.get_logger().warn(f'{stage_name}: virtual leader paused, swarm state incomplete')
@@ -1028,19 +1047,19 @@ class FixedPointMission(Node):
             leader_vx = 0.0
             leader_vy = 0.0
             leader_vz = 0.0
-            if not use_virtual_leader:
+            if (not direct_pose_mode) and (not use_virtual_leader):
                 lvx = float(leader_ff[0]) + leader_kp * (float(leader_ref[0]) - base_x)
                 lvy = float(leader_ff[1]) + leader_kp * (float(leader_ref[1]) - base_y)
                 lvz = float(leader_ff[2]) + leader_kp * (float(leader_ref[2]) - base_z)
                 lvx, lvy, lvz = self._limit_vector(lvx, lvy, lvz, max_leader_speed)
-                self._publish_vel(self.leader_id, lvx, lvy, lvz)
+                self._publish_pose(self.leader_id, leader_ref[0], leader_ref[1], leader_ref[2])
                 leader_vx = lvx
                 leader_vy = lvy
                 leader_vz = lvz
 
             err_values = []
             for drone_id in range(1, self.num_drones + 1):
-                if (not use_virtual_leader) and drone_id == self.leader_id:
+                if (not direct_pose_mode) and (not use_virtual_leader) and drone_id == self.leader_id:
                     continue
                 dx, dy, dz = follower_offsets[drone_id]
                 if use_heading_offsets:
@@ -1053,7 +1072,6 @@ class FixedPointMission(Node):
 
                 st = self.latest_states.get(drone_id)
                 if st is None or not self._state_fresh(st, max_age_sec=state_timeout_sec):
-                    self._publish_vel(drone_id, 0.0, 0.0, 0.0)
                     continue
 
                 ex = ref_x - float(st['x'])
@@ -1063,7 +1081,12 @@ class FixedPointMission(Node):
                 vy = float(formation_ff[1]) + formation_kp * ey
                 vz = float(formation_ff[2]) + formation_kp * ez
                 vx, vy, vz = self._limit_vector(vx, vy, vz, max_follower_speed)
-                self._publish_vel(drone_id, vx, vy, vz)
+                if direct_pose_mode:
+                    self._publish_vel(drone_id, vx, vy, vz)
+                else:
+                    # Position setpoints use the same proven control path as takeoff hold;
+                    # velocity is kept only as a diagnostic estimate.
+                    self._publish_pose(drone_id, ref_x, ref_y, ref_z)
                 if drone_id == self.leader_id:
                     leader_vx = vx
                     leader_vy = vy
@@ -1078,7 +1101,7 @@ class FixedPointMission(Node):
                 if st is None or not self._state_fresh(st, max_age_sec=state_timeout_sec):
                     all_refs_fresh = False
                     continue
-                if drone_id == self.leader_id and not use_virtual_leader:
+                if drone_id == self.leader_id and (not direct_pose_mode) and not use_virtual_leader:
                     tx, ty, tz = leader_target
                 else:
                     dx, dy, dz = follower_offsets[drone_id]
@@ -1163,6 +1186,9 @@ class FixedPointMission(Node):
                 f"{stage_name}: waypoint reach timeout after {max_duration:.1f}s, continue to next stage"
             )
 
+        if direct_pose_mode:
+            self._publish_zero_vel_all()
+
         if rms_count > 0:
             min_pair_text = 'nan' if stage_min_pair_dist is None else f'{stage_min_pair_dist:.2f}'
             self.get_logger().info(
@@ -1241,6 +1267,7 @@ def main():
     mission_start_x = float(sys.argv[21]) if len(sys.argv) > 21 else 0.0
     use_spawned_formation = bool(int(sys.argv[22])) if len(sys.argv) > 22 else False
     target_y = float(sys.argv[23]) if len(sys.argv) > 23 else wall_y
+    virtual_lag_limit = float(sys.argv[24]) if len(sys.argv) > 24 else 4.0
     path_planner_mode = os.environ.get('PATH_PLANNER_MODE', 'astar').strip().lower()
     obstacle_config_path = os.environ.get('OBSTACLE_CONFIG', '').strip()
     config_obstacles = []
@@ -1375,7 +1402,7 @@ def main():
             f"闭环参数: formation_kp={formation_kp:.2f}, leader_kp={leader_kp:.2f}, "
             f"max_follower_speed={max_follower_speed:.2f}, max_leader_speed={max_leader_speed:.2f}, "
             f"use_heading_offsets={use_heading_offsets}, state_timeout={state_timeout_sec:.2f}, "
-            f"use_virtual_leader={use_virtual_leader}"
+            f"use_virtual_leader={use_virtual_leader}, virtual_lag_limit={virtual_lag_limit:.2f}"
         )
         for i in range(1, num_drones + 1):
             tx, ty, tz = target_stage[i]
@@ -1401,7 +1428,7 @@ def main():
             f"闭环参数: formation_kp={formation_kp:.2f}, leader_kp={leader_kp:.2f}, "
             f"max_follower_speed={max_follower_speed:.2f}, max_leader_speed={max_leader_speed:.2f}, "
             f"use_heading_offsets={use_heading_offsets}, state_timeout={state_timeout_sec:.2f}, "
-            f"use_virtual_leader={use_virtual_leader}"
+            f"use_virtual_leader={use_virtual_leader}, virtual_lag_limit={virtual_lag_limit:.2f}"
         )
     if eval_mode == 'cross_only':
         node.get_logger().info(f"成功判据: 仅判定过墙(x>{wall_x + 0.6:.2f})")
@@ -1473,6 +1500,7 @@ def main():
             use_heading_offsets=use_heading_offsets,
             use_virtual_leader=use_virtual_leader,
             state_timeout_sec=state_timeout_sec,
+            virtual_lag_limit=virtual_lag_limit,
         )
         node.publish_stage('stage3_target_hold', target_stage, duration=6.0)
     else:
@@ -1495,6 +1523,12 @@ def main():
             f"{name}={stage_duration:.1f}s" for _, name, _, stage_duration in stage_plan
         )
         node.get_logger().info(f"闭环阶段时长: {duration_text}")
+        direct_stage_mode = use_spawned_formation and (not use_virtual_leader)
+        if direct_stage_mode:
+            node.get_logger().info(
+                'spawned-formation mode: use direct local velocity tracking for all drones; ' 
+                'spawn positions keep the formation spacing'
+            )
 
         for idx, name, leader_ref, stage_duration in stage_plan:
             node.publish_follow_leader_stage(
@@ -1510,6 +1544,8 @@ def main():
                 allow_marker_update=False,
                 use_virtual_leader=use_virtual_leader,
                 state_timeout_sec=state_timeout_sec,
+                virtual_lag_limit=virtual_lag_limit,
+                direct_pose_mode=direct_stage_mode,
             )
         node.publish_stage('stage6_target_hold', target_stage, duration=6.0)
 
