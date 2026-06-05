@@ -18,11 +18,7 @@ class FixedPointMission(Node):
         self.leader_id = leader_id
         self.pubs = {}
         self.vel_pubs = {}
-        self.ref_pub = self.create_publisher(String, '/xtdrone2/swarm/formation_reference', 10)
         self.latest_states = {}
-        self.latest_local_views = {}
-        self.latest_adjacency = {}
-        self.latest_graph_mode = ''
         self.latest_target_markers = {}
         self.latest_target_stamp = 0.0
         self.obstacles = None
@@ -61,67 +57,9 @@ class FixedPointMission(Node):
         self.metrics_file.write(
             'stamp,stage,leader_id,leader_x,leader_y,leader_z,'
             'virtual_x,virtual_y,virtual_z,target_x,target_y,target_z,'
-            'formation_rms,formation_max,min_pair_dist,leader_cmd_vx,leader_cmd_vy,leader_cmd_vz,'
-            'consensus_refs_active,avg_local_samples,consensus_delta_avg,consensus_delta_max,'
-            'max_virtual_lag,local_view_missing,neighbor_state_timeout\n'
+            'formation_rms,formation_max,min_pair_dist,leader_cmd_vx,leader_cmd_vy,leader_cmd_vz\n'
         )
         self.get_logger().info(f'formation metrics csv: {self.metrics_csv_path}')
-
-    def _publish_formation_reference(
-        self,
-        stage_name,
-        formation_ref,
-        formation_ff,
-        leader_target,
-        follower_offsets,
-        heading,
-        use_heading_offsets,
-        formation_kp,
-        max_follower_speed,
-        state_timeout_sec,
-    ):
-        msg = String()
-        msg.data = json.dumps(
-            {
-                'stamp': time.time(),
-                'stage': stage_name,
-                'num_drones': self.num_drones,
-                'leader_id': self.leader_id,
-                'formation_ref': [float(formation_ref[0]), float(formation_ref[1]), float(formation_ref[2])],
-                'formation_ff': [float(formation_ff[0]), float(formation_ff[1]), float(formation_ff[2])],
-                'leader_target': [float(leader_target[0]), float(leader_target[1]), float(leader_target[2])],
-                'heading': float(heading),
-                'use_heading_offsets': bool(use_heading_offsets),
-                'formation_kp': float(formation_kp),
-                'max_follower_speed': float(max_follower_speed),
-                'state_timeout_sec': float(state_timeout_sec),
-                'follower_offsets': {
-                    str(drone_id): [float(v[0]), float(v[1]), float(v[2])]
-                    for drone_id, v in follower_offsets.items()
-                },
-            },
-            ensure_ascii=False,
-        )
-        self.ref_pub.publish(msg)
-
-    def _normalize_swarm_state(self, state):
-        drone_id = int(state['id'])
-        out = {
-            'id': drone_id,
-            'x': self._finite_float(state.get('x', 0.0)),
-            'y': self._finite_float(state.get('y', 0.0)),
-            'z': self._finite_float(state.get('z', 0.0)),
-            'vx': self._finite_float(state.get('vx', 0.0)),
-            'vy': self._finite_float(state.get('vy', 0.0)),
-            'vz': self._finite_float(state.get('vz', 0.0)),
-            'heading': self._finite_float(state.get('heading', 0.0)),
-            'stamp': float(state.get('stamp', 0.0)),
-        }
-        if 'world_x' in state:
-            out['world_x'] = self._finite_float(state.get('world_x', state.get('x', 0.0)))
-        if 'world_y' in state:
-            out['world_y'] = self._finite_float(state.get('world_y', state.get('y', 0.0)))
-        return out
 
     def _state_cb(self, msg: String):
         try:
@@ -129,23 +67,18 @@ class FixedPointMission(Node):
             arr = data.get('states', [])
             tmp = {}
             for s in arr:
-                st = self._normalize_swarm_state(s)
-                tmp[int(st['id'])] = st
+                drone_id = int(s['id'])
+                tmp[drone_id] = {
+                    'x': self._finite_float(s.get('x', 0.0)),
+                    'y': self._finite_float(s.get('y', 0.0)),
+                    'z': self._finite_float(s.get('z', 0.0)),
+                    'vx': self._finite_float(s.get('vx', 0.0)),
+                    'vy': self._finite_float(s.get('vy', 0.0)),
+                    'vz': self._finite_float(s.get('vz', 0.0)),
+                    'heading': self._finite_float(s.get('heading', 0.0)),
+                    'stamp': float(s.get('stamp', 0.0)),
+                }
             self.latest_states = tmp
-            self.latest_graph_mode = str(data.get('graph_mode', ''))
-            self.latest_adjacency = data.get('adjacency', {}) or {}
-            self.latest_local_views = {}
-            for view in data.get('local_views', []) or []:
-                view_id = int(view.get('id', -1))
-                if view_id > 0:
-                    local_self = view.get('self') or {}
-                    neighbors = view.get('neighbors', []) or []
-                    self.latest_local_views[view_id] = {
-                        'id': view_id,
-                        'self': self._normalize_swarm_state(local_self) if local_self else None,
-                        'neighbor_ids': [int(i) for i in view.get('neighbor_ids', []) or []],
-                        'neighbors': [self._normalize_swarm_state(s) for s in neighbors],
-                    }
         except Exception:
             return
 
@@ -185,15 +118,6 @@ class FixedPointMission(Node):
     def _state_xyz(self, st):
         return (float(st['x']), float(st['y']), float(st['z']))
 
-    def _state_xy_for_safety(self, st):
-        if 'world_x' in st and 'world_y' in st:
-            return float(st['world_x']), float(st['world_y'])
-        return float(st['x']), float(st['y'])
-
-    def _state_xyz_for_safety(self, st):
-        x, y = self._state_xy_for_safety(st)
-        return (x, y, float(st['z']))
-
     def _state_vel(self, st):
         return (
             self._finite_float(st.get('vx', 0.0)),
@@ -225,142 +149,6 @@ class FixedPointMission(Node):
             sum(p[1] for p in centers) * inv_n,
             sum(p[2] for p in centers) * inv_n,
         )
-
-    def _estimate_consensus_refs_by_drone(
-        self,
-        follower_offsets,
-        use_heading_offsets=False,
-        heading=0.0,
-        max_age_sec=1.0,
-    ):
-        refs = {}
-        for drone_id in range(1, self.num_drones + 1):
-            view = self.latest_local_views.get(drone_id)
-            samples = []
-            if view is not None:
-                local_self = view.get('self')
-                if local_self:
-                    samples.append(local_self)
-                samples.extend(view.get('neighbors', []) or [])
-
-            if not samples:
-                neighbor_ids = []
-                neighbor_ids = [int(i) for i in self.latest_adjacency.get(str(drone_id), [])]
-                sample_ids = [drone_id] + [i for i in neighbor_ids if i != drone_id]
-                samples = [
-                    self.latest_states[sample_id]
-                    for sample_id in sample_ids
-                    if sample_id in self.latest_states
-                ]
-
-            centers = []
-            seen_ids = set()
-            for st in samples:
-                if st is None or not self._state_fresh(st, max_age_sec=max_age_sec):
-                    continue
-                sample_id = int(st.get('id', 0))
-                if sample_id <= 0 or sample_id in seen_ids:
-                    continue
-                seen_ids.add(sample_id)
-                dx, dy, dz = follower_offsets.get(sample_id, (0.0, 0.0, 0.0))
-                if use_heading_offsets:
-                    rdx, rdy = self._rotate_offset_by_heading(dx, dy, heading)
-                else:
-                    rdx, rdy = dx, dy
-                centers.append((
-                    float(st['x']) - rdx,
-                    float(st['y']) - rdy,
-                    float(st['z']) - dz,
-                ))
-            if centers:
-                inv_n = 1.0 / float(len(centers))
-                refs[drone_id] = (
-                    sum(p[0] for p in centers) * inv_n,
-                    sum(p[1] for p in centers) * inv_n,
-                    sum(p[2] for p in centers) * inv_n,
-                    len(centers),
-                )
-        return refs
-
-    def _local_view_stats(self, max_age_sec=1.0):
-        missing = 0
-        timeout = 0
-        for drone_id in range(1, self.num_drones + 1):
-            view = self.latest_local_views.get(drone_id)
-            if view is None or view.get('self') is None:
-                missing += 1
-                continue
-            samples = [view.get('self')] + list(view.get('neighbors', []) or [])
-            for st in samples:
-                if st is not None and not self._state_fresh(st, max_age_sec=max_age_sec):
-                    timeout += 1
-        return missing, timeout
-
-    def _blend_consensus_ref(self, base_ref, consensus_ref, gain, max_correction):
-        if consensus_ref is None or gain <= 0.0 or max_correction <= 0.0:
-            return base_ref, (0.0, 0.0, 0.0)
-        cx, cy, cz = consensus_ref[:3]
-        dx = (float(cx) - float(base_ref[0])) * float(gain)
-        dy = (float(cy) - float(base_ref[1])) * float(gain)
-        dz = (float(cz) - float(base_ref[2])) * float(gain)
-        dx, dy, dz = self._limit_vector(dx, dy, dz, float(max_correction))
-        return (
-            float(base_ref[0]) + dx,
-            float(base_ref[1]) + dy,
-            float(base_ref[2]) + dz,
-        ), (dx, dy, dz)
-
-    def _apply_rear_speed_constraint(
-        self,
-        drone_id,
-        desired_vel,
-        axis_xy,
-        safe_gap,
-        lateral_window,
-        max_brake,
-        state_timeout_sec,
-    ):
-        ax, ay = axis_xy
-        axis_norm = math.hypot(ax, ay)
-        if axis_norm <= 1e-6 or safe_gap <= 0.0:
-            return desired_vel
-        ax /= axis_norm
-        ay /= axis_norm
-        own = self.latest_states.get(drone_id)
-        if own is None or not self._state_fresh(own, max_age_sec=state_timeout_sec):
-            return desired_vel
-
-        vx, vy, vz = desired_vel
-        own_axis_v = vx * ax + vy * ay
-        capped_axis_v = own_axis_v
-        own_x, own_y = self._state_xy_for_safety(own)
-        for other_id in range(1, self.num_drones + 1):
-            if other_id == drone_id:
-                continue
-            other = self.latest_states.get(other_id)
-            if other is None or not self._state_fresh(other, max_age_sec=state_timeout_sec):
-                continue
-            other_x, other_y = self._state_xy_for_safety(other)
-            rel_x = other_x - own_x
-            rel_y = other_y - own_y
-            forward_gap = rel_x * ax + rel_y * ay
-            if forward_gap <= 0.0 or forward_gap >= safe_gap:
-                continue
-            lateral_x = rel_x - forward_gap * ax
-            lateral_y = rel_y - forward_gap * ay
-            lateral_gap = math.hypot(lateral_x, lateral_y)
-            if lateral_gap > lateral_window:
-                continue
-            other_axis_v = self._finite_float(other.get('vx', 0.0)) * ax + self._finite_float(other.get('vy', 0.0)) * ay
-            gap_ratio = (safe_gap - forward_gap) / max(safe_gap, 1e-6)
-            allowed_axis_v = other_axis_v - max(0.0, max_brake) * gap_ratio
-            capped_axis_v = min(capped_axis_v, allowed_axis_v)
-
-        delta_axis_v = capped_axis_v - own_axis_v
-        if delta_axis_v < -1e-6:
-            vx += delta_axis_v * ax
-            vy += delta_axis_v * ay
-        return vx, vy, vz
 
     def _publish_vel(self, drone_id, vx, vy, vz, yawspeed=0.0):
         tw = Twist()
@@ -818,13 +606,6 @@ class FixedPointMission(Node):
         formation_max,
         min_pair_dist,
         leader_cmd,
-        consensus_refs_active=0,
-        avg_local_samples=0.0,
-        consensus_delta_avg=0.0,
-        consensus_delta_max=0.0,
-        max_virtual_lag=0.0,
-        local_view_missing=0,
-        neighbor_state_timeout=0,
     ):
         if self.metrics_file is None:
             return
@@ -835,10 +616,7 @@ class FixedPointMission(Node):
             f'{float(virtual_ref[0]):.4f},{float(virtual_ref[1]):.4f},{float(virtual_ref[2]):.4f},'
             f'{float(leader_target[0]):.4f},{float(leader_target[1]):.4f},{float(leader_target[2]):.4f},'
             f'{formation_rms:.4f},{formation_max:.4f},{min_dist_text},'
-            f'{float(leader_cmd[0]):.4f},{float(leader_cmd[1]):.4f},{float(leader_cmd[2]):.4f},'
-            f'{int(consensus_refs_active)},{float(avg_local_samples):.4f},'
-            f'{float(consensus_delta_avg):.4f},{float(consensus_delta_max):.4f},'
-            f'{float(max_virtual_lag):.4f},{int(local_view_missing)},{int(neighbor_state_timeout)}\n'
+            f'{float(leader_cmd[0]):.4f},{float(leader_cmd[1]):.4f},{float(leader_cmd[2]):.4f}\n'
         )
 
     def _target_markers_cb(self, msg: String):
@@ -1098,35 +876,11 @@ class FixedPointMission(Node):
     ):
         sleep_dt = 1.0 / hz
         max_duration = max(float(duration), float(duration) * float(stage_timeout_factor))
-        local_controller_enable = bool(int(self._finite_float(os.environ.get('ENGINEERING_SEMI_DISTRIBUTED', 1), 1)))
-        semi_distributed_enable = bool(int(self._finite_float(os.environ.get('SEMI_DISTRIBUTED_ENABLE', 1), 1)))
-        consensus_gain = max(0.0, self._finite_float(os.environ.get('CONSENSUS_CORRECTION_GAIN', 0.25), 0.25))
-        consensus_max_correction = max(
-            0.0,
-            self._finite_float(os.environ.get('CONSENSUS_MAX_CORRECTION', 0.35), 0.35),
-        )
-        configured_virtual_lag_limit = max(
-            0.0,
-            self._finite_float(os.environ.get('VIRTUAL_LAG_LIMIT', 2.2), 2.2),
-        )
-        rear_constraint_enable = bool(int(self._finite_float(os.environ.get('REAR_SPEED_CONSTRAINT', 1), 1)))
-        rear_safe_gap = max(0.0, self._finite_float(os.environ.get('REAR_SAFE_GAP', 1.45), 1.45))
-        rear_lateral_window = max(0.0, self._finite_float(os.environ.get('REAR_LATERAL_WINDOW', 0.9), 0.9))
-        rear_max_brake = max(0.0, self._finite_float(os.environ.get('REAR_MAX_BRAKE', 0.55), 0.55))
         self.get_logger().info(
             f"{stage_name}: 领航跟随闭环阶段，计划 {duration:.1f}s, 超时 {max_duration:.1f}s, 发布频率 {hz:.1f}Hz, "
             f"Kp={formation_kp:.2f}, leader_Kp={leader_kp:.2f}, heading_offset={use_heading_offsets}, "
             f"virtual_leader={use_virtual_leader}, state_timeout={state_timeout_sec:.2f}s, "
             f"reach_tol={reach_tolerance:.2f}, hold={reach_hold_sec:.1f}s"
-        )
-        self.get_logger().info(
-            f"{stage_name}: semi_distributed={int(semi_distributed_enable)}, "
-            f"local_controllers={int(local_controller_enable)}, "
-            f"graph={self.latest_graph_mode or 'unknown'}, consensus_gain={consensus_gain:.2f}, "
-            f"consensus_max_correction={consensus_max_correction:.2f}, "
-            f"virtual_lag_limit={configured_virtual_lag_limit:.2f}, "
-            f"rear_constraint={int(rear_constraint_enable)}, rear_safe_gap={rear_safe_gap:.2f}, "
-            f"rear_lateral_window={rear_lateral_window:.2f}"
         )
         self.get_logger().info(
             f"{stage_name}: leader=x500_{self.leader_id} target=({leader_target[0]:.2f},{leader_target[1]:.2f},{leader_target[2]:.2f})"
@@ -1196,14 +950,13 @@ class FixedPointMission(Node):
                         metric_state = candidate_state
                         break
             if metric_state is None or ((not use_virtual_leader) and not leader_state_fresh):
+                self._publish_zero_vel_all()
                 now_t = time.time()
                 if now_t - self._last_failsafe_log_t >= 1.0:
                     self._last_failsafe_log_t = now_t
                     self.get_logger().warn(
-                        f'{stage_name}: required swarm state timeout, local controller timeout will stop setpoints'
+                        f'{stage_name}: required swarm state timeout, publish zero velocity failsafe'
                     )
-                if not local_controller_enable:
-                    self._publish_zero_vel_all()
                 rclpy.spin_once(self, timeout_sec=0.0)
                 time.sleep(sleep_dt)
                 continue
@@ -1235,7 +988,7 @@ class FixedPointMission(Node):
                     if lag_dist > max_virtual_lag:
                         max_virtual_lag = lag_dist
                         max_virtual_lag_drone = lag_drone_id
-                virtual_lag_limit = max(configured_virtual_lag_limit, reach_tolerance * 2.0)
+                virtual_lag_limit = max(1.8, reach_tolerance * 2.0)
                 if all_virtual_states_fresh and max_virtual_lag <= virtual_lag_limit:
                     virtual_ref, virtual_vel = self._advance_virtual_point(
                         virtual_ref,
@@ -1272,63 +1025,20 @@ class FixedPointMission(Node):
                 formation_ff = self._state_vel(leader_state)
                 virtual_ref = formation_ref
 
-            consensus_refs = {}
-            if semi_distributed_enable:
-                consensus_refs = self._estimate_consensus_refs_by_drone(
-                    follower_offsets,
-                    use_heading_offsets=use_heading_offsets,
-                    heading=leader_heading,
-                    max_age_sec=state_timeout_sec,
-                )
-            motion_axis = (float(formation_ff[0]), float(formation_ff[1]))
-            if math.hypot(motion_axis[0], motion_axis[1]) <= 1e-6:
-                motion_axis = (
-                    float(leader_target[0]) - float(formation_ref[0]),
-                    float(leader_target[1]) - float(formation_ref[1]),
-                )
-
             leader_vx = 0.0
             leader_vy = 0.0
             leader_vz = 0.0
-            if local_controller_enable:
-                self._publish_formation_reference(
-                    stage_name,
-                    formation_ref,
-                    formation_ff,
-                    leader_target,
-                    follower_offsets,
-                    leader_heading,
-                    use_heading_offsets,
-                    formation_kp,
-                    max_follower_speed,
-                    state_timeout_sec,
-                )
-                leader_vx = float(formation_ff[0])
-                leader_vy = float(formation_ff[1])
-                leader_vz = float(formation_ff[2])
-            elif not use_virtual_leader:
+            if not use_virtual_leader:
                 lvx = float(leader_ff[0]) + leader_kp * (float(leader_ref[0]) - base_x)
                 lvy = float(leader_ff[1]) + leader_kp * (float(leader_ref[1]) - base_y)
                 lvz = float(leader_ff[2]) + leader_kp * (float(leader_ref[2]) - base_z)
                 lvx, lvy, lvz = self._limit_vector(lvx, lvy, lvz, max_leader_speed)
-                if rear_constraint_enable:
-                    lvx, lvy, lvz = self._apply_rear_speed_constraint(
-                        self.leader_id,
-                        (lvx, lvy, lvz),
-                        motion_axis,
-                        rear_safe_gap,
-                        rear_lateral_window,
-                        rear_max_brake,
-                        state_timeout_sec,
-                    )
                 self._publish_vel(self.leader_id, lvx, lvy, lvz)
                 leader_vx = lvx
                 leader_vy = lvy
                 leader_vz = lvz
 
             err_values = []
-            consensus_delta_values = []
-            local_view_missing, neighbor_state_timeout = self._local_view_stats(max_age_sec=state_timeout_sec)
             for drone_id in range(1, self.num_drones + 1):
                 if (not use_virtual_leader) and drone_id == self.leader_id:
                     continue
@@ -1340,22 +1050,10 @@ class FixedPointMission(Node):
                 ref_x = float(formation_ref[0]) + rdx
                 ref_y = float(formation_ref[1]) + rdy
                 ref_z = float(formation_ref[2]) + dz
-                local_formation_ref, consensus_delta = self._blend_consensus_ref(
-                    formation_ref,
-                    consensus_refs.get(drone_id),
-                    consensus_gain if semi_distributed_enable else 0.0,
-                    consensus_max_correction,
-                )
-                if semi_distributed_enable and consensus_refs.get(drone_id) is not None:
-                    consensus_delta_values.append(self._distance_xyz(consensus_delta, (0.0, 0.0, 0.0)))
-                ref_x = float(local_formation_ref[0]) + rdx
-                ref_y = float(local_formation_ref[1]) + rdy
-                ref_z = float(local_formation_ref[2]) + dz
 
                 st = self.latest_states.get(drone_id)
                 if st is None or not self._state_fresh(st, max_age_sec=state_timeout_sec):
-                    if not local_controller_enable:
-                        self._publish_vel(drone_id, 0.0, 0.0, 0.0)
+                    self._publish_vel(drone_id, 0.0, 0.0, 0.0)
                     continue
 
                 ex = ref_x - float(st['x'])
@@ -1365,18 +1063,7 @@ class FixedPointMission(Node):
                 vy = float(formation_ff[1]) + formation_kp * ey
                 vz = float(formation_ff[2]) + formation_kp * ez
                 vx, vy, vz = self._limit_vector(vx, vy, vz, max_follower_speed)
-                if (not local_controller_enable) and rear_constraint_enable:
-                    vx, vy, vz = self._apply_rear_speed_constraint(
-                        drone_id,
-                        (vx, vy, vz),
-                        motion_axis,
-                        rear_safe_gap,
-                        rear_lateral_window,
-                        rear_max_brake,
-                        state_timeout_sec,
-                    )
-                if not local_controller_enable:
-                    self._publish_vel(drone_id, vx, vy, vz)
+                self._publish_vel(drone_id, vx, vy, vz)
                 if drone_id == self.leader_id:
                     leader_vx = vx
                     leader_vy = vy
@@ -1414,9 +1101,11 @@ class FixedPointMission(Node):
                     sj = self.latest_states.get(j)
                     if sj is None or not self._state_fresh(sj, max_age_sec=state_timeout_sec):
                         continue
-                    si_xyz = self._state_xyz_for_safety(si)
-                    sj_xyz = self._state_xyz_for_safety(sj)
-                    dij = self._distance_xyz(si_xyz, sj_xyz)
+                    dij = math.sqrt(
+                        (float(si['x']) - float(sj['x'])) ** 2
+                        + (float(si['y']) - float(sj['y'])) ** 2
+                        + (float(si['z']) - float(sj['z'])) ** 2
+                    )
                     if min_pair_dist is None or dij < min_pair_dist:
                         min_pair_dist = dij
             now_t = time.time()
@@ -1438,24 +1127,6 @@ class FixedPointMission(Node):
                         f"min_pair_dist={min_dist_text}, virtual_target_dist={virtual_target_dist:.2f}, "
                         f"leader_v=({leader_vx:.2f},{leader_vy:.2f},{leader_vz:.2f})"
                     )
-                    if semi_distributed_enable and consensus_refs:
-                        avg_neighbors = sum(ref[3] for ref in consensus_refs.values()) / max(len(consensus_refs), 1)
-                        delta_avg = (
-                            sum(consensus_delta_values) / len(consensus_delta_values)
-                            if consensus_delta_values else 0.0
-                        )
-                        delta_max = max(consensus_delta_values) if consensus_delta_values else 0.0
-                        self.get_logger().info(
-                            f"{stage_name}: consensus active refs={len(consensus_refs)}/{self.num_drones}, "
-                            f"avg_local_samples={avg_neighbors:.1f}, "
-                            f"delta_avg={delta_avg:.3f}, delta_max={delta_max:.3f}, "
-                            f"local_view_missing={local_view_missing}, neighbor_timeout={neighbor_state_timeout}, "
-                            f"graph={self.latest_graph_mode or 'unknown'}"
-                        )
-                    else:
-                        avg_neighbors = 0.0
-                        delta_avg = 0.0
-                        delta_max = 0.0
                     self._write_metric_row(
                         stage_name,
                         metric_state,
@@ -1465,13 +1136,6 @@ class FixedPointMission(Node):
                         max(err_values),
                         min_pair_dist,
                         (leader_vx, leader_vy, leader_vz),
-                        len(consensus_refs) if semi_distributed_enable else 0,
-                        avg_neighbors,
-                        delta_avg,
-                        delta_max,
-                        max_virtual_lag if use_virtual_leader else 0.0,
-                        local_view_missing,
-                        neighbor_state_timeout,
                     )
 
             if all_refs_fresh and len(ref_dist_values) == self.num_drones:
