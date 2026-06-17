@@ -29,6 +29,7 @@ class SwarmStateExchange(Node):
         mission_start_x: float = 0.0,
         base_y: float = 0.0,
         y_spacing: float = 1.8,
+        formation_axis: str = 'y',
         leader_id: int = 1,
     ):
         super().__init__('swarm_state_exchange')
@@ -37,6 +38,7 @@ class SwarmStateExchange(Node):
         self.mission_start_x = float(mission_start_x)
         self.base_y = float(base_y)
         self.y_spacing = float(y_spacing)
+        self.formation_axis = str(formation_axis or 'y').strip().lower()
         self.leader_id = int(leader_id)
         self.states = {}
         self.pub = self.create_publisher(String, '/xtdrone2/swarm/state_exchange', 10)
@@ -54,7 +56,8 @@ class SwarmStateExchange(Node):
         self.get_logger().info(
             f'state_exchange started: num={self.num_drones}, rate={rate_hz}Hz, '
             f'spawned_formation={int(self.spawned_formation)}, mission_start_x={self.mission_start_x:.2f}, '
-            f'base_y={self.base_y:.2f}, y_spacing={self.y_spacing:.2f}, leader_id={self.leader_id}'
+            f'base_y={self.base_y:.2f}, y_spacing={self.y_spacing:.2f}, '
+            f'formation_axis={self.formation_axis}, leader_id={self.leader_id}'
         )
 
     def _pos_cb(self, drone_id: int, msg: VehicleLocalPosition):
@@ -70,8 +73,14 @@ class SwarmStateExchange(Node):
             'stamp': time.time(),
         }
         if self.spawned_formation:
-            spawn_y = self.base_y + (drone_id - self.leader_id) * self.y_spacing
-            state['world_x'] = self.mission_start_x + float(msg.x)
+            offset = (drone_id - self.leader_id) * self.y_spacing
+            if self.formation_axis == 'x':
+                spawn_x = self.mission_start_x + offset
+                spawn_y = self.base_y
+            else:
+                spawn_x = self.mission_start_x
+                spawn_y = self.base_y + offset
+            state['world_x'] = spawn_x + float(msg.x)
             state['world_y'] = spawn_y + float(msg.y)
         else:
             state['world_x'] = float(msg.x)
@@ -101,6 +110,7 @@ def main():
     parser.add_argument('--mission-start-x', type=float, default=0.0)
     parser.add_argument('--base-y', type=float, default=0.0)
     parser.add_argument('--y-spacing', type=float, default=1.8)
+    parser.add_argument('--formation-axis', type=str, default='y', choices=['x', 'y'])
     parser.add_argument('--leader-id', type=int, default=1)
     args, _ = parser.parse_known_args()
 
@@ -112,6 +122,7 @@ def main():
         mission_start_x=args.mission_start_x,
         base_y=args.base_y,
         y_spacing=args.y_spacing,
+        formation_axis=args.formation_axis,
         leader_id=args.leader_id,
     )
     try:

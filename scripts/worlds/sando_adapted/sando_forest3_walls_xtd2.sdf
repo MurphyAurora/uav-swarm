@@ -1,0 +1,1217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <world name="sando_forest3_walls_xtd2">
+    <!-- Adapted from MIT ACL SANDO forest3_with_walls.world for the local XTD2/PX4 Gazebo stack. -->
+    <!-- This version keeps the structured wall/pillar look while avoiding SANDO-specific plugins. -->
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <grid>false</grid>
+      <ambient>0.48 0.48 0.48 1</ambient>
+      <background>0.73 0.73 0.70 1</background>
+      <shadows>true</shadows>
+    </scene>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>120 120</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>120 120</size></plane></geometry>
+          <material><ambient>0.68 0.68 0.64 1</ambient><diffuse>0.68 0.68 0.64 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1</intensity>
+      <direction>0.001 0.625 -0.78</direction>
+      <diffuse>0.904 0.904 0.904 1</diffuse>
+      <specular>0.271 0.271 0.271 1</specular>
+      <attenuation><range>2000</range><linear>0</linear><constant>1</constant><quadratic>0</quadratic></attenuation>
+    </light>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg>8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+    <model name="struct_pillar_000">
+      <static>true</static>
+      <pose>9.561 11.396 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_001">
+      <static>true</static>
+      <pose>9.126 8.172 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_002">
+      <static>true</static>
+      <pose>10.505 6.164 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_003">
+      <static>true</static>
+      <pose>13.526 8.273 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_004">
+      <static>true</static>
+      <pose>16.454 13.565 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_005">
+      <static>true</static>
+      <pose>11.979 12.843 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_006">
+      <static>true</static>
+      <pose>11.294 2.418 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_007">
+      <static>true</static>
+      <pose>19.924 3.259 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_008">
+      <static>true</static>
+      <pose>24.324 7.032 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_009">
+      <static>true</static>
+      <pose>25.796 11.229 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_010">
+      <static>true</static>
+      <pose>23.188 16.411 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_011">
+      <static>true</static>
+      <pose>5.940 3.315 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_012">
+      <static>true</static>
+      <pose>24.723 3.481 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_013">
+      <static>true</static>
+      <pose>5.056 15.573 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_014">
+      <static>true</static>
+      <pose>8.215 19.708 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_015">
+      <static>true</static>
+      <pose>13.375 20.097 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_016">
+      <static>true</static>
+      <pose>19.069 20.418 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_017">
+      <static>true</static>
+      <pose>25.769 20.037 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_018">
+      <static>true</static>
+      <pose>5.020 23.151 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_019">
+      <static>true</static>
+      <pose>10.430 24.790 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_020">
+      <static>true</static>
+      <pose>16.225 24.100 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_021">
+      <static>true</static>
+      <pose>23.306 24.591 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_022">
+      <static>true</static>
+      <pose>0.522 19.400 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_023">
+      <static>true</static>
+      <pose>0.138 11.468 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_024">
+      <static>true</static>
+      <pose>-4.486 15.211 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_025">
+      <static>true</static>
+      <pose>-2.478 8.271 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_026">
+      <static>true</static>
+      <pose>-2.134 2.286 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_027">
+      <static>true</static>
+      <pose>32.000 1.853 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_028">
+      <static>true</static>
+      <pose>-3.852 29.699 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_029">
+      <static>true</static>
+      <pose>3.662 31.429 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_030">
+      <static>true</static>
+      <pose>19.536 30.099 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_031">
+      <static>true</static>
+      <pose>30.466 30.389 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_032">
+      <static>true</static>
+      <pose>-3.017 24.173 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_033">
+      <static>true</static>
+      <pose>-1.391 3.447 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_034">
+      <static>true</static>
+      <pose>12.025 25.099 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_035">
+      <static>true</static>
+      <pose>12.516 20.647 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_036">
+      <static>true</static>
+      <pose>8.971 20.227 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_037">
+      <static>true</static>
+      <pose>12.606 15.183 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_038">
+      <static>true</static>
+      <pose>13.505 15.862 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_039">
+      <static>true</static>
+      <pose>6.059 16.394 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.08 0.09 0.09 1</ambient><diffuse>0.08 0.09 0.09 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_040">
+      <static>true</static>
+      <pose>7.382 11.106 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_pillar_041">
+      <static>true</static>
+      <pose>8.165 11.423 3.000 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.500</radius><length>6.000</length></cylinder></geometry><material><ambient>0.26 0.27 0.27 1</ambient><diffuse>0.26 0.27 0.27 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_042">
+      <static>true</static>
+      <pose>10.445 16.734 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_043">
+      <static>true</static>
+      <pose>8.931 14.858 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_044">
+      <static>true</static>
+      <pose>12.761 23.593 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_045">
+      <static>true</static>
+      <pose>12.518 17.585 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_046">
+      <static>true</static>
+      <pose>19.349 10.146 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_047">
+      <static>true</static>
+      <pose>19.090 12.381 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_048">
+      <static>true</static>
+      <pose>22.716 19.471 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_049">
+      <static>true</static>
+      <pose>21.922 12.910 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_050">
+      <static>true</static>
+      <pose>2.985 7.695 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_051">
+      <static>true</static>
+      <pose>-1.405 12.678 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_052">
+      <static>true</static>
+      <pose>-0.313 7.316 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_053">
+      <static>true</static>
+      <pose>4.401 17.867 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_054">
+      <static>true</static>
+      <pose>8.699 22.509 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_055">
+      <static>true</static>
+      <pose>2.932 24.547 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_056">
+      <static>true</static>
+      <pose>2.027 20.363 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_057">
+      <static>true</static>
+      <pose>2.557 13.479 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_058">
+      <static>true</static>
+      <pose>11.635 9.532 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_059">
+      <static>true</static>
+      <pose>15.314 8.470 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_060">
+      <static>true</static>
+      <pose>18.533 6.489 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_061">
+      <static>true</static>
+      <pose>16.166 4.338 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_062">
+      <static>true</static>
+      <pose>25.538 4.952 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_063">
+      <static>true</static>
+      <pose>24.898 9.690 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_064">
+      <static>true</static>
+      <pose>22.211 9.770 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_065">
+      <static>true</static>
+      <pose>20.618 10.813 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_066">
+      <static>true</static>
+      <pose>5.442 8.686 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_067">
+      <static>true</static>
+      <pose>7.008 5.231 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_068">
+      <static>true</static>
+      <pose>3.265 0.011 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_069">
+      <static>true</static>
+      <pose>6.977 -0.585 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_070">
+      <static>true</static>
+      <pose>5.588 -2.000 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_071">
+      <static>true</static>
+      <pose>-4.784 4.257 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_072">
+      <static>true</static>
+      <pose>-8.835 3.134 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_073">
+      <static>true</static>
+      <pose>-4.178 8.983 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_074">
+      <static>true</static>
+      <pose>11.754 18.169 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_075">
+      <static>true</static>
+      <pose>18.529 15.422 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_076">
+      <static>true</static>
+      <pose>21.382 14.764 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_077">
+      <static>true</static>
+      <pose>26.302 15.347 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_078">
+      <static>true</static>
+      <pose>22.362 20.523 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_079">
+      <static>true</static>
+      <pose>20.370 18.557 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_080">
+      <static>true</static>
+      <pose>17.833 18.344 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_081">
+      <static>true</static>
+      <pose>17.356 22.414 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_082">
+      <static>true</static>
+      <pose>20.691 25.841 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_083">
+      <static>true</static>
+      <pose>13.978 22.038 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_084">
+      <static>true</static>
+      <pose>15.529 17.439 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_085">
+      <static>true</static>
+      <pose>17.498 19.026 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_086">
+      <static>true</static>
+      <pose>22.361 22.089 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_087">
+      <static>true</static>
+      <pose>19.041 24.935 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_088">
+      <static>true</static>
+      <pose>18.103 26.475 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_089">
+      <static>true</static>
+      <pose>10.257 18.967 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_090">
+      <static>true</static>
+      <pose>14.787 15.700 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_091">
+      <static>true</static>
+      <pose>13.982 12.289 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_092">
+      <static>true</static>
+      <pose>19.676 11.802 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_093">
+      <static>true</static>
+      <pose>19.474 9.318 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_094">
+      <static>true</static>
+      <pose>16.128 9.146 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_095">
+      <static>true</static>
+      <pose>13.373 9.245 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_096">
+      <static>true</static>
+      <pose>10.882 11.281 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_097">
+      <static>true</static>
+      <pose>7.290 7.633 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_098">
+      <static>true</static>
+      <pose>6.584 7.994 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_099">
+      <static>true</static>
+      <pose>6.025 6.799 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_100">
+      <static>true</static>
+      <pose>2.929 5.377 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_101">
+      <static>true</static>
+      <pose>3.244 10.181 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_102">
+      <static>true</static>
+      <pose>4.869 12.895 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_103">
+      <static>true</static>
+      <pose>-2.415 16.218 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_104">
+      <static>true</static>
+      <pose>0.505 16.072 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_105">
+      <static>true</static>
+      <pose>2.252 14.669 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_106">
+      <static>true</static>
+      <pose>4.817 26.406 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_107">
+      <static>true</static>
+      <pose>7.586 27.093 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_108">
+      <static>true</static>
+      <pose>12.328 26.341 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_109">
+      <static>true</static>
+      <pose>8.524 30.438 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_110">
+      <static>true</static>
+      <pose>13.787 28.480 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_111">
+      <static>true</static>
+      <pose>13.662 30.491 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_112">
+      <static>true</static>
+      <pose>10.325 28.338 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_113">
+      <static>true</static>
+      <pose>11.751 29.659 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_114">
+      <static>true</static>
+      <pose>6.482 29.676 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_115">
+      <static>true</static>
+      <pose>7.460 26.272 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_116">
+      <static>true</static>
+      <pose>7.246 27.756 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_117">
+      <static>true</static>
+      <pose>3.051 27.787 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_118">
+      <static>true</static>
+      <pose>4.594 20.292 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_119">
+      <static>true</static>
+      <pose>8.712 18.605 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_120">
+      <static>true</static>
+      <pose>5.666 18.361 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_121">
+      <static>true</static>
+      <pose>-3.735 22.663 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_122">
+      <static>true</static>
+      <pose>-0.419 23.527 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_123">
+      <static>true</static>
+      <pose>-3.810 28.282 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_124">
+      <static>true</static>
+      <pose>-8.356 22.153 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_125">
+      <static>true</static>
+      <pose>-5.562 15.212 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_126">
+      <static>true</static>
+      <pose>-6.408 21.497 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_127">
+      <static>true</static>
+      <pose>-3.880 16.777 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_128">
+      <static>true</static>
+      <pose>12.253 4.462 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_129">
+      <static>true</static>
+      <pose>28.132 1.258 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_130">
+      <static>true</static>
+      <pose>31.933 14.987 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_131">
+      <static>true</static>
+      <pose>19.175 24.554 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_132">
+      <static>true</static>
+      <pose>20.900 5.493 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_133">
+      <static>true</static>
+      <pose>20.080 6.194 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_134">
+      <static>true</static>
+      <pose>15.722 0.033 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_135">
+      <static>true</static>
+      <pose>20.419 -1.301 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_136">
+      <static>true</static>
+      <pose>26.932 3.340 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_137">
+      <static>true</static>
+      <pose>28.110 8.802 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_138">
+      <static>true</static>
+      <pose>25.214 12.484 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_139">
+      <static>true</static>
+      <pose>28.045 13.246 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_140">
+      <static>true</static>
+      <pose>21.430 7.128 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.18 0.18 0.17 1</ambient><diffuse>0.18 0.18 0.17 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="struct_wall_141">
+      <static>true</static>
+      <pose>8.825 12.491 0.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 1.000 1.000</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.000 1.000 1.000</size></box></geometry><material><ambient>0.50 0.50 0.48 1</ambient><diffuse>0.50 0.50 0.48 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="outer_boundary_south">
+      <static>true</static>
+      <pose>8.000 -4.000 2.400 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>52.000 0.350 4.800</size></box></geometry></collision>
+        <visual name="visual"><transparency>0.65</transparency><geometry><box><size>52.000 0.350 4.800</size></box></geometry><material><ambient>0.82 0.86 0.88 0.35</ambient><diffuse>0.82 0.86 0.88 0.35</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="outer_boundary_north">
+      <static>true</static>
+      <pose>8.000 42.000 2.400 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>52.000 0.350 4.800</size></box></geometry></collision>
+        <visual name="visual"><transparency>0.65</transparency><geometry><box><size>52.000 0.350 4.800</size></box></geometry><material><ambient>0.82 0.86 0.88 0.35</ambient><diffuse>0.82 0.86 0.88 0.35</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="outer_boundary_west">
+      <static>true</static>
+      <pose>-18.000 19.000 2.400 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.350 46.000 4.800</size></box></geometry></collision>
+        <visual name="visual"><transparency>0.65</transparency><geometry><box><size>0.350 46.000 4.800</size></box></geometry><material><ambient>0.82 0.86 0.88 0.35</ambient><diffuse>0.82 0.86 0.88 0.35</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="outer_boundary_east">
+      <static>true</static>
+      <pose>34.000 19.000 2.400 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.350 46.000 4.800</size></box></geometry></collision>
+        <visual name="visual"><transparency>0.65</transparency><geometry><box><size>0.350 46.000 4.800</size></box></geometry><material><ambient>0.82 0.86 0.88 0.35</ambient><diffuse>0.82 0.86 0.88 0.35</diffuse></material></visual>
+      </link>
+    </model>
+  </world>
+</sdf>

@@ -339,7 +339,7 @@ def _write_suite(rows, output_dir):
 
 
 def _add_arguments(parser):
-    parser.add_argument('--scene', default='scenes/easy_crossing.yaml')
+    parser.add_argument('--scene', default='scenes/difficulty_benchmark/easy_crossing.yaml')
     parser.add_argument('--suite', default='')
     parser.add_argument('--output-dir', default='/tmp/formation_survivability_experiment')
     parser.add_argument('--drone-radius', type=float, default=0.35)

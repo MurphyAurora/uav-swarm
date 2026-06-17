@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <world name="sando_simple_tunnel_xtd2">
+    <!-- Adapted from MIT ACL SANDO simple_tunnel world for the local XTD2/PX4 Gazebo stack. -->
+    <!-- This file intentionally avoids SANDO-specific ROS plugins and external model URIs. -->
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <grid>false</grid>
+      <ambient>0.45 0.45 0.45 1</ambient>
+      <background>0.70 0.74 0.78 1</background>
+      <shadows>true</shadows>
+    </scene>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>120 120</size></plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>120 120</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.72 0.76 0.70 1</ambient>
+            <diffuse>0.72 0.76 0.70 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1</intensity>
+      <direction>0.001 0.625 -0.78</direction>
+      <diffuse>0.904 0.904 0.904 1</diffuse>
+      <specular>0.271 0.271 0.271 1</specular>
+      <attenuation><range>2000</range><linear>0</linear><constant>1</constant><quadratic>0</quadratic></attenuation>
+    </light>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg>8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+    <model name="tunnel_left_0">
+      <static>true</static>
+      <pose>-5.500 4.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_0">
+      <static>true</static>
+      <pose>9.500 4.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_1">
+      <static>true</static>
+      <pose>-5.500 8.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_1">
+      <static>true</static>
+      <pose>9.500 8.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_2">
+      <static>true</static>
+      <pose>-5.500 12.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_2">
+      <static>true</static>
+      <pose>9.500 12.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_3">
+      <static>true</static>
+      <pose>-5.500 16.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_3">
+      <static>true</static>
+      <pose>9.500 16.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_4">
+      <static>true</static>
+      <pose>-5.500 20.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_4">
+      <static>true</static>
+      <pose>9.500 20.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_5">
+      <static>true</static>
+      <pose>-5.500 24.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_5">
+      <static>true</static>
+      <pose>9.500 24.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_6">
+      <static>true</static>
+      <pose>-5.500 28.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_6">
+      <static>true</static>
+      <pose>9.500 28.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_left_7">
+      <static>true</static>
+      <pose>-5.500 32.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_right_7">
+      <static>true</static>
+      <pose>9.500 32.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.000 3.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.000 3.000 3.000</size></box></geometry>
+          <material><ambient>0.45 0.45 0.42 1</ambient><diffuse>0.45 0.45 0.42 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_chicane_0">
+      <static>true</static>
+      <pose>0.500 11.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6.000 1.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>6.000 1.000 3.000</size></box></geometry>
+          <material><ambient>0.55 0.50 0.40 1</ambient><diffuse>0.55 0.50 0.40 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_chicane_1">
+      <static>true</static>
+      <pose>3.500 18.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6.000 1.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>6.000 1.000 3.000</size></box></geometry>
+          <material><ambient>0.55 0.50 0.40 1</ambient><diffuse>0.55 0.50 0.40 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="tunnel_chicane_2">
+      <static>true</static>
+      <pose>0.000 25.000 1.500 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6.000 1.000 3.000</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>6.000 1.000 3.000</size></box></geometry>
+          <material><ambient>0.55 0.50 0.40 1</ambient><diffuse>0.55 0.50 0.40 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

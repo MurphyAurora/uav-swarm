@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-SUITE_PATH="${1:-scenes/benchmark_v1.yaml}"
+SUITE_PATH="${1:-scenes/difficulty_benchmark/benchmark_v1.yaml}"
 OUTPUT_DIR="${2:-results/formation_survivability_v1}"
 PLOT_Z="${PLOT_Z:--3.0}"
 

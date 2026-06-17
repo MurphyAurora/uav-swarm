@@ -28,6 +28,6 @@ coordination_defaults:
     log_local_view_health: true
 
 scenarios:
-  - scenes/easy_crossing.yaml
-  - scenes/medium_multi_crossing.yaml
-  - scenes/hard_dense_crossing.yaml
+  - scenes/difficulty_benchmark/easy_crossing.yaml
+  - scenes/difficulty_benchmark/medium_multi_crossing.yaml
+  - scenes/difficulty_benchmark/hard_dense_crossing.yaml

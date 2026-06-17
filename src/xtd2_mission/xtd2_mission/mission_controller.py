@@ -120,7 +120,13 @@ class MissionController(Node):
             depth=1,
         )
         for px4_ns in self.px4_namespaces:
-            for suffix in ('vehicle_status_v4', 'vehicle_status'):
+            for suffix in (
+                'vehicle_status_v1',
+                'vehicle_status_v2',
+                'vehicle_status_v3',
+                'vehicle_status_v4',
+                'vehicle_status',
+            ):
                 topic = f'/{px4_ns}/fmu/out/{suffix}'
                 self._status_subs.append(
                     self.create_subscription(
@@ -235,14 +241,16 @@ class MissionController(Node):
         else:
             if attempt < self.max_retries:
                 self.get_logger().info(
-                    f'[ARM] x500_{drone_id} not armed, retry {attempt+1}/{self.max_retries}'
+                    f'[ARM] x500_{drone_id} not armed, retry {attempt+1}/{self.max_retries}, '
+                    f'{self._status_summary(px4_ns)}'
                 )
                 self._arm_drone_idx = drone_idx
                 self._arm_attempt = attempt + 1
                 self._arm_timer = self.create_timer(self.arm_retry_sleep, self._arming_step)
             else:
                 self.get_logger().warn(
-                    f'[ARM] x500_{drone_id} ARM failed after {self.max_retries} retries, moving on'
+                    f'[ARM] x500_{drone_id} ARM failed after {self.max_retries} retries, moving on, '
+                    f'{self._status_summary(px4_ns)}'
                 )
                 self._arm_drone_idx = drone_idx + 1
                 self._arm_attempt = 0
@@ -289,14 +297,16 @@ class MissionController(Node):
         else:
             if arm_attempt < self.max_retries:
                 self.get_logger().info(
-                    f'[OFFBOARD] x500_{drone_id} not in OFFBOARD, retry {arm_attempt+1}/{self.max_retries}'
+                    f'[OFFBOARD] x500_{drone_id} not in OFFBOARD, retry {arm_attempt+1}/{self.max_retries}, '
+                    f'{self._status_summary(px4_ns)}'
                 )
                 self._arm_drone_idx = drone_idx
                 self._arm_attempt = arm_attempt + 1
                 self._arm_timer = self.create_timer(self.offboard_retry_sleep, self._arming_step)
             else:
                 self.get_logger().warn(
-                    f'[OFFBOARD] x500_{drone_id} failed after {self.max_retries} retries, moving on'
+                    f'[OFFBOARD] x500_{drone_id} failed after {self.max_retries} retries, moving on, '
+                    f'{self._status_summary(px4_ns)}'
                 )
                 self._arm_drone_idx = drone_idx + 1
                 self._arm_attempt = 0
@@ -314,6 +324,12 @@ class MissionController(Node):
         """Check cached vehicle_status for nav_state == 14 (OFFBOARD)."""
         msg = self._latest_vehicle_status.get(px4_ns)
         return msg is not None and msg.nav_state == 14
+
+    def _status_summary(self, px4_ns):
+        msg = self._latest_vehicle_status.get(px4_ns)
+        if msg is None:
+            return 'vehicle_status=none'
+        return f'arming_state={msg.arming_state}, nav_state={msg.nav_state}'
 
     # ---- Mission ----
 

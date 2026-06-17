@@ -1,5 +1,8 @@
 #!/bin/bash
-# 第 4 层/系统集成启动脚本。
+# 
+#echo "[DEPRECATED] start1.sh 是旧启动脚本，当前推荐使用 ros2 launch xtd2_mission swarm_simulation_launch.py px4_use_versioned_local_position:=1"
+#echo "[DEPRECATED] 如果继续使用 start1.sh，需要自行保证 PX4 topic remap。
+#"第 4 层/系统集成启动脚本。
 #
 # 启动 PX4/Gazebo/XTDrone 通信链路，以及动态障碍发布器、ORCA-lite 测试算法、
 # 状态汇总等支撑节点。大多数平台实验应优先通过环境变量调整参数，

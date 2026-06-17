@@ -12,15 +12,22 @@ import heapq
 from xtd2_mission.obstacle_config import WallObstacle, load_obstacle_config, normalized_target, normalized_walls, obstacles_from_config
 
 class FixedPointMission(Node):
-    def __init__(self, num_drones=1, leader_id=1, metrics_csv_path=''):
+    def __init__(self, num_drones=1, leader_id=1, metrics_csv_path='', avoid_source='orca'):
         super().__init__('fixed_point_mission')
         self.num_drones = num_drones
         self.leader_id = leader_id
+        self.avoid_source = str(avoid_source or 'orca').strip().lower()
         self.pubs = {}
         self.vel_pubs = {}
+        self.orca_avoid_cmds = {}
+        self.primitive_avoid_cmds = {}
+        self.safe_primitive_cmds = {}
         self.latest_states = {}
         self.latest_target_markers = {}
         self.latest_target_stamp = 0.0
+        self.latest_dynamic_obstacles = []
+        self.latest_dynamic_obstacles_stamp = 0.0
+        self._last_dynamic_obstacle_log_t = 0.0
         self.obstacles = None
         self._last_metric_log_t = 0.0
         self._last_failsafe_log_t = 0.0
@@ -42,10 +49,46 @@ class FixedPointMission(Node):
 
         self.create_subscription(String, '/xtdrone2/swarm/state_exchange', self._state_cb, 10)
         self.create_subscription(String, '/xtdrone2/swarm/target_markers', self._target_markers_cb, 10)
+        self.create_subscription(String, '/xtdrone2/swarm/dynamic_obstacles', self._dynamic_obstacles_cb, 10)
+        for i in range(1, num_drones + 1):
+            self.create_subscription(
+                Twist,
+                f'/xtdrone2/x500_{i}/avoid_cmd_vel_ned',
+                lambda msg, drone_id=i: self._avoid_cmd_cb('orca', drone_id, msg),
+                10,
+            )
+            self.create_subscription(
+                Twist,
+                f'/xtdrone2/x500_{i}/primitive_cmd_vel_ned',
+                lambda msg, drone_id=i: self._avoid_cmd_cb('primitive', drone_id, msg),
+                10,
+            )
+            self.create_subscription(
+                Twist,
+                f'/xtdrone2/x500_{i}/safe_cmd_vel_ned',
+                lambda msg, drone_id=i: self._avoid_cmd_cb('safe_primitive', drone_id, msg),
+                10,
+            )
         self._open_metrics_file()
         
         time.sleep(0.5)
-        self.get_logger().info(f"初始化{num_drones}架无人机控制器，领航机=无人机{leader_id}")
+        self.get_logger().info(
+            f"初始化{num_drones}架无人机控制器，领航机=无人机{leader_id}, avoid_source={self.avoid_source}"
+        )
+
+    def _avoid_cmd_cb(self, source, drone_id, msg: Twist):
+        item = {
+            'vx': self._finite_float(msg.linear.x),
+            'vy': self._finite_float(msg.linear.y),
+            'vz': self._finite_float(msg.linear.z),
+            'stamp': time.time(),
+        }
+        if source == 'safe_primitive':
+            self.safe_primitive_cmds[int(drone_id)] = item
+        elif source == 'primitive':
+            self.primitive_avoid_cmds[int(drone_id)] = item
+        else:
+            self.orca_avoid_cmds[int(drone_id)] = item
 
     def _open_metrics_file(self):
         if not self.metrics_csv_path:
@@ -81,6 +124,52 @@ class FixedPointMission(Node):
             self.latest_states = tmp
         except Exception:
             return
+
+    def _dynamic_obstacles_cb(self, msg: String):
+        try:
+            data = json.loads(msg.data)
+            obstacles = data.get('obstacles', [])
+            parsed = []
+            for obs in obstacles:
+                parsed.append(
+                    {
+                        'name': str(obs.get('name', '')),
+                        'x': self._finite_float(obs.get('x', 0.0)),
+                        'y': self._finite_float(obs.get('y', 0.0)),
+                        'z': self._finite_float(obs.get('z', 0.0)),
+                        'vx': self._finite_float(obs.get('vx', 0.0)),
+                        'vy': self._finite_float(obs.get('vy', 0.0)),
+                        'vz': self._finite_float(obs.get('vz', 0.0)),
+                        'radius': self._finite_float(obs.get('radius', 0.3)),
+                        'sdf_dynamic': bool(obs.get('sdf_dynamic', False)),
+                    }
+                )
+            self.latest_dynamic_obstacles = parsed
+            self.latest_dynamic_obstacles_stamp = time.time()
+
+            now_t = time.time()
+            if now_t - self._last_dynamic_obstacle_log_t >= 2.0:
+                self._last_dynamic_obstacle_log_t = now_t
+                dynamic_items = [obs for obs in parsed if obs.get('sdf_dynamic') or obs.get('name')]
+                static_items = len(parsed) - len(dynamic_items)
+                sample = dynamic_items[0] if dynamic_items else (parsed[0] if parsed else None)
+                if sample is None:
+                    self.get_logger().info('dynamic obstacle subscription: received 0 obstacles')
+                else:
+                    self.get_logger().info(
+                        'dynamic obstacle subscription: '
+                        f'received {len(parsed)} obstacles '
+                        f'(dynamic={len(dynamic_items)}, static={static_items}), '
+                        f'sample={sample["name"] or "unnamed"} '
+                        f'pos=({sample["x"]:.2f},{sample["y"]:.2f},{sample["z"]:.2f}), '
+                        f'r={sample["radius"]:.2f}, '
+                        f'sdf_dynamic={int(sample.get("sdf_dynamic", False))}'
+                    )
+        except Exception as exc:
+            now_t = time.time()
+            if now_t - self._last_dynamic_obstacle_log_t >= 2.0:
+                self._last_dynamic_obstacle_log_t = now_t
+                self.get_logger().warn(f'dynamic obstacle subscription parse failed: {exc}')
 
     def _finite_float(self, value, default=0.0):
         try:
@@ -161,6 +250,53 @@ class FixedPointMission(Node):
     def _publish_zero_vel_all(self):
         for drone_id in range(1, self.num_drones + 1):
             self._publish_vel(drone_id, 0.0, 0.0, 0.0)
+
+    def _selected_avoid_vel(self, drone_id, max_age_sec=1.2):
+        source = self.avoid_source
+        if source in ('none', 'off', '0', 'false'):
+            return (0.0, 0.0, 0.0, 'none', False)
+        cmd = None
+        label = source
+        if source == 'primitive':
+            safe = self.safe_primitive_cmds.get(int(drone_id))
+            safe_ok = safe is not None and time.time() - float(safe.get('stamp', 0.0)) <= max_age_sec
+            if safe_ok:
+                cmd = safe
+                label = 'primitive+lidar_ttc'
+            elif safe is not None:
+                safe_age = time.time() - float(safe.get('stamp', 0.0))
+                if safe_age <= 2.0:
+                    cmd = safe
+                    label = 'primitive+lidar_ttc_stale'
+                else:
+                    return (0.0, 0.0, 0.0, 'primitive+lidar_ttc_missing', True)
+            else:
+                cmd = self.primitive_avoid_cmds.get(int(drone_id))
+        elif source == 'orca':
+            cmd = self.orca_avoid_cmds.get(int(drone_id))
+        elif source == 'fused':
+            prim = self.primitive_avoid_cmds.get(int(drone_id))
+            orca = self.orca_avoid_cmds.get(int(drone_id))
+            prim_ok = prim is not None and time.time() - float(prim.get('stamp', 0.0)) <= max_age_sec
+            orca_ok = orca is not None and time.time() - float(orca.get('stamp', 0.0)) <= max_age_sec
+            if prim_ok:
+                cmd = prim
+                label = 'primitive'
+            elif orca_ok:
+                cmd = orca
+                label = 'orca'
+        else:
+            return (0.0, 0.0, 0.0, source, False)
+
+        if cmd is None or time.time() - float(cmd.get('stamp', 0.0)) > max_age_sec:
+            return (0.0, 0.0, 0.0, label, False)
+        return (
+            float(cmd.get('vx', 0.0)),
+            float(cmd.get('vy', 0.0)),
+            float(cmd.get('vz', 0.0)),
+            label,
+            True,
+        )
 
     def _publish_pose(self, drone_id, x, y, z):
         pose = Pose()
@@ -1082,6 +1218,37 @@ class FixedPointMission(Node):
                 vz = float(formation_ff[2]) + formation_kp * ez
                 vx, vy, vz = self._limit_vector(vx, vy, vz, max_follower_speed)
                 if direct_pose_mode:
+                    avx, avy, avz, avoid_label, avoid_ok = self._selected_avoid_vel(
+                        drone_id,
+                        max_age_sec=max(1.2, 4.0 * sleep_dt),
+                    )
+                    if avoid_ok:
+                        if avoid_label.startswith('primitive'):
+                            # Primitive commands are already full candidate velocities.
+                            # ORCA commands are correction velocities and remain additive.
+                            vx, vy, vz = self._limit_vector(avx, avy, avz, max_follower_speed)
+                        else:
+                            vx, vy, vz = self._limit_vector(
+                                vx + avx,
+                                vy + avy,
+                                vz + avz,
+                                max_follower_speed,
+                            )
+                        now_t = time.time()
+                        if now_t - self._last_failsafe_log_t >= 1.0:
+                            self._last_failsafe_log_t = now_t
+                            self.get_logger().info(
+                                f'{stage_name}: avoid_source={avoid_label} active, '
+                                f'x500_{drone_id} avoid_v=({avx:.2f},{avy:.2f},{avz:.2f}), '
+                                f'cmd_v=({vx:.2f},{vy:.2f},{vz:.2f})'
+                            )
+                    z_upper = ref_z - 0.25
+                    z_lower = ref_z + 0.45
+                    current_z = float(st['z'])
+                    if current_z <= z_upper and vz < 0.0:
+                        vz = 0.0
+                    elif current_z >= z_lower and vz > 0.0:
+                        vz = 0.0
                     self._publish_vel(drone_id, vx, vy, vz)
                 else:
                     # Position setpoints use the same proven control path as takeoff hold;
@@ -1268,6 +1435,7 @@ def main():
     use_spawned_formation = bool(int(sys.argv[22])) if len(sys.argv) > 22 else False
     target_y = float(sys.argv[23]) if len(sys.argv) > 23 else wall_y
     virtual_lag_limit = float(sys.argv[24]) if len(sys.argv) > 24 else 4.0
+    avoid_source = os.environ.get('AVOID_SOURCE', 'orca').strip().lower()
     path_planner_mode = os.environ.get('PATH_PLANNER_MODE', 'astar').strip().lower()
     obstacle_config_path = os.environ.get('OBSTACLE_CONFIG', '').strip()
     config_obstacles = []
@@ -1298,6 +1466,7 @@ def main():
         num_drones=num_drones,
         leader_id=leader_id,
         metrics_csv_path=metrics_csv_path,
+        avoid_source=avoid_source,
     )
     vertical_takeoff = bool(int(node._finite_float(os.environ.get('VERTICAL_TAKEOFF', 1), 1)))
 

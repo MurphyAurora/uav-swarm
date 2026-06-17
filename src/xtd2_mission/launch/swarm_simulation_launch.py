@@ -70,13 +70,14 @@ def generate_launch_description():
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
         # PX4 SITL
-        'num_drones', 'gz_world', 'start_port', 'px4_sys_id_base', 'px4_dir',
+        'num_drones', 'gz_world', 'gz_gui', 'px4_sim_model', 'start_port', 'px4_sys_id_base', 'px4_dir',
         'px4_disable_gcs_arm_check', 'leader_id', 'dynamic_obs_wall_x',
         'dynamic_obs_wall_y', 'dynamic_obs_target_y_spacing', 'start_wall_clearance',
+        'spawned_formation_axis',
         # Comm
         'start_delay', 'ws_root', 'px4_use_versioned_local_position',
         # Mission
-        'swarm_mode', 'warmup_sec', 'takeoff_z', 'mission_z', 'vertical_takeoff',
+        'swarm_mode', 'avoid_source', 'warmup_sec', 'takeoff_z', 'mission_z', 'vertical_takeoff',
         'arm_to_offboard_delay', 'inter_drone_gap', 'post_offboard_hold_sec',
         'arm_offboard_max_retries', 'arm_retry_sleep', 'offboard_retry_sleep',
         'vehicle_status_timeout_sec', 'auto_arm_offboard', 'use_spawned_formation',
@@ -88,6 +89,39 @@ def generate_launch_description():
         'second_wall_dy', 'rear_wall_gap', 'rear_wall_length', 'third_wall_enable',
         'orca_safe_radius', 'orca_max_speed', 'orca_gain', 'orca_obs_gain',
         'orca_obs_influence_radius', 'orca_enable_after_z', 'orca_use_world_state',
+        'obstacle_tracker_enable', 'tracker_max_match_distance',
+        'tracker_dynamic_speed_threshold', 'tracker_static_speed_threshold',
+        'tracker_dynamic_confirm_frames', 'tracker_static_confirm_frames',
+        'tracker_max_missed_frames', 'tracker_velocity_alpha',
+        'tracker_prediction_horizon', 'tracker_prediction_dt', 'tracker_prediction_max_speed',
+        'trajectory_filter_enable', 'trajectory_filter_min_confidence',
+        'trajectory_filter_min_speed', 'trajectory_filter_min_points',
+        'trajectory_filter_max_age', 'trajectory_filter_horizon',
+        'trajectory_filter_min_x', 'trajectory_filter_max_x',
+        'trajectory_filter_min_y', 'trajectory_filter_max_y',
+        'trajectory_filter_min_z', 'trajectory_filter_max_z',
+        'trajectory_filter_merge_distance', 'trajectory_filter_relevance_radius',
+        'trajectory_filter_state_timeout',
+        'collision_monitor_enable', 'collision_horizon', 'collision_drone_radius',
+        'collision_safety_margin', 'collision_warning_margin', 'collision_state_timeout',
+        'collision_max_reports',
+        'motion_primitive_enable', 'primitive_horizon', 'primitive_dt',
+        'primitive_cruise_speed', 'primitive_lateral_speed', 'primitive_vertical_speed',
+        'primitive_max_speed', 'primitive_drone_radius', 'primitive_safety_margin',
+        'primitive_risk_radius', 'primitive_state_timeout', 'primitive_target_weight',
+        'primitive_risk_weight', 'primitive_smooth_weight', 'primitive_publish_shadow_cmd',
+        'primitive_emergency_clearance',
+        'primitive_projection_alpha', 'primitive_projection_iterations',
+        'primitive_projection_max_constraints',
+        'primitive_escape_clearance',
+        'primitive_hard_clearance',
+        'primitive_static_hard_clearance',
+        'primitive_static_emergency_clearance',
+        'lidar_ttc_enable', 'lidar_ttc_warning_ttc', 'lidar_ttc_emergency_ttc',
+        'lidar_ttc_min_speed', 'lidar_ttc_max_points', 'lidar_ttc_max_range',
+        'lidar_ttc_min_range', 'lidar_ttc_vertical_limit', 'lidar_ttc_cone_angle_deg',
+        'lidar_ttc_safety_radius', 'lidar_ttc_self_filter_radius', 'lidar_ttc_projection_gain',
+        'lidar_ttc_brake_gain', 'lidar_ttc_back_speed', 'lidar_ttc_climb_speed',
         'path_planner_mode', 'astar_grid_resolution', 'astar_smooth_enable',
         'mission_start_x', 'duration', 'eval_mode', 'mission_mode',
         'formation_kp', 'leader_track_kp', 'max_follower_speed',
@@ -142,6 +176,7 @@ def generate_launch_description():
 def _build_px4_sitl(lc, num_drones):
     actions = []
     gz_world = lc('gz_world')
+    px4_sim_model = lc('px4_sim_model')
     start_port = int(lc('start_port'))
     px4_dir = lc('px4_dir')
     px4_disable_gcs = lc('px4_disable_gcs_arm_check')
@@ -151,6 +186,7 @@ def _build_px4_sitl(lc, num_drones):
     target_y_spacing = float(lc('dynamic_obs_target_y_spacing'))
     start_wall_clearance = float(lc('start_wall_clearance'))
     mission_start_x = wall_x - start_wall_clearance
+    formation_axis = str(lc('spawned_formation_axis') or 'y').strip().lower()
 
     if px4_disable_gcs == '1':
         px4_post_dir = os.path.join(
@@ -173,8 +209,13 @@ def _build_px4_sitl(lc, num_drones):
 
     for i in range(1, num_drones + 1):
         dds_port = start_port + i * 10
-        spawn_ned_x = mission_start_x
-        spawn_ned_y = wall_y + ((i - leader_id) * target_y_spacing)
+        formation_offset = (i - leader_id) * target_y_spacing
+        if formation_axis == 'x':
+            spawn_ned_x = mission_start_x + formation_offset
+            spawn_ned_y = wall_y
+        else:
+            spawn_ned_x = mission_start_x
+            spawn_ned_y = wall_y + formation_offset
         spawn_enu_x = spawn_ned_y
         spawn_enu_y = spawn_ned_x
 
@@ -183,6 +224,8 @@ def _build_px4_sitl(lc, num_drones):
             'export PX4_PARAM_CBRK_SUPPLY_CHK=894415',
             'export PX4_PARAM_MAV_SYS_ID=1',
         ]
+        if lc('gz_gui') == '0':
+            env_parts.append('export HEADLESS=1')
         if px4_disable_gcs == '1':
             env_parts.append('export PX4_PARAM_NAV_DLL_ACT=0')
         env_parts.extend([
@@ -194,7 +237,7 @@ def _build_px4_sitl(lc, num_drones):
         env_parts.extend([
             f'export PX4_GZ_MODEL_POSE="{spawn_enu_x},{spawn_enu_y}"',
             'export PX4_SYS_AUTOSTART=4001',
-            'export PX4_SIM_MODEL=gz_x500',
+            f'export PX4_SIM_MODEL={px4_sim_model}',
         ])
 
         px4_log = os.path.join(px4_log_dir, f'px4_{i}.log')
@@ -291,6 +334,7 @@ def _build_mission_nodes(lc, num_drones):
     target_y_spacing = float(lc('dynamic_obs_target_y_spacing'))
     start_wall_clearance = float(lc('start_wall_clearance'))
     mission_start_x = wall_x - start_wall_clearance
+    formation_axis = str(lc('spawned_formation_axis') or 'y').strip().lower()
     gz_world = lc('gz_world')
 
     warmup_sec = float(lc('warmup_sec'))
@@ -309,6 +353,7 @@ def _build_mission_nodes(lc, num_drones):
         f'--mission-start-x {mission_start_x} '
         f'--base-y {wall_y} '
         f'--y-spacing {target_y_spacing} '
+        f'--formation-axis {formation_axis} '
         f'--leader-id {leader_id} '
         f'--ros-args -r __node:=swarm_state_exchange'
     )
@@ -319,22 +364,23 @@ def _build_mission_nodes(lc, num_drones):
 
     # --- 2. Local ORCA (hybrid mode only) ---
     if swarm_mode == 'hybrid':
-        orca_args = (
-            f'ros2 run xtd2_mission local_avoid_orca '
-            f'--num-drones {num_drones} '
-            f'--safe-radius {lc("orca_safe_radius")} '
-            f'--max-speed {lc("orca_max_speed")} '
-            f'--gain {lc("orca_gain")} '
-            f'--obs-gain {lc("orca_obs_gain")} '
-            f'--obs-influence-radius {lc("orca_obs_influence_radius")} '
-            f'--enable-after-z {lc("orca_enable_after_z")} '
-            f'--use-world-state {lc("orca_use_world_state")} '
-            f'--ros-args -r __node:=local_avoid_orca'
-        )
-        actions.append(ExecuteProcess(
-            cmd=['bash', '-c', setup_cmd + orca_args],
-            output='log', name='local_avoid_orca',
-        ))
+        if str(lc('avoid_source')).strip().lower() in ('orca', 'fused'):
+            orca_args = (
+                f'ros2 run xtd2_mission local_avoid_orca '
+                f'--num-drones {num_drones} '
+                f'--safe-radius {lc("orca_safe_radius")} '
+                f'--max-speed {lc("orca_max_speed")} '
+                f'--gain {lc("orca_gain")} '
+                f'--obs-gain {lc("orca_obs_gain")} '
+                f'--obs-influence-radius {lc("orca_obs_influence_radius")} '
+                f'--enable-after-z {lc("orca_enable_after_z")} '
+                f'--use-world-state {lc("orca_use_world_state")} '
+                f'--ros-args -r __node:=local_avoid_orca'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + orca_args],
+                output='log', name='local_avoid_orca',
+            ))
 
         # --- 3. Dynamic obstacle source ---
         if lc('dynamic_obs_enable') == '1':
@@ -377,6 +423,149 @@ def _build_mission_nodes(lc, num_drones):
             actions.append(ExecuteProcess(
                 cmd=['bash', '-c', setup_cmd + obs_args],
                 output='log', name='dynamic_obstacle_source',
+            ))
+
+        if lc('obstacle_tracker_enable') == '1':
+            tracker_args = (
+                f'ros2 run xtd2_mission obstacle_tracker '
+                f'--input-topic /xtdrone2/swarm/dynamic_obstacles '
+                f'--rate 10 '
+                f'--max-match-distance {lc("tracker_max_match_distance")} '
+                f'--dynamic-speed-threshold {lc("tracker_dynamic_speed_threshold")} '
+                f'--static-speed-threshold {lc("tracker_static_speed_threshold")} '
+                f'--dynamic-confirm-frames {lc("tracker_dynamic_confirm_frames")} '
+                f'--static-confirm-frames {lc("tracker_static_confirm_frames")} '
+                f'--max-missed-frames {lc("tracker_max_missed_frames")} '
+                f'--velocity-alpha {lc("tracker_velocity_alpha")} '
+                f'--prediction-horizon {lc("tracker_prediction_horizon")} '
+                f'--prediction-dt {lc("tracker_prediction_dt")} '
+                f'--prediction-max-speed {lc("tracker_prediction_max_speed")} '
+                f'--ros-args -r __node:=obstacle_tracker'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + tracker_args],
+                output='log', name='obstacle_tracker',
+            ))
+
+        predicted_topic = '/xtdrone2/swarm/predicted_dynamic_obstacles'
+        if lc('trajectory_filter_enable') == '1':
+            predicted_topic = '/xtdrone2/swarm/filtered_predicted_dynamic_obstacles'
+            filter_args = (
+                f'ros2 run xtd2_mission trajectory_filter '
+                f'--input-topic /xtdrone2/swarm/predicted_dynamic_obstacles '
+                f'--output-topic {predicted_topic} '
+                f'--state-topic /xtdrone2/swarm/state_exchange '
+                f'--num-drones {num_drones} '
+                f'--min-confidence {lc("trajectory_filter_min_confidence")} '
+                f'--min-speed {lc("trajectory_filter_min_speed")} '
+                f'--min-points {lc("trajectory_filter_min_points")} '
+                f'--max-age {lc("trajectory_filter_max_age")} '
+                f'--horizon {lc("trajectory_filter_horizon")} '
+                f'--min-x {lc("trajectory_filter_min_x")} '
+                f'--max-x {lc("trajectory_filter_max_x")} '
+                f'--min-y {lc("trajectory_filter_min_y")} '
+                f'--max-y {lc("trajectory_filter_max_y")} '
+                f'--min-z {lc("trajectory_filter_min_z")} '
+                f'--max-z {lc("trajectory_filter_max_z")} '
+                f'--merge-distance {lc("trajectory_filter_merge_distance")} '
+                f'--relevance-radius {lc("trajectory_filter_relevance_radius")} '
+                f'--state-timeout {lc("trajectory_filter_state_timeout")} '
+                f'--ros-args -r __node:=trajectory_filter'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + filter_args],
+                output='log', name='trajectory_filter',
+            ))
+
+        if lc('collision_monitor_enable') == '1':
+            collision_args = (
+                f'ros2 run xtd2_mission collision_risk_monitor '
+                f'--num-drones {num_drones} '
+                f'--state-topic /xtdrone2/swarm/state_exchange '
+                f'--predicted-topic {predicted_topic} '
+                f'--static-topic /xtdrone2/swarm/tracked_static_obstacles '
+                f'--horizon {lc("collision_horizon")} '
+                f'--drone-radius {lc("collision_drone_radius")} '
+                f'--safety-margin {lc("collision_safety_margin")} '
+                f'--warning-margin {lc("collision_warning_margin")} '
+                f'--state-timeout {lc("collision_state_timeout")} '
+                f'--max-reports {lc("collision_max_reports")} '
+                f'--rate 10 '
+                f'--ros-args -r __node:=collision_risk_monitor'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + collision_args],
+                output='log', name='collision_risk_monitor',
+            ))
+
+        if lc('motion_primitive_enable') == '1':
+            primitive_args = (
+                f'ros2 run xtd2_mission motion_primitive_selector '
+                f'--num-drones {num_drones} '
+                f'--state-topic /xtdrone2/swarm/state_exchange '
+                f'--predicted-topic {predicted_topic} '
+                f'--static-topic /xtdrone2/swarm/tracked_static_obstacles '
+                f'--target-x {lc("dynamic_obs_target_x")} '
+                f'--target-y-base {lc("dynamic_obs_target_y_base")} '
+                f'--target-y-spacing {lc("dynamic_obs_target_y_spacing")} '
+                f'--target-z {lc("mission_z")} '
+                f'--leader-id {lc("leader_id")} '
+                f'--horizon {lc("primitive_horizon")} '
+                f'--dt {lc("primitive_dt")} '
+                f'--cruise-speed {lc("primitive_cruise_speed")} '
+                f'--lateral-speed {lc("primitive_lateral_speed")} '
+                f'--vertical-speed {lc("primitive_vertical_speed")} '
+                f'--max-speed {lc("primitive_max_speed")} '
+                f'--drone-radius {lc("primitive_drone_radius")} '
+                f'--safety-margin {lc("primitive_safety_margin")} '
+                f'--risk-radius {lc("primitive_risk_radius")} '
+                f'--state-timeout {lc("primitive_state_timeout")} '
+                f'--target-weight {lc("primitive_target_weight")} '
+                f'--risk-weight {lc("primitive_risk_weight")} '
+                f'--smooth-weight {lc("primitive_smooth_weight")} '
+                f'--publish-shadow-cmd {lc("primitive_publish_shadow_cmd")} '
+                f'--emergency-clearance {lc("primitive_emergency_clearance")} '
+                f'--projection-alpha {lc("primitive_projection_alpha")} '
+                f'--projection-iterations {lc("primitive_projection_iterations")} '
+                f'--projection-max-constraints {lc("primitive_projection_max_constraints")} '
+                f'--escape-clearance {lc("primitive_escape_clearance")} '
+                f'--hard-clearance {lc("primitive_hard_clearance")} '
+                f'--static-hard-clearance {lc("primitive_static_hard_clearance")} '
+                f'--static-emergency-clearance {lc("primitive_static_emergency_clearance")} '
+                f'--ros-args -r __node:=motion_primitive_selector'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + primitive_args],
+                output='log', name='motion_primitive_selector',
+            ))
+
+        if lc('lidar_ttc_enable') == '1':
+            lidar_ttc_args = (
+                f'ros2 run xtd2_mission lidar_ttc_safety_filter '
+                f'--num-drones {num_drones} '
+                f'--input-topic-template /xtdrone2/x500_{{id}}/primitive_cmd_vel_ned '
+                f'--output-topic-template /xtdrone2/x500_{{id}}/safe_cmd_vel_ned '
+                f'--lidar-topic-template /x500_{{id}}/lidar/points_local '
+                f'--state-topic /xtdrone2/swarm/state_exchange '
+                f'--warning-ttc {lc("lidar_ttc_warning_ttc")} '
+                f'--emergency-ttc {lc("lidar_ttc_emergency_ttc")} '
+                f'--min-speed {lc("lidar_ttc_min_speed")} '
+                f'--max-points {lc("lidar_ttc_max_points")} '
+                f'--max-range {lc("lidar_ttc_max_range")} '
+                f'--min-range {lc("lidar_ttc_min_range")} '
+                f'--vertical-limit {lc("lidar_ttc_vertical_limit")} '
+                f'--cone-angle-deg {lc("lidar_ttc_cone_angle_deg")} '
+                f'--safety-radius {lc("lidar_ttc_safety_radius")} '
+                f'--self-filter-radius {lc("lidar_ttc_self_filter_radius")} '
+                f'--projection-gain {lc("lidar_ttc_projection_gain")} '
+                f'--brake-gain {lc("lidar_ttc_brake_gain")} '
+                f'--back-speed {lc("lidar_ttc_back_speed")} '
+                f'--climb-speed {lc("lidar_ttc_climb_speed")} '
+                f'--ros-args -r __node:=lidar_ttc_safety_filter'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + lidar_ttc_args],
+                output='log', name='lidar_ttc_safety_filter',
             ))
 
     # --- 4. Mission controller (delayed 2s within this group) ---
@@ -433,6 +622,7 @@ def _build_mission_nodes(lc, num_drones):
                 f.write(f'    {k}: {v}\n')
 
     env_vars = {
+        'AVOID_SOURCE': lc('avoid_source'),
         'PATH_PLANNER_MODE': lc('path_planner_mode'),
         'ASTAR_GRID_RESOLUTION': lc('astar_grid_resolution'),
         'ASTAR_SMOOTH_ENABLE': lc('astar_smooth_enable'),

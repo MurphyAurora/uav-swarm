@@ -14,7 +14,7 @@ easy_crossing
 cd ~/ws_xtd2/scripts
 
 DYNAMIC_OBS_MODE=scene \
-DYNAMIC_OBS_SCENE_CONFIG=scenes/easy_crossing.yaml \
+DYNAMIC_OBS_SCENE_CONFIG=scenes/difficulty_benchmark/easy_crossing.yaml \
 DYNAMIC_OBS_SCENE_CLOCK_MODE=auto_takeoff \
 DYNAMIC_OBS_SCENE_START_NUM_DRONES=5 \
 DYNAMIC_OBS_SCENE_START_Z_THRESHOLD=-2.0 \
@@ -40,7 +40,7 @@ cd ~/ws_xtd2/scripts
 
 python3 ros_analysis/ros_run_recorder.py \
   --output-dir ~/ws_xtd2/logs/algorithm_eval_tmp/easy_current \
-  --duration-sec 120
+  --duration-sec 150
 
 终端3：覆盖生成指标和图
 
@@ -61,7 +61,7 @@ medium_multi_crossing
 cd ~/ws_xtd2/scripts
 
 DYNAMIC_OBS_MODE=scene \
-DYNAMIC_OBS_SCENE_CONFIG=scenes/medium_multi_crossing.yaml \
+DYNAMIC_OBS_SCENE_CONFIG=scenes/difficulty_benchmark/medium_multi_crossing.yaml \
 DYNAMIC_OBS_SCENE_CLOCK_MODE=auto_takeoff \
 DYNAMIC_OBS_SCENE_START_NUM_DRONES=5 \
 DYNAMIC_OBS_SCENE_START_Z_THRESHOLD=-2.0 \
@@ -87,7 +87,7 @@ cd ~/ws_xtd2/scripts
 
 python3 ros_analysis/ros_run_recorder.py \
   --output-dir ~/ws_xtd2/logs/algorithm_eval_tmp/medium_current \
-  --duration-sec 120
+  --duration-sec 180
 
 终端3：覆盖生成指标和图
 
@@ -108,7 +108,7 @@ hard_dense_crossing
 cd ~/ws_xtd2/scripts
 
 DYNAMIC_OBS_MODE=scene \
-DYNAMIC_OBS_SCENE_CONFIG=scenes/hard_dense_crossing.yaml \
+DYNAMIC_OBS_SCENE_CONFIG=scenes/difficulty_benchmark/hard_dense_crossing.yaml \
 DYNAMIC_OBS_SCENE_CLOCK_MODE=auto_takeoff \
 DYNAMIC_OBS_SCENE_START_NUM_DRONES=5 \
 DYNAMIC_OBS_SCENE_START_Z_THRESHOLD=-2.0 \
@@ -134,7 +134,7 @@ cd ~/ws_xtd2/scripts
 
 python3 ros_analysis/ros_run_recorder.py \
   --output-dir ~/ws_xtd2/logs/algorithm_eval_tmp/hard_current \
-  --duration-sec 150
+  --duration-sec 200
 
 终端3：覆盖生成指标和图
 

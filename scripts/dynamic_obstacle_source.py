@@ -6,9 +6,10 @@
     旧版 obstacles.yaml，或 scenes/*.yaml 场景文件。
 输出：
     /xtdrone2/swarm/dynamic_obstacles 和 /xtdrone2/swarm/target_markers。
+    /xtdrone2/swarm/dynamic_obstacle_markers 和 /xtdrone2/swarm/target_markers_rviz 可直接给 RViz 显示。
 
-在 scene 模式下，它把可复现 YAML 场景实时转换为避障算法消费的 ROS topic。
-Gazebo 可视化只做最小展示：显示第一个命名动态障碍；ROS topic 才是权威数据。
+在 scene 模式下，它把可复现 YAML 场景实时转换为避障算法消费的 ROS topic，
+并为每个命名动态障碍同步一个 Gazebo 可视化球。
 """
 
 import json
@@ -20,11 +21,30 @@ import os
 import tempfile
 import subprocess
 import shutil
+import xml.etree.ElementTree as ET
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import String
-from obstacle_config import WallObstacle, load_obstacle_config, normalized_target, normalized_walls, obstacles_from_config
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
+try:
+    from xtd2_mission.obstacle_config import (
+        WallObstacle,
+        load_obstacle_config,
+        normalized_target,
+        normalized_walls,
+        obstacles_from_config,
+    )
+except ImportError:
+    from obstacle_config import (
+        WallObstacle,
+        load_obstacle_config,
+        normalized_target,
+        normalized_walls,
+        obstacles_from_config,
+    )
 
 try:
     import yaml
@@ -50,7 +70,7 @@ def _vector3(value, default=(0.0, 0.0, 0.0)):
 
 
 def _resolve_path(path):
-    expanded = os.path.expanduser(str(path or ''))
+    expanded = os.path.expandvars(os.path.expanduser(str(path or '')))
     if os.path.isabs(expanded):
         return expanded
     if os.path.exists(expanded):
@@ -79,6 +99,9 @@ class DynamicObstacleSource(Node):
         super().__init__('dynamic_obstacle_source')
         self.pub = self.create_publisher(String, '/xtdrone2/swarm/dynamic_obstacles', 10)
         self.target_pub = self.create_publisher(String, '/xtdrone2/swarm/target_markers', 10)
+        self.marker_pub = self.create_publisher(MarkerArray, '/xtdrone2/swarm/dynamic_obstacle_markers', 10)
+        self.target_marker_pub = self.create_publisher(MarkerArray, '/xtdrone2/swarm/target_markers_rviz', 10)
+        self.drone_marker_pub = self.create_publisher(MarkerArray, '/xtdrone2/swarm/drone_markers_rviz', 10)
         self.world_name = world_name
         self.visualize_gz = bool(visualize_gz)
         self.mode = str(mode)
@@ -131,6 +154,11 @@ class DynamicObstacleSource(Node):
         self.declare_parameter('scene_start_num_drones', 0)
         self.declare_parameter('scene_start_z_threshold', -2.0)
         self.declare_parameter('scene_start_stable_sec', 2.0)
+        self.declare_parameter('rviz_markers_enable', 1)
+        self.declare_parameter('rviz_marker_frame', 'map')
+        self.declare_parameter('rviz_drone_markers_enable', 1)
+        self.declare_parameter('rviz_drone_path_enable', 1)
+        self.declare_parameter('rviz_drone_path_max_points', 450)
 
         self.t0 = time.time()
         self.timer = self.create_timer(max(0.05, 1.0 / rate_hz), self._publish)
@@ -154,10 +182,13 @@ class DynamicObstacleSource(Node):
         self._scene_cache_path = ''
         self._scene_cache_mtime = None
         self._scene_cache = {}
+        self._scene_sdf_cache = {}
         self._scene_warned_no_config = False
         self._scene_warned_unsupported = set()
+        self._scene_visual_spawned = set()
         self._last_trajectory_record_t = None
         self._latest_swarm_states = {}
+        self._drone_paths = {}
         self._takeoff_ready_since = None
         self._scene_clock_started = False
         self._scene_clock_start_wall_t = None
@@ -246,8 +277,8 @@ class DynamicObstacleSource(Node):
             sdf_path = self._prepare_wall_sdf()
             entity_name = self.wall_entity_name
         elif self.mode == 'scene':
-            sdf_path = self._prepare_scene_ball_sdf()
-            entity_name = self.scene_entity_name
+            self._spawn_scene_visual_obstacles()
+            return
         else:
             sdf_path = _asset_path('dynamic_obstacle_ball.sdf')
             entity_name = self._visual_obstacle_entity_name()
@@ -283,41 +314,6 @@ class DynamicObstacleSource(Node):
                 self.get_logger().warn('gazebo static wall spawn failed (gz transport)')
             return
 
-        if self.mode == 'scene':
-            scene_x, scene_y, scene_z = self._scene_visual_initial_pose_enu()
-            req = (
-                f'name: "{entity_name}", '
-                f'allow_renaming: false, '
-                f'sdf_filename: "{sdf_path}", '
-                f'pose: {{ position: {{ x: {scene_x:.3f}, y: {scene_y:.3f}, z: {scene_z:.3f} }}, '
-                f'orientation: {{ w: 1.0 }} }}'
-            )
-            ok = self._run_gz_service(self._gz_create_service, 'gz.msgs.EntityFactory', req, timeout_ms=1200)
-            self._spawn_done = bool(ok)
-            if self._spawn_done:
-                self._visual_last_ok_x = scene_x
-                self._visual_last_ok_y = scene_y
-                self._visual_last_ok_z = scene_z
-                self.get_logger().info(
-                    f'gazebo scene obstacle spawned successfully: entity={entity_name}, '
-                    f'ENU=({scene_x:.2f},{scene_y:.2f},{scene_z:.2f}), sdf={sdf_path}'
-                )
-            else:
-                # If the entity already exists, set_pose may still succeed.
-                self._spawn_done = self._set_visual_pose(scene_x, scene_y, scene_z, force=True)
-                if self._spawn_done:
-                    self._visual_last_ok_x = scene_x
-                    self._visual_last_ok_y = scene_y
-                    self._visual_last_ok_z = scene_z
-                    self.get_logger().info(
-                        f'gazebo scene obstacle already exists, pose sync enabled: entity={entity_name}'
-                    )
-                else:
-                    self.get_logger().warn(
-                        f'gazebo scene obstacle spawn failed: entity={entity_name}, sdf={sdf_path}'
-                    )
-            return
-
         # 先尝试直接设置位姿；若实体已存在即可立即联动
         if self._set_visual_pose(0.0, 0.0, float(self._p('z')), force=True):
             self._spawn_done = True
@@ -339,6 +335,83 @@ class DynamicObstacleSource(Node):
             self.get_logger().info(f'gazebo visual obstacle spawned successfully (gz transport): entity={entity_name}')
         else:
             self.get_logger().warn(f'gazebo visual obstacle spawn failed (gz transport): entity={entity_name}')
+
+    def _scene_dynamic_visual_items(self, payload=None):
+        if payload is not None:
+            dynamic = [
+                obs for obs in payload.get('obstacles', [])
+                if str(obs.get('name', '')).strip()
+            ]
+            return dynamic
+
+        scene = self._load_scene_config()
+        items = []
+        t = 0.0
+        for idx, obs in enumerate(scene.get('dynamic_obstacles') or [], start=1):
+            if not isinstance(obs, dict):
+                continue
+            name = str(obs.get('name', f'dynamic_obstacle_{idx}')).strip()
+            if not name:
+                continue
+            x, y, z, vx, vy, vz = self._scene_dynamic_state(obs, t)
+            items.append(
+                {
+                    'obs_id': idx,
+                    'name': name,
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'vx': vx,
+                    'vy': vy,
+                    'vz': vz,
+                    'radius': max(0.05, _finite_float(obs.get('radius'), 0.5)),
+                }
+            )
+        return items
+
+    def _spawn_scene_visual_obstacles(self, payload=None):
+        if not self._gz_ready:
+            return False
+        spawned_any = False
+        for idx, obs in enumerate(self._scene_dynamic_visual_items(payload), start=1):
+            entity_name = self._scene_visual_entity_name(obs, idx)
+            if entity_name in self._scene_visual_spawned:
+                continue
+            enu_x, enu_y, enu_z = self._ned_to_enu(obs.get('x', 0.0), obs.get('y', 0.0), obs.get('z', 0.0))
+            sdf_path = self._prepare_scene_ball_sdf(entity_name, obs.get('radius', 0.5), idx)
+            req = (
+                f'name: "{entity_name}", '
+                f'allow_renaming: false, '
+                f'sdf_filename: "{sdf_path}", '
+                f'pose: {{ position: {{ x: {enu_x:.3f}, y: {enu_y:.3f}, z: {enu_z:.3f} }}, '
+                f'orientation: {{ w: 1.0 }} }}'
+            )
+            ok = self._run_gz_service(self._gz_create_service, 'gz.msgs.EntityFactory', req, timeout_ms=1200)
+            if ok or self._set_entity_pose(entity_name, enu_x, enu_y, enu_z, force=True):
+                self._scene_visual_spawned.add(entity_name)
+                spawned_any = True
+                self.get_logger().info(
+                    f'gazebo scene obstacle visual enabled: entity={entity_name}, '
+                    f'ENU=({enu_x:.2f},{enu_y:.2f},{enu_z:.2f})'
+                )
+            else:
+                self.get_logger().warn(f'gazebo scene obstacle spawn failed: entity={entity_name}, sdf={sdf_path}')
+        self._spawn_done = bool(self._scene_visual_spawned)
+        return spawned_any
+
+    def _sync_scene_visual_obstacles(self, payload):
+        if not self._gz_ready:
+            return False
+        if len(self._scene_visual_spawned) < len(self._scene_dynamic_visual_items(payload)):
+            self._spawn_scene_visual_obstacles(payload)
+
+        all_ok = True
+        for idx, obs in enumerate(self._scene_dynamic_visual_items(payload), start=1):
+            entity_name = self._scene_visual_entity_name(obs, idx)
+            enu_x, enu_y, enu_z = self._ned_to_enu(obs.get('x', 0.0), obs.get('y', 0.0), obs.get('z', 0.0))
+            ok = self._set_entity_pose(entity_name, enu_x, enu_y, enu_z, force=True)
+            all_ok = all_ok and ok
+        return all_ok
 
     def _prepare_wall_sdf(self):
         obstacles = self._configured_obstacles()
@@ -373,17 +446,27 @@ class DynamicObstacleSource(Node):
             return self._ned_to_enu(x, y, z)
         return 0.0, 0.0, float(self._p('z'))
 
-    def _prepare_scene_ball_sdf(self):
-        scene = self._load_scene_config()
-        radius = 0.5
-        dynamic = scene.get('dynamic_obstacles') or []
-        for obs in dynamic:
-            if isinstance(obs, dict) and str(obs.get('name', '')).strip():
-                radius = max(0.1, _finite_float(obs.get('radius'), 0.5))
-                break
+    def _safe_entity_name(self, value, default='scene_dynamic_obstacle'):
+        text = str(value or default).strip().replace(' ', '_')
+        return ''.join(ch if ch.isalnum() or ch == '_' else '_' for ch in text) or default
+
+    def _scene_visual_entity_name(self, obs, index=1):
+        raw_name = self._safe_entity_name(obs.get('name'), f'scene_dynamic_obstacle_{index}')
+        return f'scene_{raw_name}'
+
+    def _prepare_scene_ball_sdf(self, entity_name=None, radius=0.5, index=1):
+        entity_name = self._safe_entity_name(entity_name or self.scene_entity_name, self.scene_entity_name)
+        radius = max(0.1, _finite_float(radius, 0.5))
+        palette = [
+            ('1.00 0.12 0.08 1', '1.00 0.12 0.08 1'),
+            ('0.10 0.45 1.00 1', '0.10 0.45 1.00 1'),
+            ('1.00 0.78 0.08 1', '1.00 0.78 0.08 1'),
+            ('0.10 0.85 0.35 1', '0.10 0.85 0.35 1'),
+        ]
+        ambient, diffuse = palette[(max(1, int(index)) - 1) % len(palette)]
         sdf = f"""<?xml version="1.0" ?>
 <sdf version="1.9">
-  <model name="{self.scene_entity_name}">
+  <model name="{entity_name}">
     <static>true</static>
     <link name="body">
       <visual name="visual">
@@ -393,33 +476,36 @@ class DynamicObstacleSource(Node):
           </sphere>
         </geometry>
         <material>
-          <ambient>1 0.05 0.05 1</ambient>
-          <diffuse>1 0.05 0.05 1</diffuse>
+          <ambient>{ambient}</ambient>
+          <diffuse>{diffuse}</diffuse>
         </material>
       </visual>
     </link>
   </model>
 </sdf>
 """
-        tmp_path = os.path.join(tempfile.gettempdir(), 'xtd2_scene_dynamic_obstacle_1.sdf')
+        tmp_path = os.path.join(tempfile.gettempdir(), f'xtd2_{entity_name}.sdf')
         with open(tmp_path, 'w', encoding='utf-8') as f:
             f.write(sdf)
         self.get_logger().info(
-            f'scene visual sdf prepared: path={tmp_path}, radius={radius:.2f}'
+            f'scene visual sdf prepared: entity={entity_name}, path={tmp_path}, radius={radius:.2f}'
         )
         return tmp_path
 
-    def _set_visual_pose(self, x: float, y: float, z: float, force: bool = False) -> bool:
+    def _set_entity_pose(self, entity_name: str, x: float, y: float, z: float, force: bool = False) -> bool:
         if not self._gz_ready:
             return False
-        if not force and not self._spawn_done:
+        if not force and not self._spawn_done and self.mode != 'scene':
             return False
         req = (
-            f'name: "{self._visual_obstacle_entity_name()}", '
+            f'name: "{entity_name}", '
             f'position: {{ x: {float(x):.3f}, y: {float(y):.3f}, z: {float(z):.3f} }}, '
             f'orientation: {{ w: 1.0 }}'
         )
         return self._run_gz_service(self._gz_set_pose_service, 'gz.msgs.Pose', req, timeout_ms=600)
+
+    def _set_visual_pose(self, x: float, y: float, z: float, force: bool = False) -> bool:
+        return self._set_entity_pose(self._visual_obstacle_entity_name(), x, y, z, force=force)
 
     def _set_target_ball_pose_enu(self, x_enu: float, y_enu: float, z_enu: float) -> bool:
         if not self._gz_ready:
@@ -505,11 +591,17 @@ class DynamicObstacleSource(Node):
         target_z = float(target_cfg['z'])
         base_y = float(target_cfg['y'])
         spacing = float(target_cfg['y_spacing'])
+        axis = str(target_cfg.get('axis', 'y')).strip().lower()
 
         markers = []
         for i in range(1, num_drones + 1):
-            ned_x = target_x
-            ned_y = base_y + (i - leader_id) * spacing
+            offset = (i - leader_id) * spacing
+            if axis == 'x':
+                ned_x = target_x + offset
+                ned_y = base_y
+            else:
+                ned_x = target_x
+                ned_y = base_y + offset
             ned_z = target_z
             enu_x, enu_y, enu_z = self._ned_to_enu(ned_x, ned_y, ned_z)
             markers.append(
@@ -558,6 +650,7 @@ class DynamicObstacleSource(Node):
             return
         states = payload.get('states', [])
         now = time.time()
+        max_points = max(2, int(self.get_parameter('rviz_drone_path_max_points').value))
         for state in states:
             try:
                 drone_id = int(state.get('id', -1))
@@ -565,10 +658,37 @@ class DynamicObstacleSource(Node):
                 continue
             if drone_id <= 0:
                 continue
+            ned_x = _finite_float(state.get('world_x', state.get('x')), 0.0)
+            ned_y = _finite_float(state.get('world_y', state.get('y')), 0.0)
+            ned_z = _finite_float(state.get('world_z', state.get('z')), 0.0)
+            vx = _finite_float(state.get('vx'), 0.0)
+            vy = _finite_float(state.get('vy'), 0.0)
+            vz = _finite_float(state.get('vz'), 0.0)
+            heading = _finite_float(state.get('heading'), 0.0)
+            enu_x, enu_y, enu_z = self._ned_to_enu(ned_x, ned_y, ned_z)
             self._latest_swarm_states[drone_id] = {
                 'time': now,
-                'z': _finite_float(state.get('z'), 0.0),
+                'x': ned_x,
+                'y': ned_y,
+                'z': ned_z,
+                'vx': vx,
+                'vy': vy,
+                'vz': vz,
+                'heading': heading,
+                'enu_x': enu_x,
+                'enu_y': enu_y,
+                'enu_z': enu_z,
             }
+            path = self._drone_paths.setdefault(drone_id, [])
+            if not path:
+                path.append((enu_x, enu_y, enu_z))
+            else:
+                last_x, last_y, last_z = path[-1]
+                dist = math.sqrt((enu_x - last_x) ** 2 + (enu_y - last_y) ** 2 + (enu_z - last_z) ** 2)
+                if dist >= 0.08:
+                    path.append((enu_x, enu_y, enu_z))
+            if len(path) > max_points:
+                del path[:-max_points]
 
     def _takeoff_ready(self, now):
         expected = int(self.get_parameter('scene_start_num_drones').value)
@@ -670,9 +790,168 @@ class DynamicObstacleSource(Node):
                     'thickness': max(0.1, _finite_float(wall.get('thickness'), 0.25)),
                     'height': max(0.5, _finite_float(wall.get('height'), 1.8)),
                     'segment_spacing': max(0.2, _finite_float(wall.get('segment_spacing'), 0.6)),
+                    'orientation': str(wall.get('orientation', 'y')),
                 }
             )
         return normalized
+
+    def _scene_sdf_config(self, scene):
+        cfg = scene.get('sdf_structures') or {}
+        return cfg if isinstance(cfg, dict) else {}
+
+    def _parse_sdf_structures(self, sdf_path):
+        path = _resolve_path(sdf_path)
+        if not path or not os.path.exists(path):
+            return []
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return []
+        cached = self._scene_sdf_cache.get(path)
+        if cached and cached.get('mtime') == mtime:
+            return cached.get('items', [])
+
+        try:
+            root = ET.parse(path).getroot()
+        except Exception as e:
+            self.get_logger().warn(f'failed to parse sdf structures: path={path}, error={e}')
+            return []
+
+        items = []
+        for model in root.findall('.//model'):
+            name = model.get('name', '')
+            if not name or name == 'ground_plane':
+                continue
+            pose_text = model.findtext('pose', default='0 0 0 0 0 0')
+            pose_vals = [float(v) for v in str(pose_text).split()[:6]]
+            while len(pose_vals) < 6:
+                pose_vals.append(0.0)
+            enu_x, enu_y, enu_z, roll, pitch, yaw = pose_vals[:6]
+
+            box = model.find('.//box/size')
+            cyl_radius = model.find('.//cylinder/radius')
+            cyl_length = model.find('.//cylinder/length')
+            if box is not None and box.text:
+                size_vals = [float(v) for v in str(box.text).split()[:3]]
+                while len(size_vals) < 3:
+                    size_vals.append(1.0)
+                shape = 'box'
+                size = size_vals[:3]
+                radius = max(0.15, 0.5 * math.sqrt(size[0] * size[0] + size[1] * size[1]))
+            elif cyl_radius is not None and cyl_length is not None:
+                r = max(0.05, _finite_float(cyl_radius.text, 0.5))
+                length = max(0.1, _finite_float(cyl_length.text, 1.0))
+                shape = 'cylinder'
+                size = [2.0 * r, 2.0 * r, length]
+                radius = r
+            else:
+                continue
+
+            ned_x, ned_y, ned_z = self._enu_to_ned(enu_x, enu_y, enu_z)
+            items.append(
+                {
+                    'name': name,
+                    'shape': shape,
+                    'x': ned_x,
+                    'y': ned_y,
+                    'z': ned_z,
+                    'enu_x': enu_x,
+                    'enu_y': enu_y,
+                    'enu_z': enu_z,
+                    'roll': roll,
+                    'pitch': pitch,
+                    'yaw': yaw,
+                    'size': size,
+                    'radius': radius,
+                }
+            )
+
+        self._scene_sdf_cache[path] = {'mtime': mtime, 'items': items}
+        self.get_logger().info(f'sdf structures loaded: path={path}, count={len(items)}')
+        return items
+
+    def _filter_sdf_items(self, items, include_prefixes=None, exclude_prefixes=None, include_names=None, exclude_names=None):
+        include_prefixes = [str(v) for v in (include_prefixes or [])]
+        exclude_prefixes = [str(v) for v in (exclude_prefixes or [])]
+        include_names = set(str(v) for v in (include_names or []))
+        exclude_names = set(str(v) for v in (exclude_names or []))
+        selected = []
+        for item in items:
+            name = str(item.get('name', ''))
+            if exclude_names and name in exclude_names:
+                continue
+            if include_names and name not in include_names:
+                continue
+            if include_prefixes and not any(name.startswith(prefix) for prefix in include_prefixes):
+                continue
+            if exclude_prefixes and any(name.startswith(prefix) for prefix in exclude_prefixes):
+                continue
+            selected.append(item)
+        return selected
+
+    def _sdf_dynamic_obstacle_items(self, scene):
+        cfg = self._scene_sdf_config(scene)
+        path = cfg.get('path', '')
+        dyn_cfg = cfg.get('dynamic_obstacles') or {}
+        if not path or not isinstance(dyn_cfg, dict) or int(dyn_cfg.get('enable', 0)) == 0:
+            return []
+
+        items = self._filter_sdf_items(
+            self._parse_sdf_structures(path),
+            include_prefixes=dyn_cfg.get('include_prefixes') or [],
+            exclude_prefixes=dyn_cfg.get('exclude_prefixes') or [],
+            include_names=dyn_cfg.get('include_names') or [],
+            exclude_names=dyn_cfg.get('exclude_names') or [],
+        )
+        max_count = int(_finite_float(dyn_cfg.get('max_count'), len(items)))
+        selection = str(dyn_cfg.get('selection', 'first')).strip().lower()
+        if max_count <= 0:
+            items = []
+        elif max_count < len(items) and selection in ('even', 'evenly_spaced', 'uniform'):
+            if max_count == 1:
+                items = [items[len(items) // 2]]
+            else:
+                step = float(len(items) - 1) / float(max_count - 1)
+                items = [items[int(round(i * step))] for i in range(max_count)]
+        elif max_count > 0:
+            items = items[:max_count]
+        return items
+
+    def _sdf_static_marker_items(self, scene):
+        cfg = self._scene_sdf_config(scene)
+        path = cfg.get('path', '')
+        marker_cfg = cfg.get('static_markers') or {}
+        if not path or not isinstance(marker_cfg, dict) or int(marker_cfg.get('enable', 0)) == 0:
+            return []
+        return self._filter_sdf_items(
+            self._parse_sdf_structures(path),
+            include_prefixes=marker_cfg.get('include_prefixes') or [],
+            exclude_prefixes=marker_cfg.get('exclude_prefixes') or [],
+            include_names=marker_cfg.get('include_names') or [],
+            exclude_names=marker_cfg.get('exclude_names') or [],
+        )
+
+    def _sdf_dynamic_state(self, scene, item, index, t):
+        cfg = self._scene_sdf_config(scene)
+        dyn_cfg = cfg.get('dynamic_obstacles') or {}
+        traj = dict(dyn_cfg.get('trajectory') or {})
+        traj_type = str(traj.get('type', 'sando_trefoil')).strip().lower()
+        phase = _finite_float(traj.get('phase'), 0.0) + _finite_float(traj.get('phase_step'), 0.25) * float(index)
+        center = [float(item['x']), float(item['y']), float(item['z'])]
+        if traj_type in ('trefoil', 'sando_trefoil'):
+            traj.setdefault('center', center)
+            traj['phase'] = phase
+            return self._scene_trefoil_state(traj, t)
+        if traj_type == 'circle':
+            traj.setdefault('center', center)
+            traj['phase'] = phase
+            return self._scene_circle_state(traj, t)
+        if traj_type in ('ping_pong_line', 'pingpong_line', 'line_ping_pong'):
+            span = _vector3(traj.get('span'), (0.0, 1.5, 0.0))
+            traj.setdefault('start', [center[0] - span[0] * 0.5, center[1] - span[1] * 0.5, center[2] - span[2] * 0.5])
+            traj.setdefault('end', [center[0] + span[0] * 0.5, center[1] + span[1] * 0.5, center[2] + span[2] * 0.5])
+            return self._scene_ping_pong_line_state(traj, t)
+        return (center[0], center[1], center[2], 0.0, 0.0, 0.0)
 
     def _scene_line_state(self, traj, t):
         start_time = _finite_float(traj.get('start_time'), 0.0)
@@ -739,11 +1018,34 @@ class DynamicObstacleSource(Node):
         vy = radius * omega * math.cos(theta)
         return (x, y, z, vx, vy, 0.0)
 
+    def _scene_trefoil_state(self, traj, t):
+        start_time = _finite_float(traj.get('start_time'), 0.0)
+        center = _vector3(traj.get('center'))
+        scale = _vector3(traj.get('scale'), (3.0, 3.0, 1.0))
+        phase = _finite_float(traj.get('phase'), 0.0)
+        slower = max(0.1, _finite_float(traj.get('slower'), 4.0))
+        active_t = max(0.0, t - start_time)
+        tt = active_t / slower + phase
+
+        x = scale[0] / 6.0 * (math.sin(tt) + 2.0 * math.sin(2.0 * tt)) + center[0]
+        y = scale[1] / 5.0 * (math.cos(tt) - 2.0 * math.cos(2.0 * tt)) + center[1]
+        z = scale[2] / 2.0 * (-math.sin(3.0 * tt)) + center[2]
+        if t < start_time:
+            return (x, y, z, 0.0, 0.0, 0.0)
+
+        inv_slower = 1.0 / slower
+        vx = scale[0] / 6.0 * inv_slower * (math.cos(tt) + 4.0 * math.cos(2.0 * tt))
+        vy = scale[1] / 5.0 * inv_slower * (-math.sin(tt) + 4.0 * math.sin(2.0 * tt))
+        vz = -3.0 * scale[2] / 2.0 * inv_slower * math.cos(3.0 * tt)
+        return (x, y, z, vx, vy, vz)
+
     def _scene_dynamic_state(self, obs, t):
         traj = obs.get('trajectory') or {}
         traj_type = str(traj.get('type', 'line')).strip().lower()
         if traj_type == 'circle':
             return self._scene_circle_state(traj, t)
+        if traj_type in ('trefoil', 'sando_trefoil'):
+            return self._scene_trefoil_state(traj, t)
         if traj_type in ('ping_pong_line', 'pingpong_line', 'line_ping_pong'):
             return self._scene_ping_pong_line_state(traj, t)
         if traj_type not in ('line', 'static'):
@@ -779,6 +1081,26 @@ class DynamicObstacleSource(Node):
                     'vy': vy,
                     'vz': vz,
                     'radius': max(0.05, _finite_float(obs.get('radius'), 0.5)),
+                }
+            )
+            obs_id += 1
+
+        for idx, item in enumerate(self._sdf_dynamic_obstacle_items(scene), start=1):
+            x, y, z, vx, vy, vz = self._sdf_dynamic_state(scene, item, idx, t)
+            obstacles.append(
+                {
+                    'obs_id': obs_id,
+                    'name': str(item.get('name', f'sdf_dynamic_{idx}')),
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'vx': vx,
+                    'vy': vy,
+                    'vz': vz,
+                    'radius': max(0.05, _finite_float(item.get('radius'), 0.5)),
+                    'shape': item.get('shape', 'box'),
+                    'size': item.get('size', []),
+                    'sdf_dynamic': True,
                 }
             )
             obs_id += 1
@@ -842,6 +1164,325 @@ class DynamicObstacleSource(Node):
                     }
                 )
         self._last_trajectory_record_t = scene_time
+
+    def _rviz_markers_enabled(self):
+        return int(self.get_parameter('rviz_markers_enable').value) != 0
+
+    def _rviz_marker_frame(self):
+        return str(self.get_parameter('rviz_marker_frame').value or 'map').strip() or 'map'
+
+    def _base_marker(self, ns, marker_id, marker_type):
+        marker = Marker()
+        marker.header.frame_id = self._rviz_marker_frame()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = ns
+        marker.id = int(marker_id)
+        marker.type = marker_type
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        return marker
+
+    @staticmethod
+    def _point(x, y, z):
+        p = Point()
+        p.x = float(x)
+        p.y = float(y)
+        p.z = float(z)
+        return p
+
+    def _append_text_marker(self, markers, ns, marker_id, text, enu_x, enu_y, enu_z, size=0.65, color=None):
+        marker = self._base_marker(ns, marker_id, Marker.TEXT_VIEW_FACING)
+        marker.pose.position.x = float(enu_x)
+        marker.pose.position.y = float(enu_y)
+        marker.pose.position.z = float(enu_z)
+        marker.scale.z = float(size)
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color or (0.9, 0.9, 0.9, 0.95)
+        marker.text = str(text)
+        markers.markers.append(marker)
+
+    def _append_line_marker(self, markers, ns, marker_id, points, width=0.08, color=None):
+        marker = self._base_marker(ns, marker_id, Marker.LINE_STRIP)
+        marker.points = [self._point(*p) for p in points]
+        marker.scale.x = float(width)
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color or (0.9, 0.9, 0.9, 0.8)
+        markers.markers.append(marker)
+
+    def _append_arrow_marker(self, markers, ns, marker_id, start, end, color):
+        marker = self._base_marker(ns, marker_id, Marker.ARROW)
+        marker.points = [self._point(*start), self._point(*end)]
+        marker.scale.x = 0.12
+        marker.scale.y = 0.32
+        marker.scale.z = 0.42
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
+        markers.markers.append(marker)
+
+    def _append_scene_guide_markers(self, markers, scene):
+        if not scene:
+            return
+
+        # RViz uses ENU, while the mission YAML uses NED:
+        # RViz x = NED y, RViz y = NED x, RViz z = -NED z.
+        self._append_arrow_marker(markers, 'map_axes', 900001, (0.0, 0.0, 0.15), (8.0, 0.0, 0.15), (0.25, 0.85, 0.25, 0.9))
+        self._append_arrow_marker(markers, 'map_axes', 900002, (0.0, 0.0, 0.15), (0.0, 8.0, 0.15), (0.95, 0.25, 0.25, 0.9))
+        self._append_arrow_marker(markers, 'map_axes', 900003, (0.0, 0.0, 0.15), (0.0, 0.0, 4.0), (0.25, 0.45, 1.0, 0.9))
+        self._append_text_marker(markers, 'map_axes_text', 900011, 'RViz X = NED y', 8.8, 0.0, 0.6, 0.55, (0.25, 0.85, 0.25, 0.95))
+        self._append_text_marker(markers, 'map_axes_text', 900012, 'RViz Y = NED x', 0.0, 8.8, 0.6, 0.55, (0.95, 0.25, 0.25, 0.95))
+        self._append_text_marker(markers, 'map_axes_text', 900013, 'RViz Z = -NED z', 0.0, 0.0, 4.6, 0.55, (0.25, 0.45, 1.0, 0.95))
+
+        swarm = scene.get('swarm') or {}
+        num_drones = max(1, int(_finite_float(swarm.get('num_drones'), 5)))
+
+        def short_edge_points(cfg):
+            center_x = _finite_float(cfg.get('x'), 0.0)
+            center_y = _finite_float(cfg.get('y'), 0.0)
+            z = _finite_float(cfg.get('z'), -3.0)
+            axis = str(cfg.get('axis', 'y')).strip().lower()
+            spacing = _finite_float(cfg.get('y_spacing'), _finite_float(swarm.get('y_spacing'), 1.8))
+            half = 0.5 * float(num_drones - 1) * spacing
+            if axis == 'x':
+                p1_ned = (center_x - half, center_y, z)
+                p2_ned = (center_x + half, center_y, z)
+            else:
+                p1_ned = (center_x, center_y - half, z)
+                p2_ned = (center_x, center_y + half, z)
+            return self._ned_to_enu(*p1_ned), self._ned_to_enu(*p2_ned), self._ned_to_enu(center_x, center_y, z), axis
+
+        start_cfg = scene.get('start') or {}
+        target_cfg = scene.get('target') or {}
+        if start_cfg:
+            p1, p2, center, axis = short_edge_points(start_cfg)
+            p1_ground = (p1[0], p1[1], 0.12)
+            p2_ground = (p2[0], p2[1], 0.12)
+            center_ground = (center[0], center[1], 0.12)
+            self._append_line_marker(markers, 'mission_edges', 900101, [p1_ground, p2_ground], 0.055, (0.15, 0.55, 1.0, 0.55))
+            self._append_text_marker(
+                markers, 'mission_edges_text', 900111,
+                f"START y={_finite_float(start_cfg.get('y'), 0.0):.1f}",
+                center_ground[0], center_ground[1], 0.7, 0.38, (0.15, 0.55, 1.0, 0.85)
+            )
+        if target_cfg:
+            p1, p2, center, axis = short_edge_points(target_cfg)
+            p1_ground = (p1[0], p1[1], 0.12)
+            p2_ground = (p2[0], p2[1], 0.12)
+            center_ground = (center[0], center[1], 0.12)
+            self._append_line_marker(markers, 'mission_edges', 900201, [p1_ground, p2_ground], 0.055, (0.1, 0.95, 0.25, 0.55))
+            self._append_text_marker(
+                markers, 'mission_edges_text', 900211,
+                f"TARGET y={_finite_float(target_cfg.get('y'), 0.0):.1f}",
+                center_ground[0], center_ground[1], 0.7, 0.38, (0.1, 0.95, 0.25, 0.85)
+            )
+
+    def _delete_all_marker(self):
+        marker = Marker()
+        marker.header.frame_id = self._rviz_marker_frame()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.action = Marker.DELETEALL
+        return marker
+
+    def _build_obstacle_marker_array(self, payload):
+        markers = MarkerArray()
+        markers.markers.append(self._delete_all_marker())
+        scene = self._load_scene_config() if self.mode == 'scene' else {}
+        self._append_scene_guide_markers(markers, scene)
+
+        static_offset = 100000
+        for idx, item in enumerate(self._sdf_static_marker_items(scene), start=1):
+            marker = self._base_marker(
+                'sdf_static_structures',
+                static_offset + idx,
+                Marker.CYLINDER if item.get('shape') == 'cylinder' else Marker.CUBE,
+            )
+            marker.pose.position.x = float(item.get('enu_x', 0.0))
+            marker.pose.position.y = float(item.get('enu_y', 0.0))
+            marker.pose.position.z = float(item.get('enu_z', 0.0))
+            marker.pose.orientation.w = math.cos(float(item.get('yaw', 0.0)) * 0.5)
+            marker.pose.orientation.z = math.sin(float(item.get('yaw', 0.0)) * 0.5)
+            size = item.get('size') or [1.0, 1.0, 1.0]
+            marker.scale.x = max(0.05, float(size[0]))
+            marker.scale.y = max(0.05, float(size[1]))
+            marker.scale.z = max(0.05, float(size[2]))
+            marker.color.r = 0.45
+            marker.color.g = 0.47
+            marker.color.b = 0.46
+            marker.color.a = 0.45
+            markers.markers.append(marker)
+
+        for idx, obs in enumerate(payload.get('obstacles', []), start=1):
+            name = str(obs.get('name', '')).strip()
+            is_dynamic = bool(name)
+            radius = max(0.05, _finite_float(obs.get('radius'), 0.35))
+            enu_x, enu_y, enu_z = self._ned_to_enu(obs.get('x', 0.0), obs.get('y', 0.0), obs.get('z', 0.0))
+
+            marker = self._base_marker(
+                'dynamic_obstacles' if is_dynamic else 'static_obstacle_points',
+                idx,
+                Marker.CUBE if is_dynamic else Marker.SPHERE,
+            )
+            marker.pose.position.x = float(enu_x)
+            marker.pose.position.y = float(enu_y)
+            marker.pose.position.z = float(enu_z)
+
+            if is_dynamic:
+                size = obs.get('size') if isinstance(obs.get('size'), list) else []
+                if len(size) >= 3:
+                    marker.scale.x = max(0.15, float(size[0]))
+                    marker.scale.y = max(0.15, float(size[1]))
+                    marker.scale.z = max(0.15, float(size[2]))
+                else:
+                    side = max(0.25, radius * 1.6)
+                    marker.scale.x = side
+                    marker.scale.y = side
+                    marker.scale.z = side
+                marker.color.r = 0.72
+                marker.color.g = 0.64
+                marker.color.b = 0.48
+                marker.color.a = 0.9
+                marker.text = name
+            else:
+                marker.scale.x = radius * 1.6
+                marker.scale.y = radius * 1.6
+                marker.scale.z = max(0.12, radius * 0.4)
+                marker.color.r = 0.75
+                marker.color.g = 0.78
+                marker.color.b = 0.80
+                marker.color.a = 0.28
+            markers.markers.append(marker)
+
+            if is_dynamic:
+                vel_marker = self._base_marker('dynamic_obstacle_velocity', idx, Marker.ARROW)
+                vel_marker.points.append(marker.pose.position)
+                end = type(marker.pose.position)()
+                enu_vx, enu_vy, enu_vz = self._ned_to_enu(obs.get('vx', 0.0), obs.get('vy', 0.0), obs.get('vz', 0.0))
+                velocity_marker_scale = 0.32
+                end.x = float(enu_x) + float(enu_vx) * velocity_marker_scale
+                end.y = float(enu_y) + float(enu_vy) * velocity_marker_scale
+                end.z = float(enu_z) + float(enu_vz) * velocity_marker_scale
+                vel_marker.points.append(end)
+                vel_marker.scale.x = 0.025
+                vel_marker.scale.y = 0.065
+                vel_marker.scale.z = 0.09
+                vel_marker.color.r = 1.0
+                vel_marker.color.g = 0.88
+                vel_marker.color.b = 0.18
+                vel_marker.color.a = 0.45
+                markers.markers.append(vel_marker)
+
+        return markers
+
+    def _build_target_marker_array(self, target_payload):
+        markers = MarkerArray()
+        markers.markers.append(self._delete_all_marker())
+        if not target_payload:
+            return markers
+
+        for idx, item in enumerate(target_payload.get('markers', []), start=1):
+            marker = self._base_marker('target_markers', idx, Marker.SPHERE)
+            marker.pose.position.x = float(item.get('enu_x', 0.0))
+            marker.pose.position.y = float(item.get('enu_y', 0.0))
+            marker.pose.position.z = float(item.get('enu_z', 0.0))
+            marker.scale.x = 0.45
+            marker.scale.y = 0.45
+            marker.scale.z = 0.45
+            marker.color.r = 0.1
+            marker.color.g = 0.9
+            marker.color.b = 0.25
+            marker.color.a = 0.85
+            markers.markers.append(marker)
+
+            label = self._base_marker('target_marker_labels', 1000 + idx, Marker.TEXT_VIEW_FACING)
+            label.pose.position.x = float(item.get('enu_x', 0.0))
+            label.pose.position.y = float(item.get('enu_y', 0.0))
+            label.pose.position.z = float(item.get('enu_z', 0.0)) + 0.65
+            label.scale.z = 0.45
+            label.color.r = 0.1
+            label.color.g = 1.0
+            label.color.b = 0.25
+            label.color.a = 0.95
+            label.text = f"T{int(item.get('drone_id', idx))}"
+            markers.markers.append(label)
+        return markers
+
+    def _build_drone_marker_array(self):
+        markers = MarkerArray()
+        markers.markers.append(self._delete_all_marker())
+        if int(self.get_parameter('rviz_drone_markers_enable').value) == 0:
+            return markers
+
+        now = time.time()
+        stale_after = 3.0
+        colors = {
+            1: (0.15, 0.55, 1.0),
+            2: (1.0, 0.45, 0.15),
+            3: (0.75, 0.35, 1.0),
+            4: (0.1, 0.85, 0.85),
+            5: (1.0, 0.9, 0.2),
+        }
+        for drone_id in sorted(self._latest_swarm_states.keys()):
+            state = self._latest_swarm_states[drone_id]
+            if now - state.get('time', 0.0) > stale_after:
+                continue
+            color = colors.get(drone_id, (0.25, 0.75, 1.0))
+            enu_x = float(state.get('enu_x', 0.0))
+            enu_y = float(state.get('enu_y', 0.0))
+            enu_z = float(state.get('enu_z', 0.0))
+            heading = float(state.get('heading', 0.0))
+
+            body = self._base_marker('drone_body', drone_id, Marker.SPHERE)
+            body.pose.position.x = enu_x
+            body.pose.position.y = enu_y
+            body.pose.position.z = enu_z
+            body.scale.x = 0.55
+            body.scale.y = 0.55
+            body.scale.z = 0.22
+            body.color.r = color[0]
+            body.color.g = color[1]
+            body.color.b = color[2]
+            body.color.a = 0.95
+            markers.markers.append(body)
+
+            # PX4 heading is in NED; convert a short forward vector to RViz ENU.
+            forward_ned_x = math.cos(heading)
+            forward_ned_y = math.sin(heading)
+            forward_enu_x, forward_enu_y, _ = self._ned_to_enu(forward_ned_x, forward_ned_y, 0.0)
+            arrow = self._base_marker('drone_heading', 1000 + drone_id, Marker.ARROW)
+            arrow.points = [
+                self._point(enu_x, enu_y, enu_z + 0.08),
+                self._point(enu_x + 0.9 * forward_enu_x, enu_y + 0.9 * forward_enu_y, enu_z + 0.08),
+            ]
+            arrow.scale.x = 0.05
+            arrow.scale.y = 0.16
+            arrow.scale.z = 0.22
+            arrow.color.r = color[0]
+            arrow.color.g = color[1]
+            arrow.color.b = color[2]
+            arrow.color.a = 0.8
+            markers.markers.append(arrow)
+
+            label = self._base_marker('drone_labels', 2000 + drone_id, Marker.TEXT_VIEW_FACING)
+            label.pose.position.x = enu_x
+            label.pose.position.y = enu_y
+            label.pose.position.z = enu_z + 0.65
+            label.scale.z = 0.42
+            label.color.r = color[0]
+            label.color.g = color[1]
+            label.color.b = color[2]
+            label.color.a = 0.95
+            label.text = f"x500_{drone_id}"
+            markers.markers.append(label)
+
+            if int(self.get_parameter('rviz_drone_path_enable').value) != 0:
+                path = self._drone_paths.get(drone_id, [])
+                if len(path) >= 2:
+                    line = self._base_marker('drone_paths', 3000 + drone_id, Marker.LINE_STRIP)
+                    line.points = [self._point(*p) for p in path]
+                    line.scale.x = 0.055
+                    line.color.r = color[0]
+                    line.color.g = color[1]
+                    line.color.b = color[2]
+                    line.color.a = 0.55
+                    markers.markers.append(line)
+
+        return markers
 
     def _blend_center(self, t: float):
         start_x = self._p('start_center_x')
@@ -920,12 +1561,13 @@ class DynamicObstacleSource(Node):
             scene = self._load_scene_config()
             target = scene.get('target') or {}
             if isinstance(target, dict):
-                default = {'x': 20.0, 'y': 0.0, 'z': -3.0, 'y_spacing': 1.8}
+                default = {'x': 20.0, 'y': 0.0, 'z': -3.0, 'y_spacing': 1.8, 'axis': 'y'}
                 return {
                     'x': _finite_float(target.get('x', default['x']), default['x']),
                     'y': _finite_float(target.get('y', default['y']), default['y']),
                     'z': _finite_float(target.get('z', default['z']), default['z']),
                     'y_spacing': _finite_float(target.get('y_spacing', default['y_spacing']), default['y_spacing']),
+                    'axis': str(target.get('axis', default['axis'])),
                 }
         config_path = str(self.get_parameter('obstacle_config').value or '').strip()
         if config_path:
@@ -935,6 +1577,7 @@ class DynamicObstacleSource(Node):
             'y': float(self.get_parameter('target_ball_base_y').value),
             'z': float(self.get_parameter('target_ball_target_z').value),
             'y_spacing': float(self.get_parameter('target_ball_y_spacing').value),
+            'axis': 'y',
         }
 
     def _publish(self):
@@ -1027,6 +1670,11 @@ class DynamicObstacleSource(Node):
             target_msg.data = json.dumps(target_payload, ensure_ascii=False)
             self.target_pub.publish(target_msg)
 
+        if self._rviz_markers_enabled():
+            self.marker_pub.publish(self._build_obstacle_marker_array(payload))
+            self.target_marker_pub.publish(self._build_target_marker_array(target_payload))
+            self.drone_marker_pub.publish(self._build_drone_marker_array())
+
         if self.visualize_gz:
             now = time.time()
             if not self._gz_ready and now - self._last_probe_t > 1.5:
@@ -1048,6 +1696,14 @@ class DynamicObstacleSource(Node):
                         if not ok_target_pose and now - self._last_pose_warn_t > 1.0:
                             self._last_pose_warn_t = now
                             self.get_logger().warn('target ball pose sync failed, will retry')
+                elif self.mode == 'scene':
+                    ok = self._sync_scene_visual_obstacles(payload)
+                    if not ok and now - self._last_pose_warn_t > 1.0:
+                        self._last_pose_warn_t = now
+                        self.get_logger().warn(
+                            f'scene visual pose sync failed, spawned={len(self._scene_visual_spawned)}, '
+                            f'world={self.world_name}'
+                        )
                 else:
                     vis_x, vis_y, vis_z = self._next_visual_pose(x, y, z)
                     ok = self._set_visual_pose(vis_x, vis_y, vis_z)
@@ -1141,6 +1797,8 @@ def main():
     parser.add_argument('--scene-start-num-drones', type=int, default=0)
     parser.add_argument('--scene-start-z-threshold', type=float, default=-2.0)
     parser.add_argument('--scene-start-stable-sec', type=float, default=2.0)
+    parser.add_argument('--rviz-markers-enable', type=int, default=1)
+    parser.add_argument('--rviz-marker-frame', type=str, default='map')
     args, _ = parser.parse_known_args()
 
     rclpy.init()
@@ -1184,16 +1842,19 @@ def main():
         Parameter('scene_start_num_drones', Parameter.Type.INTEGER, int(args.scene_start_num_drones)),
         Parameter('scene_start_z_threshold', Parameter.Type.DOUBLE, float(args.scene_start_z_threshold)),
         Parameter('scene_start_stable_sec', Parameter.Type.DOUBLE, float(args.scene_start_stable_sec)),
+        Parameter('rviz_markers_enable', Parameter.Type.INTEGER, int(args.rviz_markers_enable)),
+        Parameter('rviz_marker_frame', Parameter.Type.STRING, str(args.rviz_marker_frame)),
     ])
     if node.visualize_gz:
         node._setup_gz_visual()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

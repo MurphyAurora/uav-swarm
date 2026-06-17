@@ -94,16 +94,16 @@
 - `scenes/demo_dynamic.yaml`
   - 最初的小 demo 场景。
 
-- `scenes/easy_crossing.yaml`
+- `scenes/difficulty_benchmark/easy_crossing.yaml`
   - easy 难度场景：一个慢速穿越障碍。
 
-- `scenes/medium_multi_crossing.yaml`
+- `scenes/difficulty_benchmark/medium_multi_crossing.yaml`
   - medium 难度场景：多个穿越障碍和巡逻障碍。
 
-- `scenes/hard_dense_crossing.yaml`
+- `scenes/difficulty_benchmark/hard_dense_crossing.yaml`
   - hard 难度场景：密集穿越和目标区域巡逻。
 
-- `scenes/benchmark_v1.yaml`
+- `scenes/difficulty_benchmark/benchmark_v1.yaml`
   - 批量 benchmark 配置，包含 easy、medium、hard 三个场景。
 
 ### 系统和兼容文件
@@ -131,7 +131,7 @@
 ```bash
 cd /home/lililab/ws_xtd2/scripts
 
-python3 scenario_demo.py --scene scenes/easy_crossing.yaml --output-dir /tmp/check_easy
+python3 scenario_demo.py --scene scenes/difficulty_benchmark/easy_crossing.yaml --output-dir /tmp/check_easy
 ```
 
 预期输出：
@@ -162,7 +162,7 @@ time,name,type,x,y,z,vx,vy,vz,radius
 ## 运行 Benchmark Suite
 
 ```bash
-python3 scenario_demo.py --suite scenes/benchmark_v1.yaml --output-dir /tmp/check_benchmark
+python3 scenario_demo.py --suite scenes/difficulty_benchmark/benchmark_v1.yaml --output-dir /tmp/check_benchmark
 ```
 
 预期输出：
@@ -190,8 +190,8 @@ hard:   difficulty_score 约为 100.0
 用同一个 seed 运行同一个场景两次：
 
 ```bash
-python3 scenario_demo.py --scene scenes/easy_crossing.yaml --output-dir /tmp/check_easy_a
-python3 scenario_demo.py --scene scenes/easy_crossing.yaml --output-dir /tmp/check_easy_b
+python3 scenario_demo.py --scene scenes/difficulty_benchmark/easy_crossing.yaml --output-dir /tmp/check_easy_a
+python3 scenario_demo.py --scene scenes/difficulty_benchmark/easy_crossing.yaml --output-dir /tmp/check_easy_b
 ```
 
 比较两次生成的轨迹：
@@ -205,8 +205,8 @@ diff -u /tmp/check_easy_a/obstacles.csv /tmp/check_easy_b/obstacles.csv
 验证完整 benchmark：
 
 ```bash
-python3 scenario_demo.py --suite scenes/benchmark_v1.yaml --output-dir /tmp/check_benchmark_a
-python3 scenario_demo.py --suite scenes/benchmark_v1.yaml --output-dir /tmp/check_benchmark_b
+python3 scenario_demo.py --suite scenes/difficulty_benchmark/benchmark_v1.yaml --output-dir /tmp/check_benchmark_a
+python3 scenario_demo.py --suite scenes/difficulty_benchmark/benchmark_v1.yaml --output-dir /tmp/check_benchmark_b
 
 diff -u /tmp/check_benchmark_a/easy_crossing_seed101/obstacles.csv /tmp/check_benchmark_b/easy_crossing_seed101/obstacles.csv
 diff -u /tmp/check_benchmark_a/medium_multi_crossing_seed202/obstacles.csv /tmp/check_benchmark_b/medium_multi_crossing_seed202/obstacles.csv
@@ -220,14 +220,14 @@ diff -u /tmp/check_benchmark_a/hard_dense_crossing_seed303/obstacles.csv /tmp/ch
 直接从场景 YAML 生成轨迹图：
 
 ```bash
-python3 plot_scenario.py --scene scenes/hard_dense_crossing.yaml --output /tmp/hard_plot.png
+python3 plot_scenario.py --scene scenes/difficulty_benchmark/hard_dense_crossing.yaml --output /tmp/hard_plot.png
 ```
 
 也可以绘制已经生成好的 CSV：
 
 ```bash
 python3 plot_scenario.py \
-  --scene scenes/medium_multi_crossing.yaml \
+  --scene scenes/difficulty_benchmark/medium_multi_crossing.yaml \
   --csv /tmp/check_benchmark/medium_multi_crossing_seed202/obstacles.csv \
   --output /tmp/medium_plot.png
 ```
@@ -271,7 +271,7 @@ python3 plot_scenario.py \
 ```bash
 python3 dynamic_obstacle_source.py \
   --mode scene \
-  --scene-config scenes/easy_crossing.yaml \
+  --scene-config scenes/difficulty_benchmark/easy_crossing.yaml \
   --visualize-gz 0 \
   --target-ball-enable 0
 ```
@@ -318,7 +318,7 @@ obs_id, x, y, z, vx, vy, vz, radius
 ```bash
 python3 dynamic_obstacle_source.py \
   --mode scene \
-  --scene-config scenes/easy_crossing.yaml \
+  --scene-config scenes/difficulty_benchmark/easy_crossing.yaml \
   --visualize-gz 0 \
   --target-ball-enable 0
 ```
@@ -350,7 +350,7 @@ orca obs input: total=52, named_dynamic=1, sample_name=slow_crossing_ball, sampl
 ```bash
 python3 dynamic_obstacle_source.py \
   --mode scene \
-  --scene-config scenes/easy_crossing.yaml \
+  --scene-config scenes/difficulty_benchmark/easy_crossing.yaml \
   --visualize-gz 0 \
   --target-ball-enable 0
 ```
@@ -440,7 +440,7 @@ ORCA_USE_WORLD_STATE=1 \
 ```bash
 DYNAMIC_OBS_ENABLE=1 \
 DYNAMIC_OBS_MODE=scene \
-DYNAMIC_OBS_SCENE_CONFIG=~/ws_xtd2/scripts/scenes/medium_multi_crossing.yaml \
+DYNAMIC_OBS_SCENE_CONFIG=~/ws_xtd2/scripts/scenes/difficulty_benchmark/medium_multi_crossing.yaml \
 DYNAMIC_OBS_SCENE_CLOCK_MODE=auto_takeoff \
 DYNAMIC_OBS_SCENE_START_NUM_DRONES=5 \
 DYNAMIC_OBS_SCENE_START_Z_THRESHOLD=-2.0 \
@@ -536,7 +536,7 @@ cp ~/ws_xtd2/logs/local_orca.log \
 cp ~/ws_xtd2/logs/state_exchange.log \
   ~/ws_xtd2/logs/scenario_demo_gazebo_easy_check/ 2>/dev/null || true
 
-cp ~/ws_xtd2/scripts/scenes/easy_crossing.yaml \
+cp ~/ws_xtd2/scripts/scenes/difficulty_benchmark/easy_crossing.yaml \
   ~/ws_xtd2/logs/scenario_demo_gazebo_easy_check/
 ```
 
@@ -544,7 +544,7 @@ cp ~/ws_xtd2/scripts/scenes/easy_crossing.yaml \
 
 ```bash
 python3 ~/ws_xtd2/scripts/scenario_demo.py \
-  --scene ~/ws_xtd2/scripts/scenes/easy_crossing.yaml \
+  --scene ~/ws_xtd2/scripts/scenes/difficulty_benchmark/easy_crossing.yaml \
   --output-dir ~/ws_xtd2/logs/scenario_demo_gazebo_easy_check/offline_reference
 ```
 
@@ -851,7 +851,7 @@ hard:   D_formation >= 3.5
 
 ```bash
 python3 difficulty_analysis/formation_survivability_experiment.py \
-  --suite scenes/benchmark_v1.yaml \
+  --suite scenes/difficulty_benchmark/benchmark_v1.yaml \
   --output-dir /tmp/formation_survivability_suite
 ```
 
@@ -964,7 +964,7 @@ D_formation_bar.png
 ```bash
 python3 dynamic_obstacle_source.py \
   --mode scene \
-  --scene-config scenes/easy_crossing.yaml \
+  --scene-config scenes/difficulty_benchmark/easy_crossing.yaml \
   --trajectory-record-path results/easy_01/obstacle_trajectory.csv \
   --trajectory-record-dt 0.1
 ```

@@ -102,6 +102,7 @@ class WallObstacle(Obstacle):
     thickness: float
     height: float
     segment_spacing: float = 0.6
+    orientation: str = 'y'
 
     @property
     def radius(self):
@@ -115,20 +116,26 @@ class WallObstacle(Obstacle):
         local_z = self.z - float(base_z)
         name = _safe_name(self.name, f'wall_{index + 1}')
         ambient = '0.55 0.55 0.55 1' if index == 0 else '0.50 0.50 0.50 1'
+        if str(self.orientation).strip().lower() in ('x', 'x_axis', 'east_west'):
+            size_x = self.length
+            size_y = self.thickness
+        else:
+            size_x = self.thickness
+            size_y = self.length
         return f"""
     <link name="{name}_link">
       <pose>{local_x:.3f} {local_y:.3f} {local_z:.3f} 0 0 0</pose>
       <collision name="{name}_collision">
         <geometry>
           <box>
-            <size>{self.thickness:.3f} {self.length:.3f} {self.height:.3f}</size>
+            <size>{size_x:.3f} {size_y:.3f} {self.height:.3f}</size>
           </box>
         </geometry>
       </collision>
       <visual name="{name}_visual">
         <geometry>
           <box>
-            <size>{self.thickness:.3f} {self.length:.3f} {self.height:.3f}</size>
+            <size>{size_x:.3f} {size_y:.3f} {self.height:.3f}</size>
           </box>
         </geometry>
         <material>
@@ -143,12 +150,14 @@ class WallObstacle(Obstacle):
         segment_count = max(3, int(self.length / self.segment_spacing) + 1)
         half_span = self.length * 0.5
         step = self.length / max(1, segment_count - 1)
+        along_x = str(self.orientation).strip().lower() in ('x', 'x_axis', 'east_west')
         for idx in range(segment_count):
+            offset = -half_span + step * idx
             points.append(
                 {
                     'obs_id': int(start_obs_id) + idx,
-                    'x': self.x,
-                    'y': self.y - half_span + step * idx,
+                    'x': self.x + offset if along_x else self.x,
+                    'y': self.y if along_x else self.y + offset,
                     'z': 0.0,
                     'vx': 0.0,
                     'vy': 0.0,
@@ -159,13 +168,19 @@ class WallObstacle(Obstacle):
         return points
 
     def contains_xy(self, x, y, inflation=0.0):
-        half_x = max(0.05, self.thickness * 0.5) + float(inflation)
-        half_y = max(0.5, self.length * 0.5) + float(inflation)
+        along_x = str(self.orientation).strip().lower() in ('x', 'x_axis', 'east_west')
+        half_x = max(0.5, self.length * 0.5) if along_x else max(0.05, self.thickness * 0.5)
+        half_y = max(0.05, self.thickness * 0.5) if along_x else max(0.5, self.length * 0.5)
+        half_x += float(inflation)
+        half_y += float(inflation)
         return abs(float(x) - self.x) <= half_x and abs(float(y) - self.y) <= half_y
 
     def bounds_xy(self, inflation=0.0):
-        half_x = max(0.05, self.thickness * 0.5) + float(inflation)
-        half_y = max(0.5, self.length * 0.5) + float(inflation)
+        along_x = str(self.orientation).strip().lower() in ('x', 'x_axis', 'east_west')
+        half_x = max(0.5, self.length * 0.5) if along_x else max(0.05, self.thickness * 0.5)
+        half_y = max(0.05, self.thickness * 0.5) if along_x else max(0.5, self.length * 0.5)
+        half_x += float(inflation)
+        half_y += float(inflation)
         return self.x - half_x, self.x + half_x, self.y - half_y, self.y + half_y
 
     def planner_rect(self):
@@ -215,6 +230,7 @@ def normalized_walls(config):
                 'thickness': max(0.1, _finite_float(wall.get('thickness', 0.25), 0.25)),
                 'height': max(0.5, _finite_float(wall.get('height', 1.8), 1.8)),
                 'segment_spacing': max(0.2, _finite_float(wall.get('segment_spacing', 0.6), 0.6)),
+                'orientation': str(wall.get('orientation', 'y')),
             }
         )
     return walls or normalized_walls(DEFAULT_CONFIG)

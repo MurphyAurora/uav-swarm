@@ -1,0 +1,135 @@
+# SANDO forest3 adapted scene for XTD2/PX4.
+# The SDF world provides physical/visual walls; this file publishes the
+# matching algorithm-visible boundary and dynamic obstacle states.
+scene:
+  name: sando_forest3_walls_dynamic
+  version: 1
+  seed: 303
+  level: medium
+  duration: 120.0
+  dt: 0.5
+
+world:
+  frame: NED
+  bounds:
+    x: [-4.0, 42.0]
+    y: [-18.0, 34.0]
+    z: [-5.0, 0.0]
+
+swarm:
+  num_drones: 5
+  leader_id: 1
+  formation: spawned_line
+  y_spacing: 1.8
+
+coordination:
+  architecture: engineering_semi_distributed
+  local_controller_per_uav: true
+  state_exchange_topic: /xtdrone2/swarm/state_exchange
+  local_view_topic_template: /xtdrone2/x500_{id}/local_view
+  estimator:
+    name: virtual_reference_consensus
+    enabled: true
+    source: neighbor_swarm_state
+    role: Estimate the virtual formation reference from shared UAV states.
+  virtual_leader:
+    enabled: true
+    shared_velocity: true
+    lag_guard: true
+    lag_limit: 2.2
+  safety:
+    unified_avoidance_scope: all
+    rear_speed_constraint: true
+    world_frame_avoidance: true
+  metrics:
+    log_consensus_delta: true
+    log_local_view_health: true
+
+target:
+  x: 19.0
+  y: 30.0
+  z: -3.0
+  axis: x
+  y_spacing: 1.8
+
+start:
+  x: 19.0
+  y: -14.0
+  z: -2.0
+  axis: x
+  y_spacing: 1.8
+  notes: Launch with spawned_formation_axis=x, dynamic_obs_wall_x=27.0, start_wall_clearance=8.0 and dynamic_obs_wall_y=-14.0 so drones line up along NED x near the short edge y=-14.0.
+
+static_obstacles:
+  walls:
+    - name: boundary_south
+      x: -4.0
+      y: 8.0
+      z: 0.9
+      length: 52.0
+      thickness: 0.35
+      height: 4.8
+      segment_spacing: 1.5
+      orientation: y
+    - name: boundary_north
+      x: 42.0
+      y: 8.0
+      z: 0.9
+      length: 52.0
+      thickness: 0.35
+      height: 4.8
+      segment_spacing: 1.5
+      orientation: y
+    - name: boundary_west
+      x: 19.0
+      y: -18.0
+      z: 0.9
+      length: 46.0
+      thickness: 0.35
+      height: 4.8
+      segment_spacing: 1.5
+      orientation: x
+    - name: boundary_east
+      x: 19.0
+      y: 34.0
+      z: 0.9
+      length: 46.0
+      thickness: 0.35
+      height: 4.8
+      segment_spacing: 1.5
+      orientation: x
+
+dynamic_obstacles: []
+
+sdf_structures:
+  path: $HOME/ws_xtd2/scripts/worlds/sando_adapted/sando_forest3_walls_xtd2.sdf
+  static_markers:
+    enable: 1
+    include_prefixes:
+      - struct_pillar
+      - outer_boundary
+  dynamic_obstacles:
+    enable: 1
+    max_count: 35
+    selection: evenly_spaced
+    include_prefixes:
+      - struct_wall
+    exclude_names:
+      - struct_wall_142
+    exclude_prefixes:
+      - outer_boundary
+    trajectory:
+      type: sando_trefoil
+      scale: [4.0, 3.2, 2.5]
+      slower: 1.7
+      phase: 0.0
+      phase_step: 0.47
+      start_time: 2.0
+
+difficulty:
+  level: medium
+  expected_crossing_events: 20
+  obstacle_count: 35
+  max_obstacle_speed: 0.9
+  corridor_width_hint: 14.0
+  notes: SANDO forest3-with-walls adapted world. Static pillars/boundaries are shown in RViz; struct_wall pillow blocks are published as dynamic obstacles from SDF.

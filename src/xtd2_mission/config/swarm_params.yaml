@@ -5,6 +5,8 @@
 # ===== Core =====
 num_drones: 5
 gz_world: "default"
+gz_gui: true
+px4_sim_model: "gz_x500"
 start_port: 8888
 px4_sys_id_base: 2
 # px4_dir is auto-detected from workspace; override if needed:
@@ -14,6 +16,8 @@ ws_root: ""  # auto-detected
 # ===== Swarm mode =====
 swarm_mode: "hybrid"
 avoid_scope: "leader"
+# Control source for final avoidance velocity: primitive, orca, fused, none.
+avoid_source: "primitive"
 auto_arm_offboard: true
 
 # ===== Warmup / takeoff =====
@@ -41,6 +45,7 @@ use_heading_offsets: false
 lf_state_timeout: 4.0
 use_virtual_leader: false
 use_spawned_formation: true
+spawned_formation_axis: "y"
 virtual_lag_limit: 6.0
 
 # ===== Obstacles =====
@@ -58,7 +63,7 @@ dynamic_obs_wall_height: 4.8
 dynamic_obs_wall_segment_spacing: 0.6
 dynamic_obs_target_x: 30.0
 dynamic_obs_target_y_base: 26.0
-dynamic_obs_target_y_spacing: 1.8
+dynamic_obs_target_y_spacing: 2.6
 second_wall_enable: true
 second_wall_dx: 15.0
 second_wall_dy: 109.0
@@ -74,7 +79,88 @@ orca_gain: 0.45
 orca_obs_gain: 0.85
 orca_obs_influence_radius: 2.2
 orca_enable_after_z: -0.6
-orca_use_world_state: false
+orca_use_world_state: true
+
+# ===== Tracking-based obstacle separation =====
+obstacle_tracker_enable: true
+tracker_max_match_distance: 3.5
+tracker_dynamic_speed_threshold: 0.15
+tracker_static_speed_threshold: 0.05
+tracker_dynamic_confirm_frames: 3
+tracker_static_confirm_frames: 6
+tracker_max_missed_frames: 5
+tracker_velocity_alpha: 0.45
+tracker_prediction_horizon: 4.0
+tracker_prediction_dt: 0.5
+tracker_prediction_max_speed: 3.0
+
+# ===== Predicted trajectory filtering =====
+trajectory_filter_enable: true
+trajectory_filter_min_confidence: 0.0
+trajectory_filter_min_speed: 0.10
+trajectory_filter_min_points: 2
+trajectory_filter_max_age: 1.0
+trajectory_filter_horizon: 4.0
+trajectory_filter_min_x: -40.0
+trajectory_filter_max_x: 40.0
+trajectory_filter_min_y: -30.0
+trajectory_filter_max_y: 40.0
+trajectory_filter_min_z: -5.0
+trajectory_filter_max_z: 6.0
+trajectory_filter_merge_distance: 0.8
+trajectory_filter_relevance_radius: 10.0
+trajectory_filter_state_timeout: 2.0
+
+# ===== Spatiotemporal collision risk monitor =====
+collision_monitor_enable: true
+collision_horizon: 3.0
+collision_drone_radius: 0.35
+collision_safety_margin: 0.35
+collision_warning_margin: 1.5
+collision_state_timeout: 2.0
+collision_max_reports: 30
+
+# ===== Lightweight motion primitive selector =====
+motion_primitive_enable: true
+primitive_horizon: 3.5
+primitive_dt: 0.5
+primitive_cruise_speed: 0.42
+primitive_lateral_speed: 0.32
+primitive_vertical_speed: 0.20
+primitive_max_speed: 0.65
+primitive_drone_radius: 0.35
+primitive_safety_margin: 1.0
+primitive_risk_radius: 8.0
+primitive_state_timeout: 2.0
+primitive_target_weight: 0.6
+primitive_risk_weight: 28.0
+primitive_smooth_weight: 0.8
+primitive_publish_shadow_cmd: true
+primitive_emergency_clearance: 1.2
+primitive_projection_alpha: 1.4
+primitive_projection_iterations: 3
+primitive_projection_max_constraints: 18
+primitive_escape_clearance: 0.6
+primitive_hard_clearance: 0.25
+primitive_static_hard_clearance: 0.75
+primitive_static_emergency_clearance: 1.4
+
+# ===== Per-UAV LiDAR TTC near-field safety filter =====
+lidar_ttc_enable: true
+lidar_ttc_warning_ttc: 2.5
+lidar_ttc_emergency_ttc: 1.0
+lidar_ttc_min_speed: 0.08
+lidar_ttc_max_points: 2500
+lidar_ttc_max_range: 6.0
+lidar_ttc_min_range: 0.25
+lidar_ttc_vertical_limit: 1.8
+lidar_ttc_cone_angle_deg: 42.0
+lidar_ttc_safety_radius: 0.70
+lidar_ttc_self_filter_radius: 0.65
+lidar_ttc_projection_gain: 1.0
+lidar_ttc_brake_gain: 0.15
+lidar_ttc_back_speed: 0.35
+lidar_ttc_climb_speed: 0.0
 
 # ===== Path planner =====
 path_planner_mode: "astar"
