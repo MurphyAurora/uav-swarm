@@ -151,6 +151,7 @@ class DynamicObstacleSource(Node):
         self.declare_parameter('trajectory_record_path', '')
         self.declare_parameter('trajectory_record_dt', 0.0)
         self.declare_parameter('scene_clock_mode', 'wall_time')
+        self.declare_parameter('scene_freeze_dynamics', 0)
         self.declare_parameter('scene_start_num_drones', 0)
         self.declare_parameter('scene_start_z_threshold', -2.0)
         self.declare_parameter('scene_start_stable_sec', 2.0)
@@ -1587,7 +1588,10 @@ class DynamicObstacleSource(Node):
 
         if self.mode == 'scene':
             self._log_scene_clock_config_once()
-            t = self._scene_time(wall_t)
+            if int(self.get_parameter('scene_freeze_dynamics').value) != 0:
+                t = 0.0
+            else:
+                t = self._scene_time(wall_t)
             payload = self._build_scene_payload(t)
             dynamic_items = [
                 obs for obs in payload.get('obstacles', [])
@@ -1794,6 +1798,7 @@ def main():
     parser.add_argument('--trajectory-record-path', type=str, default='')
     parser.add_argument('--trajectory-record-dt', type=float, default=0.0)
     parser.add_argument('--scene-clock-mode', type=str, default='wall_time', choices=['wall_time', 'auto_takeoff', 'takeoff'])
+    parser.add_argument('--scene-freeze-dynamics', type=int, default=0)
     parser.add_argument('--scene-start-num-drones', type=int, default=0)
     parser.add_argument('--scene-start-z-threshold', type=float, default=-2.0)
     parser.add_argument('--scene-start-stable-sec', type=float, default=2.0)
@@ -1839,6 +1844,7 @@ def main():
         Parameter('trajectory_record_path', Parameter.Type.STRING, str(args.trajectory_record_path)),
         Parameter('trajectory_record_dt', Parameter.Type.DOUBLE, float(args.trajectory_record_dt)),
         Parameter('scene_clock_mode', Parameter.Type.STRING, str(args.scene_clock_mode)),
+        Parameter('scene_freeze_dynamics', Parameter.Type.INTEGER, int(args.scene_freeze_dynamics)),
         Parameter('scene_start_num_drones', Parameter.Type.INTEGER, int(args.scene_start_num_drones)),
         Parameter('scene_start_z_threshold', Parameter.Type.DOUBLE, float(args.scene_start_z_threshold)),
         Parameter('scene_start_stable_sec', Parameter.Type.DOUBLE, float(args.scene_start_stable_sec)),

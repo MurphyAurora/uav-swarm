@@ -153,6 +153,7 @@ lidar_ttc_min_speed: 0.08
 lidar_ttc_max_points: 2500
 lidar_ttc_max_range: 6.0
 lidar_ttc_min_range: 0.25
+lidar_ttc_min_z: -0.15
 lidar_ttc_vertical_limit: 1.8
 lidar_ttc_cone_angle_deg: 42.0
 lidar_ttc_safety_radius: 0.70

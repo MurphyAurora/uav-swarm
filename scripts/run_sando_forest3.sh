@@ -10,6 +10,8 @@ set -euo pipefail
 MODE="${1:-normal}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DYNAMIC_OBS_ENABLE="${DYNAMIC_OBS_ENABLE:-1}"
+DYNAMIC_OBS_FREEZE="${DYNAMIC_OBS_FREEZE:-1}"
 
 case "${MODE}" in
   normal)
@@ -40,6 +42,8 @@ source install/setup.bash
 set -u
 
 echo "[INFO] mode=${MODE}, px4_sim_model=${PX4_SIM_MODEL}"
+echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
+echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"
 if [ "${MODE}" = "lidar3d" ]; then
   echo "[INFO] After drones are spawned, open another terminal and run:"
   echo "       cd ${WS_ROOT} && ./scripts/bridge_x500_lidar_3d.sh 5"
@@ -50,8 +54,9 @@ exec ros2 launch xtd2_mission swarm_simulation_launch.py \
   gz_gui:=0 \
   px4_sim_model:="${PX4_SIM_MODEL}" \
   px4_use_versioned_local_position:=1 \
-  dynamic_obs_enable:=1 \
+  dynamic_obs_enable:="${DYNAMIC_OBS_ENABLE}" \
   dynamic_obs_mode:=scene \
+  scene_freeze_dynamics:="${DYNAMIC_OBS_FREEZE}" \
   dynamic_obs_visualize_gz:=0 \
   spawned_formation_axis:=x \
   scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml" \

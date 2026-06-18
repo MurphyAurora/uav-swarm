@@ -817,6 +817,63 @@ class FixedPointMission(Node):
             self.get_logger().info('目标一致性检查通过：代码目标与 Gazebo target marker 一致')
         return aligned, any_changed
 
+    def align_spawned_targets_to_markers(
+        self,
+        target_stage,
+        mission_start_x,
+        spawn_base_y,
+        spacing,
+        pos_tol=0.25,
+    ):
+        if not self._target_markers_fresh(max_age_sec=2.0):
+            self.get_logger().warn('Gazebo target markers unavailable/fallback: keep spawned local targets unchanged')
+            return target_stage, False
+
+        markers = {
+            int(drone_id): tuple(value)
+            for drone_id, value in self.latest_target_markers.items()
+            if 1 <= int(drone_id) <= self.num_drones
+        }
+        if not markers:
+            return target_stage, False
+
+        xs = [float(value[0]) for value in markers.values()]
+        ys = [float(value[1]) for value in markers.values()]
+        axis = 'x' if (max(xs) - min(xs)) >= (max(ys) - min(ys)) else 'y'
+        aligned = dict(target_stage)
+        any_changed = False
+        for drone_id in range(1, self.num_drones + 1):
+            gz_target = markers.get(drone_id)
+            code_target = target_stage.get(drone_id)
+            if gz_target is None or code_target is None:
+                continue
+            offset = (int(drone_id) - int(self.leader_id)) * float(spacing)
+            spawn_x = float(mission_start_x) + (offset if axis == 'x' else 0.0)
+            spawn_y = float(spawn_base_y) + (offset if axis == 'y' else 0.0)
+            local_target = (
+                float(gz_target[0]) - spawn_x,
+                float(gz_target[1]) - spawn_y,
+                float(gz_target[2]),
+            )
+            diff = self._distance_xyz(code_target, local_target)
+            self.get_logger().info(
+                f'spawned目标对齐 x500_{drone_id}: '
+                f'axis={axis}, world_marker=({gz_target[0]:.2f},{gz_target[1]:.2f},{gz_target[2]:.2f}), '
+                f'spawn=({spawn_x:.2f},{spawn_y:.2f}), '
+                f'local_marker=({local_target[0]:.2f},{local_target[1]:.2f},{local_target[2]:.2f}), '
+                f'code=({code_target[0]:.2f},{code_target[1]:.2f},{code_target[2]:.2f}), '
+                f'diff={diff:.2f}'
+            )
+            if diff > pos_tol:
+                aligned[drone_id] = local_target
+                any_changed = True
+
+        if any_changed:
+            self.get_logger().warn('spawned-formation: mission local targets aligned to RViz/world target markers')
+        else:
+            self.get_logger().info('spawned-formation: mission local targets match RViz/world target markers')
+        return aligned, any_changed
+
     def publish_stage(
         self,
         stage_name,
@@ -1611,7 +1668,13 @@ def main():
     if not got_target_markers:
         node.get_logger().warn('未在3秒内接收到 Gazebo target markers，将使用代码内目标点继续任务')
     if use_spawned_formation:
-        node.get_logger().info('spawned-formation mode: skip Gazebo marker alignment because mission targets are local-frame targets')
+        target_stage, _ = node.align_spawned_targets_to_markers(
+            target_stage,
+            mission_start_x=mission_start_x,
+            spawn_base_y=world_wall_y,
+            spacing=y_spacing,
+            pos_tol=0.25,
+        )
     else:
         target_stage, _ = node.compare_and_align_targets(target_stage, pos_tol=0.25)
     node.get_logger().info('mission-target-table: begin')

@@ -82,6 +82,7 @@ def generate_launch_description():
         'arm_offboard_max_retries', 'arm_retry_sleep', 'offboard_retry_sleep',
         'vehicle_status_timeout_sec', 'auto_arm_offboard', 'use_spawned_formation',
         'dynamic_obs_enable', 'dynamic_obs_mode', 'obstacle_config', 'scene_config',
+        'scene_freeze_dynamics',
         'dynamic_obs_visualize_gz', 'dynamic_obs_wall_z', 'dynamic_obs_wall_length',
         'dynamic_obs_wall_thickness', 'dynamic_obs_wall_height',
         'dynamic_obs_wall_segment_spacing', 'dynamic_obs_target_x',
@@ -119,7 +120,7 @@ def generate_launch_description():
         'primitive_static_emergency_clearance',
         'lidar_ttc_enable', 'lidar_ttc_warning_ttc', 'lidar_ttc_emergency_ttc',
         'lidar_ttc_min_speed', 'lidar_ttc_max_points', 'lidar_ttc_max_range',
-        'lidar_ttc_min_range', 'lidar_ttc_vertical_limit', 'lidar_ttc_cone_angle_deg',
+        'lidar_ttc_min_range', 'lidar_ttc_min_z', 'lidar_ttc_vertical_limit', 'lidar_ttc_cone_angle_deg',
         'lidar_ttc_safety_radius', 'lidar_ttc_self_filter_radius', 'lidar_ttc_projection_gain',
         'lidar_ttc_brake_gain', 'lidar_ttc_back_speed', 'lidar_ttc_climb_speed',
         'path_planner_mode', 'astar_grid_resolution', 'astar_smooth_enable',
@@ -418,6 +419,7 @@ def _build_mission_nodes(lc, num_drones):
                 f'--target-ball-base-y {lc("dynamic_obs_target_y_base")} '
                 f'--target-ball-target-z {lc("mission_z")} '
                 f'--target-ball-y-spacing {target_y_spacing} '
+                f'--scene-freeze-dynamics {lc("scene_freeze_dynamics")} '
                 f'--ros-args -r __node:=dynamic_obstacle_source'
             )
             actions.append(ExecuteProcess(
@@ -553,6 +555,7 @@ def _build_mission_nodes(lc, num_drones):
                 f'--max-points {lc("lidar_ttc_max_points")} '
                 f'--max-range {lc("lidar_ttc_max_range")} '
                 f'--min-range {lc("lidar_ttc_min_range")} '
+                f'--min-z {lc("lidar_ttc_min_z")} '
                 f'--vertical-limit {lc("lidar_ttc_vertical_limit")} '
                 f'--cone-angle-deg {lc("lidar_ttc_cone_angle_deg")} '
                 f'--safety-radius {lc("lidar_ttc_safety_radius")} '

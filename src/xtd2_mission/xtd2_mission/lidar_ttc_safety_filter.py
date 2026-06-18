@@ -39,6 +39,7 @@ class LidarTtcSafetyFilter(Node):
         max_points=2500,
         max_range=6.0,
         min_range=0.18,
+        min_z=-0.15,
         vertical_limit=1.8,
         cone_angle_deg=42.0,
         safety_radius=0.55,
@@ -62,6 +63,7 @@ class LidarTtcSafetyFilter(Node):
         self.max_points = int(max_points)
         self.max_range = float(max_range)
         self.min_range = float(min_range)
+        self.min_z = float(min_z)
         self.vertical_limit = float(vertical_limit)
         self.cone_cos = math.cos(math.radians(float(cone_angle_deg)))
         self.safety_radius = float(safety_radius)
@@ -104,6 +106,7 @@ class LidarTtcSafetyFilter(Node):
             'lidar_ttc_safety_filter started: '
             f'num={self.num_drones}, warning_ttc={self.warning_ttc:.2f}, '
             f'emergency_ttc={self.emergency_ttc:.2f}, max_range={self.max_range:.2f}, '
+            f'min_z={self.min_z:.2f}, vertical_limit={self.vertical_limit:.2f}, '
             f'cone_cos={self.cone_cos:.2f}, safety_radius={self.safety_radius:.2f}, '
             f'self_filter_radius={self.self_filter_radius:.2f}, '
             f'input={self.input_topic_template}, output={self.output_topic_template}, '
@@ -163,6 +166,9 @@ class LidarTtcSafetyFilter(Node):
                     f'ttc={worst["ttc"]:.2f}, dist={worst["distance"]:.2f}, '
                     f'closing={worst["closing_speed"]:.2f}, '
                     f'point=({worst["px"]:.2f},{worst["py"]:.2f},{worst["pz"]:.2f}), '
+                    f'cmd_angle={worst["cmd_angle_deg"]:.1f}deg, '
+                    f'obs_angle={worst["obs_angle_deg"]:.1f}deg, '
+                    f'align={worst["alignment"]:.2f}, '
                     f'points={worst["points_used"]}'
                 )
             else:
@@ -183,6 +189,7 @@ class LidarTtcSafetyFilter(Node):
 
         dir_x = bvx / speed_xy
         dir_y = bvy / speed_xy
+        cmd_angle_deg = math.degrees(math.atan2(dir_y, dir_x))
         worst = None
         used = 0
         for idx, point in enumerate(point_cloud2.read_points(cloud_msg, field_names=('x', 'y', 'z'), skip_nans=True)):
@@ -194,7 +201,7 @@ class LidarTtcSafetyFilter(Node):
             horizontal = math.hypot(px, py)
             if horizontal < self.min_range or horizontal < self.self_filter_radius or horizontal > self.max_range:
                 continue
-            if abs(pz) > self.vertical_limit:
+            if pz < self.min_z or pz > self.vertical_limit:
                 continue
             ux = px / max(horizontal, 1e-6)
             uy = py / max(horizontal, 1e-6)
@@ -219,6 +226,9 @@ class LidarTtcSafetyFilter(Node):
                     'px': px,
                     'py': py,
                     'pz': pz,
+                    'cmd_angle_deg': cmd_angle_deg,
+                    'obs_angle_deg': math.degrees(math.atan2(py, px)),
+                    'alignment': alignment,
                 }
 
         if worst is None:
@@ -259,6 +269,9 @@ class LidarTtcSafetyFilter(Node):
             worst['px'],
             worst['py'],
             worst['pz'],
+            worst['cmd_angle_deg'],
+            worst['obs_angle_deg'],
+            worst['alignment'],
         )
 
     def _publish(self, drone_id, vx, vy, vz):
@@ -281,7 +294,23 @@ class LidarTtcSafetyFilter(Node):
         return c * float(vx) - s * float(vy), s * float(vx) + c * float(vy)
 
     @staticmethod
-    def _result(drone_id, mode, vx, vy, vz, ttc, distance, closing_speed, points_used, px=999.0, py=999.0, pz=999.0):
+    def _result(
+        drone_id,
+        mode,
+        vx,
+        vy,
+        vz,
+        ttc,
+        distance,
+        closing_speed,
+        points_used,
+        px=999.0,
+        py=999.0,
+        pz=999.0,
+        cmd_angle_deg=999.0,
+        obs_angle_deg=999.0,
+        alignment=0.0,
+    ):
         return {
             'drone_id': int(drone_id),
             'mode': str(mode),
@@ -295,6 +324,9 @@ class LidarTtcSafetyFilter(Node):
             'px': float(px),
             'py': float(py),
             'pz': float(pz),
+            'cmd_angle_deg': float(cmd_angle_deg),
+            'obs_angle_deg': float(obs_angle_deg),
+            'alignment': float(alignment),
         }
 
 
@@ -311,6 +343,7 @@ def main():
     parser.add_argument('--max-points', type=int, default=2500)
     parser.add_argument('--max-range', type=float, default=6.0)
     parser.add_argument('--min-range', type=float, default=0.18)
+    parser.add_argument('--min-z', type=float, default=-0.15)
     parser.add_argument('--vertical-limit', type=float, default=1.8)
     parser.add_argument('--cone-angle-deg', type=float, default=42.0)
     parser.add_argument('--safety-radius', type=float, default=0.55)
@@ -336,6 +369,7 @@ def main():
         max_points=args.max_points,
         max_range=args.max_range,
         min_range=args.min_range,
+        min_z=args.min_z,
         vertical_limit=args.vertical_limit,
         cone_angle_deg=args.cone_angle_deg,
         safety_radius=args.safety_radius,
