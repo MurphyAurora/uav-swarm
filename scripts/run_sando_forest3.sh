@@ -15,7 +15,9 @@ DYNAMIC_OBS_FREEZE="${DYNAMIC_OBS_FREEZE:-1}"
 NUM_DRONES="${NUM_DRONES:-1}"
 LEADER_ID="${LEADER_ID:-1}"
 LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
+STOP_ON_STAGE_TIMEOUT="${STOP_ON_STAGE_TIMEOUT:-1}"
 export LOCAL_PLANNER_MODE
+export STOP_ON_STAGE_TIMEOUT
 
 case "${MODE}" in
   normal)
@@ -49,6 +51,7 @@ echo "[INFO] mode=${MODE}, px4_sim_model=${PX4_SIM_MODEL}"
 echo "[INFO] num_drones=${NUM_DRONES}"
 echo "[INFO] leader_id=${LEADER_ID}"
 echo "[INFO] local_planner_mode=${LOCAL_PLANNER_MODE}"
+echo "[INFO] stop_on_stage_timeout=${STOP_ON_STAGE_TIMEOUT}"
 echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
 echo "[INFO] default keeps scene obstacles published and freezes moving obstacles for static-column validation"
 echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"

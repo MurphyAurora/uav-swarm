@@ -294,7 +294,7 @@ class FixedPointMission(Node):
             px, py = self._world_to_body_xy(wx_p, wy_p, planner_heading)
             if px < -0.5 or px > horizon or abs(py) > half_width or pz < -1.8 or pz > 2.2:
                 continue
-            if math.hypot(px, py) < 0.9:
+            if math.hypot(px, py) < 0.65:
                 continue
             used_points += 1
             horizontal = math.hypot(px, py)
@@ -347,7 +347,7 @@ class FixedPointMission(Node):
                 best = min(best, math.hypot(dx, dy))
             return best
 
-        def choose_path_subgoal(path_cells, target_lookahead=2.4):
+        def choose_path_subgoal(path_cells, target_lookahead=1.4):
             chosen = path_cells[-1]
             for cell in path_cells[1:]:
                 px, py = body_from_cell(cell)
@@ -357,6 +357,11 @@ class FixedPointMission(Node):
                 if math.hypot(px, py) >= target_lookahead:
                     break
             return chosen
+
+        def target_corridor_clear():
+            check_dist = min(3.0, goal_dist)
+            check_y = gy_body / max(target_dist, 1e-6) * check_dist
+            return segment_clear_to(check_dist, check_y)
 
         def store_subgoal(px, py, label, stamp):
             wx, wy = self._body_to_world_xy(px, py, planner_heading)
@@ -373,6 +378,39 @@ class FixedPointMission(Node):
         now_t = time.time()
         last_debug = self._last_local_planner_debug_t.get(int(drone_id), 0.0)
         should_debug = now_t - last_debug > 1.0
+        # Do not invoke A* just because far/side LiDAR points exist. If the
+        # target-facing corridor is clear and no near-field obstacle is present,
+        # keep tracking the target reference directly.
+        if target_corridor_clear() and (nearest is None or nearest[0] > 1.6):
+            self._local_planner_subgoals.pop(int(drone_id), None)
+            self._local_planner_side_latch.pop(int(drone_id), None)
+            if should_debug:
+                self._last_local_planner_debug_t[int(drone_id)] = now_t
+                near_text = 'none'
+                if nearest is not None:
+                    near_text = f'd={nearest[0]:.2f}, p=({nearest[1]:.2f},{nearest[2]:.2f},{nearest[3]:.2f})'
+                self.get_logger().info(
+                    f'local risk astar bypass: x500_{drone_id}, target corridor clear, '
+                    f'used_points={used_points}, blocked_cells={len(blocked)}, '
+                    f'target_plan=({gx_body:.2f},{gy_body:.2f}), nearest={near_text}'
+                )
+            return ref_x, ref_y, ref_z, 'risk_astar_corridor_clear'
+
+        if nearest is not None and nearest[0] < 1.05:
+            near_d, near_x, near_y, _ = nearest
+            away_x = -near_x / max(near_d, 1e-6)
+            away_y = -near_y / max(near_d, 1e-6)
+            lx = 1.0 * away_x
+            ly = 1.0 * away_y
+            if should_debug:
+                self._last_local_planner_debug_t[int(drone_id)] = now_t
+                self.get_logger().info(
+                    f'local risk astar escape: x500_{drone_id}, nearest={near_d:.2f}, '
+                    f'away_body=({lx:.2f},{ly:.2f}), used_points={used_points}, '
+                    f'blocked_cells={len(blocked)}'
+                )
+            return store_subgoal(lx, ly, 'risk_astar_near_escape', now_t)
+
         cached = self._local_planner_subgoals.get(int(drone_id))
         if cached is not None and now_t - float(cached.get('stamp', 0.0)) <= 2.5:
             sg_x = float(cached.get('x', float(st['x'])))
@@ -431,7 +469,7 @@ class FixedPointMission(Node):
                 step = math.hypot(dx, dy)
                 center_bias = 0.02 * abs(nxt[1] - start[1])
                 clear = clearance_cells(nxt)
-                clearance_penalty = max(0.0, 4.0 - clear) * 0.22
+                clearance_penalty = max(0.0, 5.0 - clear) * 0.65
                 new_cost = g_cost + step + center_bias + clearance_penalty
                 if new_cost < cost.get(nxt, 1e9):
                     cost[nxt] = new_cost
@@ -457,12 +495,15 @@ class FixedPointMission(Node):
                     f'sectors={sector_min}, nearest={near_text}'
                 )
             escape_candidates = [
-                ('escape_left', 0.2, 2.0),
-                ('escape_right', 0.2, -2.0),
-                ('escape_back_left', -1.0, 1.3),
-                ('escape_back_right', -1.0, -1.3),
-                ('escape_back', -1.4, 0.0),
+                ('escape_back', -1.2, 0.0),
+                ('escape_back_left', -0.8, 0.8),
+                ('escape_back_right', -0.8, -0.8),
             ]
+            if nearest is not None and nearest[0] > 1.6:
+                escape_candidates.extend([
+                    ('escape_left', 0.2, 1.2),
+                    ('escape_right', 0.2, -1.2),
+                ])
             best_escape = None
             for label, lx, ly in escape_candidates:
                 if abs(ly) > half_width or not segment_clear_to(lx, ly):
@@ -492,8 +533,8 @@ class FixedPointMission(Node):
                 lx, ly = -1.2, 0.0
                 label = 'risk_astar_retreat'
             else:
-                lx = 0.4
-                ly = 2.4 if side == 'left' else -2.4
+                lx = 0.8
+                ly = 1.2 if side == 'left' else -1.2
                 label = f'risk_astar_detour_{side}'
             if should_debug:
                 self._last_local_planner_debug_t[int(drone_id)] = now_debug
@@ -537,15 +578,17 @@ class FixedPointMission(Node):
     def _final_lidar_safety_filter(self, drone_id, vx, vy, vz):
         now_t = time.time()
         latched_until = self.final_safety_until.get(int(drone_id), 0.0)
-        if now_t < latched_until:
-            safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))
-            return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'
-
         cloud = self.latest_lidar_clouds.get(int(drone_id))
         st = self.latest_states.get(int(drone_id))
         if cloud is None or st is None:
+            if now_t < latched_until:
+                safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))
+                return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'
             return vx, vy, vz, 'no_lidar'
         if time.time() - float(cloud.get('stamp', 0.0)) > 0.8:
+            if now_t < latched_until:
+                safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))
+                return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'
             return vx, vy, vz, 'stale_lidar'
 
         heading = self._finite_float(st.get('heading', 0.0))
@@ -562,12 +605,13 @@ class FixedPointMission(Node):
         # Only use radial hard-stop for points that are almost touching the UAV.
         # Directional danger is handled by the corridor/TTC checks below; otherwise
         # side/back points make the drone brake and wander even when the path ahead is free.
-        hard_stop_distance = 0.75
+        hard_stop_distance = 1.25
         corridor_stop_distance = 2.60
         corridor_half_width = 1.20
         cone_cos = math.cos(math.radians(60.0))
         worst = None
         nearest = None
+        nearest_point = None
         corridor_hit = None
         for idx, point in enumerate(point_cloud2.read_points(cloud['msg'], field_names=('x', 'y', 'z'), skip_nans=True)):
             if idx >= 2500:
@@ -582,6 +626,7 @@ class FixedPointMission(Node):
                 continue
             if nearest is None or horizontal < nearest:
                 nearest = horizontal
+                nearest_point = (px, py, pz)
             # Hard corridor check in the LiDAR/body frame. This intentionally
             # matches lidar_ttc_safety_filter: point x/y and cmd body velocity
             # live in the same local frame.
@@ -613,9 +658,12 @@ class FixedPointMission(Node):
             self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)
             return nvx, nvy, 0.0, 'final_corridor_stop'
 
-        if nearest is not None and nearest <= hard_stop_distance:
-            nbvx = -0.35 * dir_x
-            nbvy = -0.35 * dir_y
+        if nearest is not None and nearest <= hard_stop_distance and nearest_point is not None:
+            px, py, _ = nearest_point
+            away_x = -px / max(nearest, 1e-6)
+            away_y = -py / max(nearest, 1e-6)
+            nbvx = 0.45 * away_x
+            nbvy = 0.45 * away_y
             nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
             self.final_safety_until[int(drone_id)] = now_t + 1.2
             self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)
@@ -766,6 +814,28 @@ class FixedPointMission(Node):
             label,
             True,
         )
+
+    def _safe_primitive_override(self, drone_id, max_age_sec=1.2):
+        safe = self.safe_primitive_cmds.get(int(drone_id))
+        prim = self.primitive_avoid_cmds.get(int(drone_id))
+        now_t = time.time()
+        if safe is None or now_t - float(safe.get('stamp', 0.0)) > max_age_sec:
+            return (0.0, 0.0, 0.0, 'safe_primitive_missing', False)
+        if prim is None or now_t - float(prim.get('stamp', 0.0)) > max_age_sec:
+            return (
+                float(safe.get('vx', 0.0)),
+                float(safe.get('vy', 0.0)),
+                0.0,
+                'safe_primitive_only',
+                True,
+            )
+        svx = float(safe.get('vx', 0.0))
+        svy = float(safe.get('vy', 0.0))
+        pvx = float(prim.get('vx', 0.0))
+        pvy = float(prim.get('vy', 0.0))
+        if math.hypot(svx - pvx, svy - pvy) < 0.25:
+            return (0.0, 0.0, 0.0, 'safe_primitive_inactive', False)
+        return svx, svy, 0.0, 'safe_primitive_override', True
 
     def _publish_pose(self, drone_id, x, y, z):
         pose = Pose()
@@ -1597,6 +1667,7 @@ class FixedPointMission(Node):
         stage_max_error = 0.0
         stage_min_pair_dist = None
         reached_since = None
+        reached_ok = False
         stage_start_t = time.time()
 
         while time.time() - stage_start_t < max_duration:
@@ -1892,6 +1963,7 @@ class FixedPointMission(Node):
                             f"{stage_name}: reached waypoint, max_ref_dist={max_ref_dist:.2f}, "
                             f"virtual_target_dist={virtual_target_dist:.2f}, elapsed={now_t - stage_start_t:.1f}s"
                         )
+                        reached_ok = True
                         break
                 else:
                     reached_since = None
@@ -1902,7 +1974,7 @@ class FixedPointMission(Node):
             time.sleep(sleep_dt)
         else:
             self.get_logger().warn(
-                f"{stage_name}: waypoint reach timeout after {max_duration:.1f}s, continue to next stage"
+                f"{stage_name}: waypoint reach timeout after {max_duration:.1f}s"
             )
 
         if direct_pose_mode:
@@ -1914,6 +1986,7 @@ class FixedPointMission(Node):
                 f'{stage_name}: stage_summary formation_rms_mean={rms_sum / rms_count:.2f}, '
                 f'formation_max={stage_max_error:.2f}, min_pair_dist_min={min_pair_text}'
             )
+        return reached_ok
 
     def hold_fixed_point(self, drone_id, x, y, z, duration=10):
         """单架无人机悬停在固定点"""
@@ -1989,6 +2062,7 @@ def main():
     virtual_lag_limit = float(sys.argv[24]) if len(sys.argv) > 24 else 4.0
     avoid_source = os.environ.get('AVOID_SOURCE', 'orca').strip().lower()
     path_planner_mode = os.environ.get('PATH_PLANNER_MODE', 'astar').strip().lower()
+    stop_on_stage_timeout = bool(int(os.environ.get('STOP_ON_STAGE_TIMEOUT', '1')))
     obstacle_config_path = os.environ.get('OBSTACLE_CONFIG', '').strip()
     config_obstacles = []
     config_walls = []
@@ -2175,8 +2249,17 @@ def main():
     node.get_logger().info('mission-target-table: begin')
     for i in range(1, num_drones + 1):
         tx, ty, tz = target_stage[i]
-        node.get_logger().info(f"最终生效目标(NED) x500_{i}: ({tx:.2f},{ty:.2f},{tz:.2f})")
+        if use_spawned_formation:
+            world_tx = tx + mission_start_x
+            world_ty = ty + world_wall_y
+            node.get_logger().info(
+                f"最终生效目标 x500_{i}: local_NED=({tx:.2f},{ty:.2f},{tz:.2f}), "
+                f"world_NED=({world_tx:.2f},{world_ty:.2f},{tz:.2f})"
+            )
+        else:
+            node.get_logger().info(f"最终生效目标(NED) x500_{i}: ({tx:.2f},{ty:.2f},{tz:.2f})")
     node.get_logger().info('mission-target-table: end')
+    node.get_logger().info(f"阶段超时策略: STOP_ON_STAGE_TIMEOUT={int(stop_on_stage_timeout)}")
 
     leader_path = []
     if mission_mode != 'follow_target':
@@ -2215,7 +2298,7 @@ def main():
     )
     leader_target = target_stage[leader_id]
     if mission_mode == 'follow_target':
-        node.publish_follow_leader_stage(
+        stage_ok = node.publish_follow_leader_stage(
             'stage2_follow_target',
             leader_target,
             follower_offsets,
@@ -2229,7 +2312,12 @@ def main():
             state_timeout_sec=state_timeout_sec,
             virtual_lag_limit=virtual_lag_limit,
         )
-        node.publish_stage('stage3_target_hold', target_stage, duration=6.0)
+        if stage_ok or not stop_on_stage_timeout:
+            node.publish_stage('stage3_target_hold', target_stage, duration=6.0)
+        else:
+            node.get_logger().error('stage2_follow_target 超时，已停止后续阶段，避免目标切换造成误判')
+            node._publish_zero_vel_all()
+            return
     else:
         stage_plan = []
         prev_point = takeoff_stage[leader_id]
@@ -2257,8 +2345,9 @@ def main():
                 'spawn positions keep the formation spacing'
             )
 
+        mission_aborted = False
         for idx, name, leader_ref, stage_duration in stage_plan:
-            node.publish_follow_leader_stage(
+            stage_ok = node.publish_follow_leader_stage(
                 f'stage{idx}_{name}_lf',
                 leader_ref,
                 follower_offsets,
@@ -2274,6 +2363,15 @@ def main():
                 virtual_lag_limit=virtual_lag_limit,
                 direct_pose_mode=direct_stage_mode,
             )
+            if (not stage_ok) and stop_on_stage_timeout:
+                node.get_logger().error(
+                    f'stage{idx}_{name}_lf 超时，已停止后续阶段，避免切到 stage6_target_hold 造成误判'
+                )
+                node._publish_zero_vel_all()
+                mission_aborted = True
+                break
+        if mission_aborted:
+            return
         node.publish_stage('stage6_target_hold', target_stage, duration=6.0)
 
     mission_start = time.time()

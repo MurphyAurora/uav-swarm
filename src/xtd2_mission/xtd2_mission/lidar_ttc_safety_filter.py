@@ -189,11 +189,6 @@ class LidarTtcSafetyFilter(Node):
         bvx, bvy = self._world_to_body_xy(vx, vy, heading)
         bvz = vz
         now = time.time()
-        if now < self.escape_until.get(int(drone_id), 0.0):
-            mode = self.escape_dir.get(int(drone_id), 'escape_back')
-            nbvx, nbvy = self._escape_velocity(mode)
-            nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
-            return self._result(drone_id, mode, nvx, nvy, 0.0, 0.0, 999.0, 0.0, 0)
         speed_xy = math.hypot(bvx, bvy)
         if speed_xy < self.min_speed:
             return self._result(drone_id, 'pass', vx, vy, vz, 999.0, 999.0, 0.0, 0)
@@ -229,6 +224,27 @@ class LidarTtcSafetyFilter(Node):
             for name, (sx, sy) in sector_dirs.items():
                 if ux * sx + uy * sy > 0.5:
                     sector_min[name] = min(sector_min[name], horizontal)
+            hard_distance = horizontal <= self.hard_stop_distance
+            if hard_distance:
+                closing = max(0.0, bvx * ux + bvy * uy)
+                ttc = 0.0
+                used += 1
+                if worst is None or horizontal < worst['distance']:
+                    worst = {
+                        'ttc': ttc,
+                        'distance': horizontal,
+                        'closing': closing,
+                        'hard_distance': True,
+                        'ux': ux,
+                        'uy': uy,
+                        'px': px,
+                        'py': py,
+                        'pz': pz,
+                        'cmd_angle_deg': cmd_angle_deg,
+                        'obs_angle_deg': math.degrees(math.atan2(py, px)),
+                        'alignment': ux * dir_x + uy * dir_y,
+                    }
+                continue
             alignment = ux * dir_x + uy * dir_y
             if alignment < self.cone_cos:
                 continue
@@ -237,7 +253,6 @@ class LidarTtcSafetyFilter(Node):
                 continue
             effective_dist = max(0.0, horizontal - self.safety_radius)
             ttc = effective_dist / max(closing, 1e-6)
-            hard_distance = horizontal <= self.hard_stop_distance
             if ttc > self.warning_ttc and not hard_distance:
                 continue
             used += 1
