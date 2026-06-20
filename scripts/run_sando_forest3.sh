@@ -18,14 +18,25 @@ LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
 STOP_ON_STAGE_TIMEOUT="${STOP_ON_STAGE_TIMEOUT:-1}"
 STATIC_LOCAL_PLANNER="${STATIC_LOCAL_PLANNER:-0}"
 
-# The old multi_waypoint2 forest3 run was short.  The new local_static_planner
-# drives at about 0.30 m/s and the forest3 target is roughly 44 m away, so 32 s
-# makes it look stuck even when target_dist is decreasing.  Give the static
-# planner enough time by default; allow override with STATIC_PLANNER_DURATION.
+# Static-local-planner test mode is meant to quickly validate whether the new
+# planner can command visible single-UAV motion.  Keep the mission window long,
+# reduce the pre-mission wait, increase the visible cruise speed, and disable
+# legacy advisory velocity nodes so the log is easier to read.
 if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" || "${STATIC_LOCAL_PLANNER}" == "TRUE" ]]; then
   RUN_DURATION="${STATIC_PLANNER_DURATION:-180}"
+  WARMUP_SEC="${WARMUP_SEC:-12}"
+  POST_OFFBOARD_HOLD_SEC="${POST_OFFBOARD_HOLD_SEC:-1}"
+  MOTION_PRIMITIVE_ENABLE="${MOTION_PRIMITIVE_ENABLE:-0}"
+  LIDAR_TTC_ENABLE="${LIDAR_TTC_ENABLE:-0}"
+  export STATIC_PLANNER_MAX_SPEED="${STATIC_PLANNER_MAX_SPEED:-0.55}"
+  export STATIC_PLANNER_INFLATION="${STATIC_PLANNER_INFLATION:-0.60}"
+  export STATIC_PLANNER_RESOLUTION="${STATIC_PLANNER_RESOLUTION:-0.25}"
 else
   RUN_DURATION="${DURATION:-32}"
+  WARMUP_SEC="${WARMUP_SEC:-25}"
+  POST_OFFBOARD_HOLD_SEC="${POST_OFFBOARD_HOLD_SEC:-3}"
+  MOTION_PRIMITIVE_ENABLE="${MOTION_PRIMITIVE_ENABLE:-1}"
+  LIDAR_TTC_ENABLE="${LIDAR_TTC_ENABLE:-1}"
 fi
 
 export LOCAL_PLANNER_MODE
@@ -72,8 +83,12 @@ echo "[INFO] num_drones=${NUM_DRONES}"
 echo "[INFO] leader_id=${LEADER_ID}"
 echo "[INFO] local_planner_mode=${LOCAL_PLANNER_MODE}"
 echo "[INFO] static_local_planner=${STATIC_LOCAL_PLANNER}"
+echo "[INFO] static_planner_max_speed=${STATIC_PLANNER_MAX_SPEED:-unset}"
+echo "[INFO] static_planner_inflation=${STATIC_PLANNER_INFLATION:-unset}"
 echo "[INFO] stop_on_stage_timeout=${STOP_ON_STAGE_TIMEOUT}"
+echo "[INFO] warmup_sec=${WARMUP_SEC}, post_offboard_hold_sec=${POST_OFFBOARD_HOLD_SEC}"
 echo "[INFO] run_duration=${RUN_DURATION}"
+echo "[INFO] motion_primitive_enable=${MOTION_PRIMITIVE_ENABLE}, lidar_ttc_enable=${LIDAR_TTC_ENABLE}"
 echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
 echo "[INFO] default keeps scene obstacles published and freezes moving obstacles for static-column validation"
 echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"
@@ -95,6 +110,10 @@ exec ros2 launch xtd2_mission swarm_simulation_launch.py \
   dynamic_obs_visualize_gz:=0 \
   spawned_formation_axis:=x \
   duration:="${RUN_DURATION}" \
+  warmup_sec:="${WARMUP_SEC}" \
+  post_offboard_hold_sec:="${POST_OFFBOARD_HOLD_SEC}" \
+  motion_primitive_enable:="${MOTION_PRIMITIVE_ENABLE}" \
+  lidar_ttc_enable:="${LIDAR_TTC_ENABLE}" \
   scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml" \
   dynamic_obs_wall_x:=27.0 \
   start_wall_clearance:=8.0 \
