@@ -4,14 +4,18 @@ set -euo pipefail
 # One-command launcher for the local SANDO forest3-with-walls experiment.
 #
 # Usage:
-#   ./scripts/run_sando_forest3.sh          # normal x500
-#   ./scripts/run_sando_forest3.sh lidar3d  # x500 with 3D GPU LiDAR
+#   ./scripts/run_sando_forest3.sh          # x500 with 3D GPU LiDAR
+#   ./scripts/run_sando_forest3.sh normal   # normal x500 without LiDAR
 
-MODE="${1:-normal}"
+MODE="${1:-lidar3d}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DYNAMIC_OBS_ENABLE="${DYNAMIC_OBS_ENABLE:-1}"
 DYNAMIC_OBS_FREEZE="${DYNAMIC_OBS_FREEZE:-1}"
+NUM_DRONES="${NUM_DRONES:-1}"
+LEADER_ID="${LEADER_ID:-1}"
+LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
+export LOCAL_PLANNER_MODE
 
 case "${MODE}" in
   normal)
@@ -42,14 +46,20 @@ source install/setup.bash
 set -u
 
 echo "[INFO] mode=${MODE}, px4_sim_model=${PX4_SIM_MODEL}"
+echo "[INFO] num_drones=${NUM_DRONES}"
+echo "[INFO] leader_id=${LEADER_ID}"
+echo "[INFO] local_planner_mode=${LOCAL_PLANNER_MODE}"
 echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
+echo "[INFO] default keeps scene obstacles published and freezes moving obstacles for static-column validation"
 echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"
 if [ "${MODE}" = "lidar3d" ]; then
   echo "[INFO] After drones are spawned, open another terminal and run:"
-  echo "       cd ${WS_ROOT} && ./scripts/bridge_x500_lidar_3d.sh 5"
+  echo "       cd ${WS_ROOT} && ./scripts/bridge_x500_lidar_3d.sh ${NUM_DRONES}"
 fi
 
 exec ros2 launch xtd2_mission swarm_simulation_launch.py \
+  num_drones:="${NUM_DRONES}" \
+  leader_id:="${LEADER_ID}" \
   gz_world:=sando_forest3_walls_xtd2 \
   gz_gui:=0 \
   px4_sim_model:="${PX4_SIM_MODEL}" \

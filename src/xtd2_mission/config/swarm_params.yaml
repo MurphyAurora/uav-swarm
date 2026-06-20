@@ -124,9 +124,9 @@ collision_max_reports: 30
 motion_primitive_enable: true
 primitive_horizon: 3.5
 primitive_dt: 0.5
-primitive_cruise_speed: 0.42
-primitive_lateral_speed: 0.32
-primitive_vertical_speed: 0.20
+primitive_cruise_speed: 0.34
+primitive_lateral_speed: 0.18
+primitive_vertical_speed: 0.0
 primitive_max_speed: 0.65
 primitive_drone_radius: 0.35
 primitive_safety_margin: 1.0
@@ -134,33 +134,33 @@ primitive_risk_radius: 8.0
 primitive_state_timeout: 2.0
 primitive_target_weight: 0.6
 primitive_risk_weight: 28.0
-primitive_smooth_weight: 0.8
+primitive_smooth_weight: 3.0
 primitive_publish_shadow_cmd: true
-primitive_emergency_clearance: 1.2
+primitive_emergency_clearance: 1.6
 primitive_projection_alpha: 1.4
 primitive_projection_iterations: 3
 primitive_projection_max_constraints: 18
 primitive_escape_clearance: 0.6
-primitive_hard_clearance: 0.25
-primitive_static_hard_clearance: 0.75
-primitive_static_emergency_clearance: 1.4
+primitive_hard_clearance: 0.45
+primitive_static_hard_clearance: 1.05
+primitive_static_emergency_clearance: 1.8
 
 # ===== Per-UAV LiDAR TTC near-field safety filter =====
 lidar_ttc_enable: true
-lidar_ttc_warning_ttc: 2.5
-lidar_ttc_emergency_ttc: 1.0
+lidar_ttc_warning_ttc: 3.2
+lidar_ttc_emergency_ttc: 1.4
 lidar_ttc_min_speed: 0.08
 lidar_ttc_max_points: 2500
 lidar_ttc_max_range: 6.0
 lidar_ttc_min_range: 0.25
-lidar_ttc_min_z: -0.15
+lidar_ttc_min_z: -1.8
 lidar_ttc_vertical_limit: 1.8
-lidar_ttc_cone_angle_deg: 42.0
-lidar_ttc_safety_radius: 0.70
+lidar_ttc_cone_angle_deg: 55.0
+lidar_ttc_safety_radius: 0.95
 lidar_ttc_self_filter_radius: 0.65
-lidar_ttc_projection_gain: 1.0
-lidar_ttc_brake_gain: 0.15
-lidar_ttc_back_speed: 0.35
+lidar_ttc_projection_gain: 1.35
+lidar_ttc_brake_gain: 0.08
+lidar_ttc_back_speed: 0.45
 lidar_ttc_climb_speed: 0.0
 
 # ===== Path planner =====

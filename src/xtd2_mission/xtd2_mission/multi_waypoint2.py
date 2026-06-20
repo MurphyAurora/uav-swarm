@@ -2,6 +2,8 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose, Twist
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 import json
 import math
@@ -17,11 +19,15 @@ class FixedPointMission(Node):
         self.num_drones = num_drones
         self.leader_id = leader_id
         self.avoid_source = str(avoid_source or 'orca').strip().lower()
+        self.local_planner_mode = os.environ.get('LOCAL_PLANNER_MODE', 'off').strip().lower()
         self.pubs = {}
         self.vel_pubs = {}
         self.orca_avoid_cmds = {}
         self.primitive_avoid_cmds = {}
         self.safe_primitive_cmds = {}
+        self.latest_lidar_clouds = {}
+        self.final_safety_until = {}
+        self.final_safety_velocity = {}
         self.latest_states = {}
         self.latest_target_markers = {}
         self.latest_target_stamp = 0.0
@@ -30,6 +36,9 @@ class FixedPointMission(Node):
         self._last_dynamic_obstacle_log_t = 0.0
         self.obstacles = None
         self._last_metric_log_t = 0.0
+        self._last_local_planner_debug_t = {}
+        self._local_planner_side_latch = {}
+        self._local_planner_subgoals = {}
         self._last_failsafe_log_t = 0.0
         self.metrics_csv_path = metrics_csv_path
         self.metrics_file = None
@@ -69,11 +78,18 @@ class FixedPointMission(Node):
                 lambda msg, drone_id=i: self._avoid_cmd_cb('safe_primitive', drone_id, msg),
                 10,
             )
+            self.create_subscription(
+                PointCloud2,
+                f'/x500_{i}/lidar/points_local',
+                lambda msg, drone_id=i: self._lidar_cloud_cb(drone_id, msg),
+                5,
+            )
         self._open_metrics_file()
         
         time.sleep(0.5)
         self.get_logger().info(
-            f"初始化{num_drones}架无人机控制器，领航机=无人机{leader_id}, avoid_source={self.avoid_source}"
+            f"初始化{num_drones}架无人机控制器，领航机=无人机{leader_id}, "
+            f"avoid_source={self.avoid_source}, local_planner_mode={self.local_planner_mode}"
         )
 
     def _avoid_cmd_cb(self, source, drone_id, msg: Twist):
@@ -89,6 +105,12 @@ class FixedPointMission(Node):
             self.primitive_avoid_cmds[int(drone_id)] = item
         else:
             self.orca_avoid_cmds[int(drone_id)] = item
+
+    def _lidar_cloud_cb(self, drone_id, msg: PointCloud2):
+        self.latest_lidar_clouds[int(drone_id)] = {
+            'msg': msg,
+            'stamp': time.time(),
+        }
 
     def _open_metrics_file(self):
         if not self.metrics_csv_path:
@@ -214,6 +236,417 @@ class FixedPointMission(Node):
             self._finite_float(st.get('vz', 0.0)),
         )
 
+    def _world_to_body_xy(self, vx, vy, heading):
+        c = math.cos(float(heading))
+        s = math.sin(float(heading))
+        return c * float(vx) + s * float(vy), -s * float(vx) + c * float(vy)
+
+    def _body_to_world_xy(self, vx, vy, heading):
+        c = math.cos(float(heading))
+        s = math.sin(float(heading))
+        return c * float(vx) - s * float(vy), s * float(vx) + c * float(vy)
+
+    def _local_risk_astar_ref(self, drone_id, st, ref_x, ref_y, ref_z):
+        if self.local_planner_mode not in ('risk_astar', 'astar'):
+            return ref_x, ref_y, ref_z, 'off'
+        cloud = self.latest_lidar_clouds.get(int(drone_id))
+        if cloud is None or time.time() - float(cloud.get('stamp', 0.0)) > 0.8:
+            return ref_x, ref_y, ref_z, 'no_lidar'
+
+        tx = float(ref_x) - float(st['x'])
+        ty = float(ref_y) - float(st['y'])
+        heading = self._finite_float(st.get('heading', 0.0))
+        planner_heading = math.atan2(ty, tx) if math.hypot(tx, ty) > 1e-3 else heading
+        gx_body, gy_body = self._world_to_body_xy(tx, ty, planner_heading)
+        target_dist = math.hypot(gx_body, gy_body)
+        if target_dist < 1.0:
+            return ref_x, ref_y, ref_z, 'near_goal'
+        hold_z = float(st['z'])
+
+        horizon = 6.0
+        half_width = 4.0
+        res = 0.5
+        nx = int(round(horizon / res)) + 1
+        ny = int(round((2.0 * half_width) / res)) + 1
+        start = (0, int(round(half_width / res)))
+        goal_dist = min(horizon, target_dist)
+        goal = (
+            max(0, min(nx - 1, int(round(goal_dist / res)))),
+            max(0, min(ny - 1, int(round((gy_body / max(target_dist, 1e-6) * goal_dist + half_width) / res)))),
+        )
+
+        blocked = set()
+        used_points = 0
+        nearest = None
+        sector_min = {
+            'left': horizon,
+            'right': horizon,
+            'back': horizon,
+        }
+        inflation_cells = 3
+        for idx, point in enumerate(point_cloud2.read_points(cloud['msg'], field_names=('x', 'y', 'z'), skip_nans=True)):
+            if idx >= 2500:
+                break
+            raw_px = self._finite_float(point[0])
+            raw_py = self._finite_float(point[1])
+            pz = self._finite_float(point[2])
+            wx_p, wy_p = self._body_to_world_xy(raw_px, raw_py, heading)
+            px, py = self._world_to_body_xy(wx_p, wy_p, planner_heading)
+            if px < -0.5 or px > horizon or abs(py) > half_width or pz < -1.8 or pz > 2.2:
+                continue
+            if math.hypot(px, py) < 0.9:
+                continue
+            used_points += 1
+            horizontal = math.hypot(px, py)
+            if nearest is None or horizontal < nearest[0]:
+                nearest = (horizontal, px, py, pz)
+            if py > 0.25:
+                sector_min['left'] = min(sector_min['left'], horizontal)
+            elif py < -0.25:
+                sector_min['right'] = min(sector_min['right'], horizontal)
+            elif px < 0.5:
+                sector_min['back'] = min(sector_min['back'], horizontal)
+            cx = int(round(px / res))
+            cy = int(round((py + half_width) / res))
+            for dx in range(-inflation_cells, inflation_cells + 1):
+                for dy in range(-inflation_cells, inflation_cells + 1):
+                    if dx * dx + dy * dy > inflation_cells * inflation_cells:
+                        continue
+                    bx = cx + dx
+                    by = cy + dy
+                    if 0 <= bx < nx and 0 <= by < ny:
+                        blocked.add((bx, by))
+        blocked.discard(start)
+
+        def cell_from_body(px, py):
+            return (
+                int(round(px / res)),
+                int(round((py + half_width) / res)),
+            )
+
+        def segment_clear_to(px, py):
+            steps = max(2, int(math.ceil(max(abs(px), abs(py)) / res)))
+            for step_i in range(1, steps + 1):
+                ratio = float(step_i) / float(steps)
+                cell = cell_from_body(px * ratio, py * ratio)
+                if cell in blocked:
+                    return False
+            return True
+
+        def body_from_cell(cell):
+            return float(cell[0]) * res, float(cell[1]) * res - half_width
+
+        def clearance_cells(cell, radius=5):
+            best = float(radius + 1)
+            cx, cy = cell
+            for bx, by in blocked:
+                dx = abs(bx - cx)
+                dy = abs(by - cy)
+                if dx > radius or dy > radius:
+                    continue
+                best = min(best, math.hypot(dx, dy))
+            return best
+
+        def choose_path_subgoal(path_cells, target_lookahead=2.4):
+            chosen = path_cells[-1]
+            for cell in path_cells[1:]:
+                px, py = body_from_cell(cell)
+                if not segment_clear_to(px, py):
+                    break
+                chosen = cell
+                if math.hypot(px, py) >= target_lookahead:
+                    break
+            return chosen
+
+        def store_subgoal(px, py, label, stamp):
+            wx, wy = self._body_to_world_xy(px, py, planner_heading)
+            sg_x = float(st['x']) + wx
+            sg_y = float(st['y']) + wy
+            self._local_planner_subgoals[int(drone_id)] = {
+                'x': sg_x,
+                'y': sg_y,
+                'stamp': stamp,
+                'label': label,
+            }
+            return sg_x, sg_y, hold_z, label
+
+        now_t = time.time()
+        last_debug = self._last_local_planner_debug_t.get(int(drone_id), 0.0)
+        should_debug = now_t - last_debug > 1.0
+        cached = self._local_planner_subgoals.get(int(drone_id))
+        if cached is not None and now_t - float(cached.get('stamp', 0.0)) <= 2.5:
+            sg_x = float(cached.get('x', float(st['x'])))
+            sg_y = float(cached.get('y', float(st['y'])))
+            rel_x = sg_x - float(st['x'])
+            rel_y = sg_y - float(st['y'])
+            sg_px, sg_py = self._world_to_body_xy(rel_x, rel_y, planner_heading)
+            sg_dist = math.hypot(sg_px, sg_py)
+            sg_cell = cell_from_body(sg_px, sg_py)
+            if sg_dist < 0.45:
+                self._local_planner_subgoals.pop(int(drone_id), None)
+            elif (
+                -0.2 <= sg_px <= horizon
+                and abs(sg_py) <= half_width
+                and sg_cell not in blocked
+                and segment_clear_to(sg_px, sg_py)
+            ):
+                if should_debug:
+                    self._last_local_planner_debug_t[int(drone_id)] = now_t
+                    near_text = 'none'
+                    if nearest is not None:
+                        near_text = f'd={nearest[0]:.2f}, p=({nearest[1]:.2f},{nearest[2]:.2f},{nearest[3]:.2f})'
+                    self.get_logger().info(
+                        f'local risk astar locked: x500_{drone_id}, '
+                        f'lookahead_body=({sg_px:.2f},{sg_py:.2f}), '
+                        f'age={now_t - float(cached.get("stamp", 0.0)):.2f}s, '
+                        f'used_points={used_points}, blocked_cells={len(blocked)}, nearest={near_text}'
+                    )
+                return sg_x, sg_y, hold_z, str(cached.get('label', 'risk_astar_locked'))
+            else:
+                self._local_planner_subgoals.pop(int(drone_id), None)
+
+        def h(cell):
+            return math.hypot(cell[0] - goal[0], cell[1] - goal[1])
+
+        neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+        open_heap = [(h(start), 0.0, start)]
+        came = {}
+        cost = {start: 0.0}
+        best = start
+        best_h = h(start)
+        found = None
+        while open_heap:
+            _, g_cost, cur = heapq.heappop(open_heap)
+            cur_h = h(cur)
+            if cur_h < best_h:
+                best = cur
+                best_h = cur_h
+            if cur == goal:
+                found = cur
+                break
+            for dx, dy in neighbors:
+                nxt = (cur[0] + dx, cur[1] + dy)
+                if not (0 <= nxt[0] < nx and 0 <= nxt[1] < ny) or nxt in blocked:
+                    continue
+                step = math.hypot(dx, dy)
+                center_bias = 0.02 * abs(nxt[1] - start[1])
+                clear = clearance_cells(nxt)
+                clearance_penalty = max(0.0, 4.0 - clear) * 0.22
+                new_cost = g_cost + step + center_bias + clearance_penalty
+                if new_cost < cost.get(nxt, 1e9):
+                    cost[nxt] = new_cost
+                    came[nxt] = cur
+                    heapq.heappush(open_heap, (new_cost + h(nxt), new_cost, nxt))
+
+        end = found if found is not None else best
+        now_debug = time.time()
+        last_debug = self._last_local_planner_debug_t.get(int(drone_id), 0.0)
+        should_debug = now_debug - last_debug > 1.0
+        if end == start:
+            if should_debug:
+                self._last_local_planner_debug_t[int(drone_id)] = now_debug
+                near_text = 'none'
+                if nearest is not None:
+                    near_text = f'd={nearest[0]:.2f}, p=({nearest[1]:.2f},{nearest[2]:.2f},{nearest[3]:.2f})'
+                self.get_logger().info(
+                    f'local risk astar blocked: x500_{drone_id}, '
+                    f'used_points={used_points}, blocked_cells={len(blocked)}, '
+                    f'start={start}, goal={goal}, best={best}, '
+                    f'target_plan=({gx_body:.2f},{gy_body:.2f}), '
+                    f'heading={math.degrees(heading):.1f}deg, planner_heading={math.degrees(planner_heading):.1f}deg, '
+                    f'sectors={sector_min}, nearest={near_text}'
+                )
+            escape_candidates = [
+                ('escape_left', 0.2, 2.0),
+                ('escape_right', 0.2, -2.0),
+                ('escape_back_left', -1.0, 1.3),
+                ('escape_back_right', -1.0, -1.3),
+                ('escape_back', -1.4, 0.0),
+            ]
+            best_escape = None
+            for label, lx, ly in escape_candidates:
+                if abs(ly) > half_width or not segment_clear_to(lx, ly):
+                    continue
+                score = math.hypot(lx, ly)
+                if ly > 0.0:
+                    score += 0.35 * sector_min['left']
+                elif ly < 0.0:
+                    score += 0.35 * sector_min['right']
+                else:
+                    score += 0.35 * sector_min['back']
+                if best_escape is None or score > best_escape[0]:
+                    best_escape = (score, label, lx, ly)
+            if best_escape is None:
+                return float(st['x']), float(st['y']), hold_z, 'risk_astar_blocked_hold'
+            _, label, lx, ly = best_escape
+            return store_subgoal(lx, ly, f'risk_astar_{label}', now_debug)
+        if found is None:
+            side = 'left' if sector_min['left'] >= sector_min['right'] else 'right'
+            latched_side = self._local_planner_side_latch.get(int(drone_id))
+            if latched_side in ('left', 'right'):
+                other = 'right' if latched_side == 'left' else 'left'
+                if sector_min[other] <= sector_min[latched_side] + 0.8:
+                    side = latched_side
+            self._local_planner_side_latch[int(drone_id)] = side
+            if sector_min[side] < 1.8 and sector_min['back'] > 1.8:
+                lx, ly = -1.2, 0.0
+                label = 'risk_astar_retreat'
+            else:
+                lx = 0.4
+                ly = 2.4 if side == 'left' else -2.4
+                label = f'risk_astar_detour_{side}'
+            if should_debug:
+                self._last_local_planner_debug_t[int(drone_id)] = now_debug
+                near_text = 'none'
+                if nearest is not None:
+                    near_text = f'd={nearest[0]:.2f}, p=({nearest[1]:.2f},{nearest[2]:.2f},{nearest[3]:.2f})'
+                self.get_logger().info(
+                    f'local risk astar detour: x500_{drone_id}, '
+                    f'used_points={used_points}, blocked_cells={len(blocked)}, '
+                    f'start={start}, goal={goal}, best={best}, '
+                    f'lookahead_body=({lx:.2f},{ly:.2f}), label={label}, '
+                    f'target_plan=({gx_body:.2f},{gy_body:.2f}), '
+                    f'heading={math.degrees(heading):.1f}deg, planner_heading={math.degrees(planner_heading):.1f}deg, '
+                    f'sectors={sector_min}, nearest={near_text}'
+                )
+            return store_subgoal(lx, ly, label, now_debug)
+        self._local_planner_side_latch.pop(int(drone_id), None)
+        path = [end]
+        while path[-1] != start and path[-1] in came:
+            path.append(came[path[-1]])
+        path.reverse()
+        lookahead = choose_path_subgoal(path)
+        lx, ly = body_from_cell(lookahead)
+        if should_debug:
+            self._last_local_planner_debug_t[int(drone_id)] = now_debug
+            near_text = 'none'
+            if nearest is not None:
+                near_text = f'd={nearest[0]:.2f}, p=({nearest[1]:.2f},{nearest[2]:.2f},{nearest[3]:.2f})'
+            self.get_logger().info(
+                f'local risk astar path: x500_{drone_id}, '
+                f'found={found is not None}, used_points={used_points}, '
+                f'blocked_cells={len(blocked)}, start={start}, goal={goal}, '
+                f'end={end}, lookahead={lookahead}, '
+                f'lookahead_body=({lx:.2f},{ly:.2f}), '
+                f'target_plan=({gx_body:.2f},{gy_body:.2f}), '
+                f'heading={math.degrees(heading):.1f}deg, planner_heading={math.degrees(planner_heading):.1f}deg, '
+                f'nearest={near_text}'
+            )
+        return store_subgoal(lx, ly, 'risk_astar_locked', now_debug)
+
+    def _final_lidar_safety_filter(self, drone_id, vx, vy, vz):
+        now_t = time.time()
+        latched_until = self.final_safety_until.get(int(drone_id), 0.0)
+        if now_t < latched_until:
+            safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))
+            return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'
+
+        cloud = self.latest_lidar_clouds.get(int(drone_id))
+        st = self.latest_states.get(int(drone_id))
+        if cloud is None or st is None:
+            return vx, vy, vz, 'no_lidar'
+        if time.time() - float(cloud.get('stamp', 0.0)) > 0.8:
+            return vx, vy, vz, 'stale_lidar'
+
+        heading = self._finite_float(st.get('heading', 0.0))
+        bvx, bvy = self._world_to_body_xy(vx, vy, heading)
+        speed_xy = math.hypot(bvx, bvy)
+        if speed_xy < 0.08:
+            return vx, vy, vz, 'pass'
+
+        dir_x = bvx / speed_xy
+        dir_y = bvy / speed_xy
+        warning_ttc = 3.2
+        emergency_ttc = 1.4
+        safety_radius = 0.95
+        # Only use radial hard-stop for points that are almost touching the UAV.
+        # Directional danger is handled by the corridor/TTC checks below; otherwise
+        # side/back points make the drone brake and wander even when the path ahead is free.
+        hard_stop_distance = 0.75
+        corridor_stop_distance = 2.60
+        corridor_half_width = 1.20
+        cone_cos = math.cos(math.radians(60.0))
+        worst = None
+        nearest = None
+        corridor_hit = None
+        for idx, point in enumerate(point_cloud2.read_points(cloud['msg'], field_names=('x', 'y', 'z'), skip_nans=True)):
+            if idx >= 2500:
+                break
+            px = self._finite_float(point[0])
+            py = self._finite_float(point[1])
+            pz = self._finite_float(point[2])
+            horizontal = math.hypot(px, py)
+            if horizontal < 0.65 or horizontal > 6.0:
+                continue
+            if pz < -1.8 or pz > 2.2:
+                continue
+            if nearest is None or horizontal < nearest:
+                nearest = horizontal
+            # Hard corridor check in the LiDAR/body frame. This intentionally
+            # matches lidar_ttc_safety_filter: point x/y and cmd body velocity
+            # live in the same local frame.
+            forward = px * dir_x + py * dir_y
+            lateral = abs(-dir_y * px + dir_x * py)
+            if 0.2 < forward < corridor_stop_distance and lateral < corridor_half_width:
+                if corridor_hit is None or forward < corridor_hit[0]:
+                    corridor_hit = (forward, lateral, pz)
+            ux = px / max(horizontal, 1e-6)
+            uy = py / max(horizontal, 1e-6)
+            alignment = ux * dir_x + uy * dir_y
+            if alignment < cone_cos:
+                continue
+            closing = bvx * ux + bvy * uy
+            if closing <= 0.08:
+                continue
+            ttc = max(0.0, horizontal - safety_radius) / max(closing, 1e-6)
+            hard = horizontal <= hard_stop_distance
+            if ttc > warning_ttc and not hard:
+                continue
+            if worst is None or ttc < worst['ttc']:
+                worst = {'ttc': ttc, 'ux': ux, 'uy': uy, 'hard': hard}
+
+        if corridor_hit is not None:
+            nbvx = -0.35 * dir_x
+            nbvy = -0.35 * dir_y
+            nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
+            self.final_safety_until[int(drone_id)] = now_t + 1.0
+            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)
+            return nvx, nvy, 0.0, 'final_corridor_stop'
+
+        if nearest is not None and nearest <= hard_stop_distance:
+            nbvx = -0.35 * dir_x
+            nbvy = -0.35 * dir_y
+            nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
+            self.final_safety_until[int(drone_id)] = now_t + 1.2
+            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)
+            return nvx, nvy, 0.0, 'final_near_stop'
+
+        if worst is None:
+            return vx, vy, vz, 'pass'
+
+        ux = worst['ux']
+        uy = worst['uy']
+        toward = max(0.0, bvx * ux + bvy * uy)
+        side_x = bvx - toward * ux
+        side_y = bvy - toward * uy
+        if worst['hard'] or worst['ttc'] <= emergency_ttc:
+            nbvx = 0.08 * side_x - 0.45 * ux
+            nbvy = 0.08 * side_y - 0.45 * uy
+            mode = 'final_hard_stop'
+            latch_sec = 1.2
+        else:
+            scale = (warning_ttc - worst['ttc']) / max(warning_ttc - emergency_ttc, 1e-6)
+            remove = toward * min(1.0, max(0.0, scale * 1.35))
+            nbvx = bvx - remove * ux
+            nbvy = bvy - remove * uy
+            mode = 'final_project'
+            latch_sec = 0.0
+        nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
+        if latch_sec > 0.0:
+            self.final_safety_until[int(drone_id)] = now_t + latch_sec
+            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)
+        return nvx, nvy, 0.0, mode
+
     def _estimate_virtual_ref_from_states(self, follower_offsets, use_heading_offsets=False, heading=0.0, max_age_sec=1.0):
         centers = []
         for drone_id in range(1, self.num_drones + 1):
@@ -240,6 +673,22 @@ class FixedPointMission(Node):
         )
 
     def _publish_vel(self, drone_id, vx, vy, vz, yawspeed=0.0):
+        raw_vx, raw_vy, raw_vz = float(vx), float(vy), float(vz)
+        vx, vy, vz, final_safety_mode = self._final_lidar_safety_filter(
+            drone_id,
+            raw_vx,
+            raw_vy,
+            raw_vz,
+        )
+        if final_safety_mode.startswith('final_'):
+            now_t = time.time()
+            if now_t - self._last_failsafe_log_t >= 1.0:
+                self._last_failsafe_log_t = now_t
+                self.get_logger().info(
+                    f'final lidar safety: x500_{drone_id} mode={final_safety_mode}, '
+                    f'raw_v=({raw_vx:.2f},{raw_vy:.2f},{raw_vz:.2f}), '
+                    f'safe_v=({vx:.2f},{vy:.2f},{vz:.2f})'
+                )
         tw = Twist()
         tw.linear.x = float(vx)
         tw.linear.y = float(vy)
@@ -250,6 +699,26 @@ class FixedPointMission(Node):
     def _publish_zero_vel_all(self):
         for drone_id in range(1, self.num_drones + 1):
             self._publish_vel(drone_id, 0.0, 0.0, 0.0)
+
+    def _primitive_as_correction(self, base_v, primitive_v, max_delta=0.28):
+        bx, by, bz = (float(base_v[0]), float(base_v[1]), float(base_v[2]))
+        px, py, pz = (float(primitive_v[0]), float(primitive_v[1]), float(primitive_v[2]))
+        base_norm = math.hypot(bx, by)
+        if base_norm < 1e-3:
+            dx, dy = px, py
+        else:
+            ux = bx / base_norm
+            uy = by / base_norm
+            lx = -uy
+            ly = ux
+            prim_forward = px * ux + py * uy
+            base_forward = bx * ux + by * uy
+            lateral = px * lx + py * ly
+            backward = min(0.0, prim_forward - base_forward)
+            dx = backward * ux + lateral * lx
+            dy = backward * uy + lateral * ly
+        dz = pz - bz
+        return self._limit_vector(dx, dy, dz, max_delta)
 
     def _selected_avoid_vel(self, drone_id, max_age_sec=1.2):
         source = self.avoid_source
@@ -1267,6 +1736,16 @@ class FixedPointMission(Node):
                 if st is None or not self._state_fresh(st, max_age_sec=state_timeout_sec):
                     continue
 
+                local_planner_label = 'off'
+                if direct_pose_mode:
+                    ref_x, ref_y, ref_z, local_planner_label = self._local_risk_astar_ref(
+                        drone_id,
+                        st,
+                        ref_x,
+                        ref_y,
+                        ref_z,
+                    )
+
                 ex = ref_x - float(st['x'])
                 ey = ref_y - float(st['y'])
                 ez = ref_z - float(st['z'])
@@ -1275,16 +1754,30 @@ class FixedPointMission(Node):
                 vz = float(formation_ff[2]) + formation_kp * ez
                 vx, vy, vz = self._limit_vector(vx, vy, vz, max_follower_speed)
                 if direct_pose_mode:
+                    if local_planner_label.startswith('risk_astar'):
+                        vz = 0.0
+                        vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.55))
                     avx, avy, avz, avoid_label, avoid_ok = self._selected_avoid_vel(
                         drone_id,
                         max_age_sec=max(1.2, 4.0 * sleep_dt),
                     )
+                    if self.local_planner_mode in ('risk_astar', 'astar'):
+                        avoid_ok = False
+                        avoid_label = 'disabled_by_risk_astar'
                     if avoid_ok:
                         if avoid_label.startswith('primitive'):
-                            # Primitive commands are already full candidate velocities.
-                            # ORCA commands are correction velocities and remain additive.
-                            vx, vy, vz = self._limit_vector(avx, avy, avz, max_follower_speed)
+                            dvx, dvy, dvz = self._primitive_as_correction(
+                                (vx, vy, vz),
+                                (avx, avy, avz),
+                            )
+                            vx, vy, vz = self._limit_vector(
+                                vx + dvx,
+                                vy + dvy,
+                                vz + dvz,
+                                max_follower_speed,
+                            )
                         else:
+                            dvx, dvy, dvz = avx, avy, avz
                             vx, vy, vz = self._limit_vector(
                                 vx + avx,
                                 vy + avy,
@@ -1296,7 +1789,9 @@ class FixedPointMission(Node):
                             self._last_failsafe_log_t = now_t
                             self.get_logger().info(
                                 f'{stage_name}: avoid_source={avoid_label} active, '
+                                f'local_planner={local_planner_label}, '
                                 f'x500_{drone_id} avoid_v=({avx:.2f},{avy:.2f},{avz:.2f}), '
+                                f'delta_v=({dvx:.2f},{dvy:.2f},{dvz:.2f}), '
                                 f'cmd_v=({vx:.2f},{vy:.2f},{vz:.2f})'
                             )
                     z_upper = ref_z - 0.25
