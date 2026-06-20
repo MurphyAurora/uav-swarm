@@ -21,7 +21,7 @@ import heapq
 import json
 import math
 import time
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import rclpy
 from rclpy.node import Node
@@ -99,6 +99,8 @@ class LocalStaticPlanner(Node):
         self._start_time = time.time()
         self._last_log_time = 0.0
         self._last_path: List[BodyPoint] = []
+        self._last_progress_dist: Optional[float] = None
+        self._last_progress_time = time.time()
 
         self.create_subscription(String, self.state_topic, self._state_cb, 10)
         self.create_subscription(PointCloud2, self.lidar_topic, self._lidar_cb, 10)
@@ -148,10 +150,6 @@ class LocalStaticPlanner(Node):
     @staticmethod
     def _limit(value: float, lo: float, hi: float) -> float:
         return max(lo, min(hi, value))
-
-    @staticmethod
-    def _norm2(x: float, y: float) -> float:
-        return math.sqrt(x * x + y * y)
 
     @staticmethod
     def _world_to_body(dx: float, dy: float, heading: float) -> BodyPoint:
@@ -290,15 +288,15 @@ class LocalStaticPlanner(Node):
         target_angle = math.atan2(ty, tx)
         best = None
         best_score = 1e9
-        for deg in range(-85, 86, 10):
+        for deg in range(-100, 101, 10):
             ang = target_angle + math.radians(deg)
-            for radius in (3.8, 3.2, 2.6, 2.0, 1.5):
+            for radius in (4.6, 3.8, 3.2, 2.6, 2.0, 1.5):
                 x = self._limit(math.cos(ang) * radius, -self.grid_back + 0.2, self.grid_forward - 0.4)
                 y = self._limit(math.sin(ang) * radius, -self.grid_right + 0.4, self.grid_left - 0.4)
                 cell = self._body_to_grid(x, y)
                 if cell is None:
                     continue
-                free = self._nearest_free(occupied, cell, max_r=4)
+                free = self._nearest_free(occupied, cell, max_r=5)
                 if free is None:
                     continue
                 bx, by = self._grid_to_body(free)
@@ -393,9 +391,42 @@ class LocalStaticPlanner(Node):
 
     def _front_contact(self, points: Sequence[BodyPoint]) -> bool:
         for x, y in points:
-            if 0.05 < x < 0.80 and abs(y) < 0.55:
+            if 0.05 < x < 0.85 and abs(y) < 0.60:
                 return True
         return False
+
+    def _sector_clearance(self, points: Sequence[BodyPoint], y_min: float, y_max: float, x_min: float = -0.3, x_max: float = 2.6) -> float:
+        values = [math.hypot(x, y) for x, y in points if x_min <= x <= x_max and y_min <= y <= y_max]
+        return min(values) if values else 999.0
+
+    def _escape_velocity_body(self, points: Sequence[BodyPoint], target_body: BodyPoint) -> Tuple[float, float, str, float, float]:
+        """Choose a lateral/back escape instead of dead-stopping in front of an obstacle.
+
+        This is not a climb-over-obstacle strategy.  It tries to slide along the
+        more open side while adding a small backward component if both sides are
+        tight.  This prevents the old front_contact_stop deadlock.
+        """
+        left_clear = self._sector_clearance(points, 0.25, self.grid_left)
+        right_clear = self._sector_clearance(points, -self.grid_right, -0.25)
+        back_clear = self._sector_clearance(points, -0.9, 0.9, x_min=-self.grid_back, x_max=-0.2)
+        target_side = 1.0 if target_body[1] >= 0.0 else -1.0
+
+        # Prefer the side with more measured free space; use target side only as
+        # a tie breaker so the UAV does not always choose the same wall side.
+        if abs(left_clear - right_clear) < 0.25:
+            side = target_side
+        else:
+            side = 1.0 if left_clear > right_clear else -1.0
+
+        lateral = min(max(self.max_speed * 0.55, 0.22), 0.36) * side
+        back = -0.10 if back_clear > 0.55 else 0.0
+        # If both side sectors are still tight, back away a little more and slow
+        # the lateral motion.  Do not climb here; this version is a horizontal
+        # local planner.
+        if max(left_clear, right_clear) < 0.75:
+            lateral = 0.16 * side
+            back = -0.16 if back_clear > 0.45 else 0.0
+        return back, lateral, 'front_escape_left' if side > 0.0 else 'front_escape_right', left_clear, right_clear
 
     # ------------------------------------------------------------------
     # Main planning loop
@@ -473,24 +504,34 @@ class LocalStaticPlanner(Node):
         look_x, look_y = self._lookahead(body_path)
         look_norm = max(math.hypot(look_x, look_y), 1e-6)
         nearest = min((math.hypot(x, y) for x, y in points), default=999.0)
+        left_clear = self._sector_clearance(points, 0.25, self.grid_left)
+        right_clear = self._sector_clearance(points, -self.grid_right, -0.25)
 
-        # A conservative hard contact guard. It only stops if the planned command
-        # would still push into a very close frontal obstacle.
         speed = self.max_speed
         if nearest < 1.2:
-            speed = max(self.min_speed, min(self.max_speed, 0.18))
+            speed = max(self.min_speed, min(self.max_speed, 0.22))
         bx = speed * look_x / look_norm
         by = speed * look_y / look_norm
-        if self._front_contact(points) and bx > 0.05:
-            bx, by = 0.0, 0.0
-            mode = 'front_contact_stop'
+
+        # The old implementation set bx=by=0 when a point was close in front.
+        # That is safe but creates a deadlock: A* still has a path but the final
+        # guard permanently vetoes any command.  Use a lateral/back escape instead.
+        if self._front_contact(points) and bx > 0.03:
+            bx, by, mode, left_clear, right_clear = self._escape_velocity_body(points, target_body)
 
         vx, vy = self._body_to_world(bx, by, heading)
         vz = self._limit(0.35 * dz, -0.08, 0.08)
-        # Keep this first static version near constant altitude.
+        # Keep this first static version near constant altitude.  Do not solve a
+        # frontal obstacle by simply climbing; forest3 columns/walls require a
+        # horizontal bypass policy first.
         if abs(dz) < 0.25:
             vz = 0.0
         self._publish_cmd(vx, vy, vz)
+
+        if self._last_progress_dist is None or target_dist < self._last_progress_dist - 0.20:
+            self._last_progress_dist = target_dist
+            self._last_progress_time = now
+        stalled_sec = now - self._last_progress_time
 
         if now - self._last_log_time >= 1.0:
             self._last_log_time = now
@@ -498,10 +539,11 @@ class LocalStaticPlanner(Node):
             self.get_logger().info(
                 'local_static_planner: '
                 f'mode={mode}, target_dist={target_dist:.2f}, nearest={nearest:.2f}, '
+                f'left_clear={left_clear:.2f}, right_clear={right_clear:.2f}, stalled={stalled_sec:.1f}s, '
                 f'points={raw_count}, path={len(path)}, smooth={len(smooth)}, '
                 f'local_goal=({goal_body[0]:.2f},{goal_body[1]:.2f}), '
                 f'lookahead=({look_x:.2f},{look_y:.2f}), '
-                f'cmd_ned=({vx:.2f},{vy:.2f},{vz:.2f})'
+                f'cmd_body=({bx:.2f},{by:.2f}), cmd_ned=({vx:.2f},{vy:.2f},{vz:.2f})'
             )
 
 
