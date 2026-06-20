@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Apply the forest3 LiDAR avoidance patch to multi_waypoint2.py.
 
-V6 keeps the unified candidate-velocity selector, but relaxes the LiDAR
-clearance/range parameters so narrow gaps between forest3 pillars are less
-likely to be falsely blocked.
+V7 keeps the unified candidate-velocity selector, but stops local risk A* from
+rewriting the reference target. The selector now uses the final mission target
+as the progress direction and uses LiDAR clearance only to filter unsafe
+candidate velocities.
 """
 from __future__ import annotations
 
@@ -36,7 +37,7 @@ def replace_between(text: str, start: str, end: str, new: str, label: str) -> st
     return text[:s] + new + text[e:]
 
 
-UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
+UNIFIED_AND_FINAL_METHODS_V7 = '''    def _unified_lidar_velocity_selector(
         self,
         drone_id,
         st,
@@ -47,13 +48,13 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
         ref_y,
         ref_z,
         max_speed,
-        local_planner_label='off',
+        local_planner_label='goal_direct',
     ):
         """Select one final local velocity from LiDAR clearance rollouts.
 
-        V6 uses a smaller mid-range point cloud window and a smaller hard
-        clearance radius than V5. The goal is to test whether previous deadlock
-        was caused by over-blocking narrow passages between pillars.
+        V7 uses the final mission reference as the progress direction. Local
+        obstacle avoidance is enforced by hard-filtering candidate velocities
+        with LiDAR rollout clearance, not by rewriting the target reference.
         """
         key = int(drone_id)
         cloud = self.latest_lidar_clouds.get(key)
@@ -88,8 +89,8 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
         candidates = []
         for label, scale, vec in [
             ('target_slow', cruise, td),
-            ('target_left', cruise * 0.82, rot(td, 45.0)),
-            ('target_right', cruise * 0.82, rot(td, -45.0)),
+            ('target_left', cruise * 0.85, rot(td, 35.0)),
+            ('target_right', cruise * 0.85, rot(td, -35.0)),
             ('side_left', side, (0.0, 1.0)),
             ('side_right', side, (0.0, -1.0)),
             ('back_left', back, (-0.70, 0.70)),
@@ -114,8 +115,6 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
             py = self._finite_float(point[1])
             pz = self._finite_float(point[2])
             horizontal = math.hypot(px, py)
-            # V6: shrink mid-range influence. Far pillars should not delete
-            # current candidate velocities when a close narrow gap is still open.
             if horizontal < 0.55 or horizontal > 3.20:
                 continue
             if pz < -1.6 or pz > 2.1:
@@ -129,7 +128,6 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
             vz = max(-0.15, min(0.15, float(base_vz)))
             return vx, vy, vz, 'unified_no_points_target_slow'
 
-        # V6 relaxed parameters for narrow forest gaps.
         rollout_horizon = 1.50
         rollout_dt = 0.30
         effective_radius = 0.68
@@ -156,12 +154,12 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
             smooth = math.hypot(cbx - bbx, cby - bby)
             back_penalty = max(0.0, -cbx)
             side_penalty = 0.10 * abs(cby)
-            # Clearance is still rewarded, but capped at the preferred radius so
-            # huge far-clearance does not dominate target progress.
+            # V7: progress toward the final target is the main preference, but
+            # only after LiDAR clearance has passed the hard filter.
             score = (
-                1.25 * align
-                + 0.85 * min(min_dist, preferred_radius)
-                - 0.70 * smooth
+                1.55 * align
+                + 0.75 * min(min_dist, preferred_radius)
+                - 0.65 * smooth
                 - 0.28 * back_penalty
                 - side_penalty
             )
@@ -193,17 +191,13 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
                 f'unified selector: x500_{drone_id} mode={mode}, '
                 f'local_planner={local_planner_label}, nearest={nearest if nearest is not None else 999.0:.2f}, '
                 f'chosen={label}, clearance={min_dist:.2f}, safe={len(safe)}/{len(evaluated)}, '
-                f'range=3.20, eff_radius=0.68, horizon=1.50, '
+                f'goal_direct=1, range=3.20, eff_radius=0.68, horizon=1.50, '
                 f'cmd_v=({vx:.2f},{vy:.2f},{vz:.2f})'
             )
         return vx, vy, vz, mode
 
     def _final_lidar_safety_filter(self, drone_id, vx, vy, vz):
-        """Last-resort contact guard after unified selection.
-
-        V6 removes final_forward_removed because it was zeroing the selector's
-        side-motion in narrow passages. Only true near-contact stops remain.
-        """
+        """Last-resort contact guard after unified selection."""
         key = int(drone_id)
         now_t = time.time()
         cloud = self.latest_lidar_clouds.get(key)
@@ -233,15 +227,13 @@ UNIFIED_AND_FINAL_METHODS_V6 = '''    def _unified_lidar_velocity_selector(
 '''
 
 
-UNIFIED_DIRECT_BLOCK = '''                local_planner_label = 'off'
+UNIFIED_DIRECT_BLOCK_V7 = '''                local_planner_label = 'goal_direct'
                 if direct_pose_mode:
-                    ref_x, ref_y, ref_z, local_planner_label = self._local_risk_astar_ref(
-                        drone_id,
-                        st,
-                        ref_x,
-                        ref_y,
-                        ref_z,
-                    )
+                    # V7: do not let local risk A* rewrite ref_x/ref_y. It caused
+                    # oscillation between corridor_clear and escape_back in V6.
+                    # The unified selector uses the final mission reference for
+                    # progress and LiDAR clearance for local safety.
+                    local_planner_label = 'goal_direct'
 
                 ex = ref_x - float(st['x'])
                 ey = ref_y - float(st['y'])
@@ -319,16 +311,16 @@ def main() -> int:
         text,
         "    def _final_lidar_safety_filter(self, drone_id, vx, vy, vz):\n",
         "    def _estimate_virtual_ref_from_states",
-        UNIFIED_AND_FINAL_METHODS_V6,
-        "install V6 relaxed unified selector and contact-only final guard",
+        UNIFIED_AND_FINAL_METHODS_V7,
+        "install V7 goal-directed unified selector and contact-only final guard",
     )
 
     text = replace_between(
         text,
         "                local_planner_label = 'off'\n                if direct_pose_mode:\n",
         "                else:\n                    # Position setpoints use the same proven control path as takeoff hold;",
-        UNIFIED_DIRECT_BLOCK,
-        "route direct-pose velocity through unified selector only",
+        UNIFIED_DIRECT_BLOCK_V7,
+        "route direct-pose velocity through goal-directed unified selector only",
     )
 
     text = replace_first_of(
