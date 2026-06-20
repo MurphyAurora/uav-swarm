@@ -334,39 +334,63 @@ class MissionController(Node):
     # ---- Mission ----
 
     def _start_mission(self):
-        """Start the multi_waypoint2 mission logic as an independent ROS process."""
-        self.get_logger().info('Starting mission via multi_waypoint2')
-
-        mission_cmd = [
-            'ros2',
-            'run',
-            'xtd2_mission',
-            'multi_waypoint2',
-            str(self.num_drones),
-            str(self.duration),
-            str(self.leader_id),
-            str(self.wall_x),
-            str(self.wall_y),
-            str(self.wall_length),
-            str(self.target_x),
-            self.eval_mode,
-            self.mission_mode,
-            str(self.y_spacing),
-            str(self.takeoff_z),
-            str(self.mission_z),
-            str(self.formation_kp),
-            str(self.leader_track_kp),
-            str(self.max_follower_speed),
-            str(self.max_leader_speed),
-            '1' if self.use_heading_offsets else '0',
-            str(self.lf_state_timeout),
-            '1' if self.use_virtual_leader else '0',
-            self.metrics_csv_path,
-            str(self.mission_start_x),
-            '1' if self.use_spawned_formation else '0',
-            str(self.target_y),
-            str(self.virtual_lag_limit),
-        ]
+        """Start the selected mission logic as an independent ROS process."""
+        use_static_planner = os.environ.get('STATIC_LOCAL_PLANNER', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+        if use_static_planner:
+            if self.num_drones != 1:
+                self.get_logger().warn(
+                    'STATIC_LOCAL_PLANNER is single-UAV only; starting for x500_1 and ignoring other drones'
+                )
+            self.get_logger().info('Starting mission via local_static_planner')
+            mission_cmd = [
+                'ros2',
+                'run',
+                'xtd2_mission',
+                'local_static_planner',
+                '--drone-id', '1',
+                '--state-topic', '/xtdrone2/swarm/state_exchange',
+                '--lidar-topic', '/x500_1/lidar/points_local',
+                '--cmd-topic', '/xtdrone2/x500_1/cmd_vel_ned',
+                '--target-x', str(self.target_x),
+                '--target-y', str(self.target_y),
+                '--target-z', str(self.mission_z),
+                '--duration', str(self.duration),
+                '--max-speed', os.environ.get('STATIC_PLANNER_MAX_SPEED', '0.30'),
+                '--inflation-radius', os.environ.get('STATIC_PLANNER_INFLATION', '0.70'),
+                '--resolution', os.environ.get('STATIC_PLANNER_RESOLUTION', '0.25'),
+            ]
+        else:
+            self.get_logger().info('Starting mission via multi_waypoint2')
+            mission_cmd = [
+                'ros2',
+                'run',
+                'xtd2_mission',
+                'multi_waypoint2',
+                str(self.num_drones),
+                str(self.duration),
+                str(self.leader_id),
+                str(self.wall_x),
+                str(self.wall_y),
+                str(self.wall_length),
+                str(self.target_x),
+                self.eval_mode,
+                self.mission_mode,
+                str(self.y_spacing),
+                str(self.takeoff_z),
+                str(self.mission_z),
+                str(self.formation_kp),
+                str(self.leader_track_kp),
+                str(self.max_follower_speed),
+                str(self.max_leader_speed),
+                '1' if self.use_heading_offsets else '0',
+                str(self.lf_state_timeout),
+                '1' if self.use_virtual_leader else '0',
+                self.metrics_csv_path,
+                str(self.mission_start_x),
+                '1' if self.use_spawned_formation else '0',
+                str(self.target_y),
+                str(self.virtual_lag_limit),
+            ]
 
         try:
             self._mission_process = subprocess.Popen(mission_cmd, env=os.environ.copy())
