@@ -22,6 +22,8 @@ export STOP_ON_STAGE_TIMEOUT
 case "${MODE}" in
   normal)
     PX4_SIM_MODEL="gz_x500"
+    echo "[WARN] normal mode has no 3D LiDAR; unknown-obstacle avoidance cannot be validated reliably."
+    echo "[WARN] Use: ./scripts/run_sando_forest3.sh lidar3d"
     ;;
   lidar3d)
     PX4_SIM_MODEL="gz_x500_lidar_3d"
@@ -41,6 +43,11 @@ pkill -f MicroXRCEAgent 2>/dev/null || true
 
 cd "${WS_ROOT}"
 "${SCRIPT_DIR}/worlds/install_sando_worlds.sh"
+
+# Apply the controller-side LiDAR unknown-obstacle safety patch before launch.
+# This keeps the experiment usable even when the working tree was pulled before
+# the controller file was manually patched.
+python3 "${SCRIPT_DIR}/apply_lidar_risk_astar_safety_patch.py"
 
 set +u
 source /opt/ros/jazzy/setup.bash
