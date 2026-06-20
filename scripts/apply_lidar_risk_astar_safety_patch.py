@@ -5,7 +5,8 @@ This helper is intentionally idempotent. It patches the mission controller so th
 1. LOCAL_PLANNER_MODE=risk_astar can still accept safe_primitive_override when LiDAR-TTC modifies primitive velocity.
 2. safe_primitive_override is treated as a hard safety velocity only when local risk A* is not already escaping.
 3. local risk A* reacts earlier to near obstacles and owns near-field escape/blocked states.
-4. final LiDAR safety triggers earlier, logs no_lidar/stale_lidar states, and clears stale local-planner latches.
+4. final LiDAR safety triggers earlier, logs no_lidar/stale_lidar states, clears stale local-planner latches,
+   and honors a hard recovery latch so the UAV stops/backs out before target tracking resumes.
 
 It is used by scripts/run_sando_forest3.sh before launching the forest3 experiment.
 """
@@ -56,11 +57,24 @@ def main() -> int:
         "trigger near-obstacle escape earlier",
     )
 
-    text = replace_once(
+    text = replace_first_of(
         text,
-        "lx = 1.0 * away_x\n            ly = 1.0 * away_y",
-        "lx = 1.4 * away_x\n            ly = 1.4 * away_y",
-        "increase near-escape subgoal distance",
+        [
+            "lx = 1.0 * away_x\n            ly = 1.0 * away_y",
+            "lx = 1.4 * away_x\n            ly = 1.4 * away_y",
+        ],
+        "# Near-field recovery must not move further forward into a dense pillar field.\n            # Keep only backward / side-back options and choose the clearest available one.\n            recovery_candidates = [\n                ('risk_astar_escape_back', -1.2, 0.0),\n                ('risk_astar_escape_back_left', -0.9, 0.9),\n                ('risk_astar_escape_back_right', -0.9, -0.9),\n            ]\n            best_recovery = None\n            for cand_label, cand_x, cand_y in recovery_candidates:\n                if not segment_clear_to(cand_x, cand_y):\n                    continue\n                cand_score = math.hypot(cand_x, cand_y)\n                if cand_y > 0.0:\n                    cand_score += 0.25 * sector_min['left']\n                elif cand_y < 0.0:\n                    cand_score += 0.25 * sector_min['right']\n                else:\n                    cand_score += 0.25 * sector_min['back']\n                if best_recovery is None or cand_score > best_recovery[0]:\n                    best_recovery = (cand_score, cand_label, cand_x, cand_y)\n            if best_recovery is None:\n                lx, ly = -0.8, 0.0\n                recovery_label = 'risk_astar_escape_back_forced'\n            else:\n                _, recovery_label, lx, ly = best_recovery",
+        "make near-field risk_astar escape backward-only",
+    )
+
+    text = replace_first_of(
+        text,
+        [
+            "return store_subgoal(lx, ly, 'risk_astar_near_escape', now_t)",
+            "return store_subgoal(lx, ly, recovery_label, now_t)",
+        ],
+        "return store_subgoal(lx, ly, recovery_label, now_t)",
+        "label near-field recovery subgoal",
     )
 
     text = replace_once(
@@ -70,12 +84,36 @@ def main() -> int:
         "make final LiDAR safety more conservative",
     )
 
-    risk_astar_priority_block = "if self.local_planner_mode in ('risk_astar', 'astar'):\n                        # When local risk A* already chose a near-field escape/blocked\n                        # subgoal, it is the most direct point-cloud safety decision.\n                        # Do not let safe primitive override pull the UAV back toward\n                        # the obstacle or cause side-switch oscillation.\n                        if local_planner_label in (\n                            'risk_astar_near_escape',\n                            'risk_astar_escape_back',\n                            'risk_astar_escape_back_left',\n                            'risk_astar_escape_back_right',\n                            'risk_astar_blocked_hold',\n                        ):\n                            avoid_ok = False\n                            avoid_label = 'local_risk_astar_priority'\n                        else:\n                            svx, svy, svz, safe_label, safe_ok = self._safe_primitive_override(\n                                drone_id,\n                                max_age_sec=max(1.2, 4.0 * sleep_dt),\n                            )\n                            if safe_ok:\n                                avx, avy, avz = svx, svy, svz\n                                avoid_label = safe_label\n                                avoid_ok = True\n                            else:\n                                avoid_ok = False\n                                avoid_label = 'disabled_by_risk_astar'"
+    # Honor an existing final-safety latch whenever the LiDAR is fresh too. The older code
+    # only used the latch when lidar was missing/stale, so target tracking could fight the
+    # safety command immediately after a stop.
+    text = replace_first_of(
+        text,
+        [
+            "if time.time() - float(cloud.get('stamp', 0.0)) > 0.8:\n            if now_t < latched_until:\n                safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))\n                return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'\n            return vx, vy, vz, 'stale_lidar'\n\n        heading = self._finite_float(st.get('heading', 0.0))",
+            "if time.time() - float(cloud.get('stamp', 0.0)) > 0.8:\n            if now_t < latched_until:\n                safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))\n                return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'\n            return vx, vy, vz, 'stale_lidar'\n        if now_t < latched_until:\n            safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))\n            return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'\n\n        heading = self._finite_float(st.get('heading', 0.0))",
+        ],
+        "if time.time() - float(cloud.get('stamp', 0.0)) > 2.0:\n            if now_t < latched_until:\n                safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))\n                return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'\n            return vx, vy, vz, 'stale_lidar'\n        if now_t < latched_until:\n            safe_v = self.final_safety_velocity.get(int(drone_id), (0.0, 0.0, 0.0))\n            return safe_v[0], safe_v[1], safe_v[2], 'final_latched_stop'\n\n        heading = self._finite_float(st.get('heading', 0.0))",
+        "honor final safety latch with fresh lidar and relax stale threshold",
+    )
+
+    text = replace_first_of(
+        text,
+        [
+            "if cloud is None or time.time() - float(cloud.get('stamp', 0.0)) > 0.8:\n            return ref_x, ref_y, ref_z, 'no_lidar'",
+            "if cloud is None or time.time() - float(cloud.get('stamp', 0.0)) > 2.0:\n            return ref_x, ref_y, ref_z, 'no_lidar'",
+        ],
+        "if cloud is None or time.time() - float(cloud.get('stamp', 0.0)) > 2.0:\n            return ref_x, ref_y, ref_z, 'no_lidar'",
+        "relax local risk astar lidar stale threshold",
+    )
+
+    risk_astar_priority_block = "if self.local_planner_mode in ('risk_astar', 'astar'):\n                        # When local risk A* already chose a near-field escape/blocked\n                        # subgoal, it is the most direct point-cloud safety decision.\n                        # Do not let safe primitive override pull the UAV back toward\n                        # the obstacle or cause side-switch oscillation.\n                        if local_planner_label in (\n                            'risk_astar_near_escape',\n                            'risk_astar_escape_back',\n                            'risk_astar_escape_back_left',\n                            'risk_astar_escape_back_right',\n                            'risk_astar_escape_back_forced',\n                            'risk_astar_blocked_hold',\n                        ):\n                            avoid_ok = False\n                            avoid_label = 'local_risk_astar_priority'\n                        else:\n                            svx, svy, svz, safe_label, safe_ok = self._safe_primitive_override(\n                                drone_id,\n                                max_age_sec=max(1.2, 4.0 * sleep_dt),\n                            )\n                            if safe_ok:\n                                avx, avy, avz = svx, svy, svz\n                                avoid_label = safe_label\n                                avoid_ok = True\n                            else:\n                                avoid_ok = False\n                                avoid_label = 'disabled_by_risk_astar'"
     text = replace_first_of(
         text,
         [
             "if self.local_planner_mode in ('risk_astar', 'astar'):\n                        avoid_ok = False\n                        avoid_label = 'disabled_by_risk_astar'",
             "if self.local_planner_mode in ('risk_astar', 'astar'):\n                        svx, svy, svz, safe_label, safe_ok = self._safe_primitive_override(\n                            drone_id,\n                            max_age_sec=max(1.2, 4.0 * sleep_dt),\n                        )\n                        if safe_ok:\n                            avx, avy, avz = svx, svy, svz\n                            avoid_label = safe_label\n                            avoid_ok = True\n                        else:\n                            avoid_ok = False\n                            avoid_label = 'disabled_by_risk_astar'",
+            "if self.local_planner_mode in ('risk_astar', 'astar'):\n                        # When local risk A* already chose a near-field escape/blocked\n                        # subgoal, it is the most direct point-cloud safety decision.\n                        # Do not let safe primitive override pull the UAV back toward\n                        # the obstacle or cause side-switch oscillation.\n                        if local_planner_label in (\n                            'risk_astar_near_escape',\n                            'risk_astar_escape_back',\n                            'risk_astar_escape_back_left',\n                            'risk_astar_escape_back_right',\n                            'risk_astar_blocked_hold',\n                        ):\n                            avoid_ok = False\n                            avoid_label = 'local_risk_astar_priority'\n                        else:\n                            svx, svy, svz, safe_label, safe_ok = self._safe_primitive_override(\n                                drone_id,\n                                max_age_sec=max(1.2, 4.0 * sleep_dt),\n                            )\n                            if safe_ok:\n                                avx, avy, avz = svx, svy, svz\n                                avoid_label = safe_label\n                                avoid_ok = True\n                            else:\n                                avoid_ok = False\n                                avoid_label = 'disabled_by_risk_astar'",
         ],
         risk_astar_priority_block,
         "prioritize local risk A* near-field escape over safe primitive",
@@ -85,8 +123,9 @@ def main() -> int:
         text,
         [
             "if local_planner_label.startswith('risk_astar'):\n                        vz = 0.0\n                        vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.55))",
+            "if local_planner_label.startswith('risk_astar'):\n                        vz = 0.0\n                        if local_planner_label in (\n                            'risk_astar_near_escape',\n                            'risk_astar_escape_back',\n                            'risk_astar_escape_back_left',\n                            'risk_astar_escape_back_right',\n                            'risk_astar_blocked_hold',\n                        ):\n                            vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.35))\n                        else:\n                            vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.55))",
         ],
-        "if local_planner_label.startswith('risk_astar'):\n                        vz = 0.0\n                        if local_planner_label in (\n                            'risk_astar_near_escape',\n                            'risk_astar_escape_back',\n                            'risk_astar_escape_back_left',\n                            'risk_astar_escape_back_right',\n                            'risk_astar_blocked_hold',\n                        ):\n                            vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.35))\n                        else:\n                            vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.55))",
+        "if local_planner_label.startswith('risk_astar'):\n                        vz = 0.0\n                        if local_planner_label in (\n                            'risk_astar_near_escape',\n                            'risk_astar_escape_back',\n                            'risk_astar_escape_back_left',\n                            'risk_astar_escape_back_right',\n                            'risk_astar_escape_back_forced',\n                            'risk_astar_blocked_hold',\n                        ):\n                            vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.30))\n                        else:\n                            vx, vy, _ = self._limit_vector(vx, vy, 0.0, min(max_follower_speed, 0.55))",
         "slow down local risk A* near-field escape states",
     )
 
@@ -95,17 +134,42 @@ def main() -> int:
         [
             "if avoid_ok:\n                        if avoid_label.startswith('primitive'):\n                            dvx, dvy, dvz = self._primitive_as_correction(\n                                (vx, vy, vz),\n                                (avx, avy, avz),\n                            )\n                            vx, vy, vz = self._limit_vector(\n                                vx + dvx,\n                                vy + dvy,\n                                vz + dvz,\n                                max_follower_speed,\n                            )\n                        else:\n                            dvx, dvy, dvz = avx, avy, avz\n                            vx, vy, vz = self._limit_vector(\n                                vx + avx,\n                                vy + avy,\n                                vz + avz,\n                                max_follower_speed,\n                            )",
             "if avoid_ok:\n                        if avoid_label in ('safe_primitive_override', 'safe_primitive_only'):\n                            # LiDAR-TTC has already changed the primitive velocity, so this is\n                            # a near-field safety command. Use it as a hard override instead\n                            # of a weak correction on top of target tracking.\n                            dvx = avx - vx\n                            dvy = avy - vy\n                            dvz = avz - vz\n                            vx, vy, vz = self._limit_vector(\n                                avx,\n                                avy,\n                                avz,\n                                min(max_follower_speed, 0.55),\n                            )\n                        elif avoid_label.startswith('primitive'):\n                            dvx, dvy, dvz = self._primitive_as_correction(\n                                (vx, vy, vz),\n                                (avx, avy, avz),\n                                max_delta=0.45,\n                            )\n                            vx, vy, vz = self._limit_vector(\n                                vx + dvx,\n                                vy + dvy,\n                                vz + dvz,\n                                max_follower_speed,\n                            )\n                        else:\n                            dvx, dvy, dvz = avx, avy, avz\n                            vx, vy, vz = self._limit_vector(\n                                vx + avx,\n                                vy + avy,\n                                vz + avz,\n                                max_follower_speed,\n                            )",
+            "if avoid_ok:\n                        if avoid_label in ('safe_primitive_override', 'safe_primitive_only'):\n                            # LiDAR-TTC has already changed the primitive velocity. Use it\n                            # as a hard safety command only when local risk A* is not already\n                            # in near-field escape/blocked priority mode.\n                            dvx = avx - vx\n                            dvy = avy - vy\n                            dvz = avz - vz\n                            vx, vy, vz = self._limit_vector(\n                                avx,\n                                avy,\n                                avz,\n                                min(max_follower_speed, 0.45),\n                            )\n                        elif avoid_label.startswith('primitive'):\n                            dvx, dvy, dvz = self._primitive_as_correction(\n                                (vx, vy, vz),\n                                (avx, avy, avz),\n                                max_delta=0.45,\n                            )\n                            vx, vy, vz = self._limit_vector(\n                                vx + dvx,\n                                vy + dvy,\n                                vz + dvz,\n                                max_follower_speed,\n                            )\n                        else:\n                            dvx, dvy, dvz = avx, avy, avz\n                            vx, vy, vz = self._limit_vector(\n                                vx + avx,\n                                vy + avy,\n                                vz + avz,\n                                max_follower_speed,\n                            )",
         ],
         "if avoid_ok:\n                        if avoid_label in ('safe_primitive_override', 'safe_primitive_only'):\n                            # LiDAR-TTC has already changed the primitive velocity. Use it\n                            # as a hard safety command only when local risk A* is not already\n                            # in near-field escape/blocked priority mode.\n                            dvx = avx - vx\n                            dvy = avy - vy\n                            dvz = avz - vz\n                            vx, vy, vz = self._limit_vector(\n                                avx,\n                                avy,\n                                avz,\n                                min(max_follower_speed, 0.45),\n                            )\n                        elif avoid_label.startswith('primitive'):\n                            dvx, dvy, dvz = self._primitive_as_correction(\n                                (vx, vy, vz),\n                                (avx, avy, avz),\n                                max_delta=0.45,\n                            )\n                            vx, vy, vz = self._limit_vector(\n                                vx + dvx,\n                                vy + dvy,\n                                vz + dvz,\n                                max_follower_speed,\n                            )\n                        else:\n                            dvx, dvy, dvz = avx, avy, avz\n                            vx, vy, vz = self._limit_vector(\n                                vx + avx,\n                                vy + avy,\n                                vz + avz,\n                                max_follower_speed,\n                            )",
         "treat safe primitive as hard safety override outside local escape priority",
+    )
+
+    # Corridor stop: do not reverse the current velocity, because reversing every cycle caused
+    # left/right oscillation around struct_wall_141. Stop first and latch the stop.
+    text = replace_first_of(
+        text,
+        [
+            "nbvx = -0.35 * dir_x\n            nbvy = -0.35 * dir_y",
+            "nbvx = 0.0\n            nbvy = 0.0",
+        ],
+        "nbvx = 0.0\n            nbvy = 0.0",
+        "make final corridor stop a hard stop instead of reverse",
+    )
+
+    # Near stop: slow away motion, held by latch, instead of a sharp 0.45m/s push that can bounce.
+    text = replace_first_of(
+        text,
+        [
+            "nbvx = 0.45 * away_x\n            nbvy = 0.45 * away_y",
+            "nbvx = 0.25 * away_x\n            nbvy = 0.25 * away_y",
+        ],
+        "nbvx = 0.25 * away_x\n            nbvy = 0.25 * away_y",
+        "slow final near-stop recovery velocity",
     )
 
     text = replace_first_of(
         text,
         [
             "self.final_safety_until[int(drone_id)] = now_t + 1.0\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            return nvx, nvy, 0.0, 'final_corridor_stop'",
+            "self.final_safety_until[int(drone_id)] = now_t + 1.0\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n            return nvx, nvy, 0.0, 'final_corridor_stop'",
         ],
-        "self.final_safety_until[int(drone_id)] = now_t + 1.0\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n            return nvx, nvy, 0.0, 'final_corridor_stop'",
+        "self.final_safety_until[int(drone_id)] = now_t + 1.2\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n            return nvx, nvy, 0.0, 'final_corridor_stop'",
         "clear local planner latch on final corridor stop",
     )
 
@@ -113,8 +177,9 @@ def main() -> int:
         text,
         [
             "self.final_safety_until[int(drone_id)] = now_t + 1.2\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            return nvx, nvy, 0.0, 'final_near_stop'",
+            "self.final_safety_until[int(drone_id)] = now_t + 1.2\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n            return nvx, nvy, 0.0, 'final_near_stop'",
         ],
-        "self.final_safety_until[int(drone_id)] = now_t + 1.2\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n            return nvx, nvy, 0.0, 'final_near_stop'",
+        "self.final_safety_until[int(drone_id)] = now_t + 1.5\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n            return nvx, nvy, 0.0, 'final_near_stop'",
         "clear local planner latch on final near stop",
     )
 
@@ -122,6 +187,7 @@ def main() -> int:
         text,
         [
             "if latch_sec > 0.0:\n            self.final_safety_until[int(drone_id)] = now_t + latch_sec\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n        return nvx, nvy, 0.0, mode",
+            "if latch_sec > 0.0:\n            self.final_safety_until[int(drone_id)] = now_t + latch_sec\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n        return nvx, nvy, 0.0, mode",
         ],
         "if latch_sec > 0.0:\n            self.final_safety_until[int(drone_id)] = now_t + latch_sec\n            self.final_safety_velocity[int(drone_id)] = (nvx, nvy, 0.0)\n            self._local_planner_subgoals.pop(int(drone_id), None)\n            self._local_planner_side_latch.pop(int(drone_id), None)\n        return nvx, nvy, 0.0, mode",
         "clear local planner latch on final hard stop",
