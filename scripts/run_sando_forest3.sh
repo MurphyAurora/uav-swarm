@@ -16,8 +16,21 @@ NUM_DRONES="${NUM_DRONES:-1}"
 LEADER_ID="${LEADER_ID:-1}"
 LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
 STOP_ON_STAGE_TIMEOUT="${STOP_ON_STAGE_TIMEOUT:-1}"
+STATIC_LOCAL_PLANNER="${STATIC_LOCAL_PLANNER:-0}"
+
+# The old multi_waypoint2 forest3 run was short.  The new local_static_planner
+# drives at about 0.30 m/s and the forest3 target is roughly 44 m away, so 32 s
+# makes it look stuck even when target_dist is decreasing.  Give the static
+# planner enough time by default; allow override with STATIC_PLANNER_DURATION.
+if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" || "${STATIC_LOCAL_PLANNER}" == "TRUE" ]]; then
+  RUN_DURATION="${STATIC_PLANNER_DURATION:-180}"
+else
+  RUN_DURATION="${DURATION:-32}"
+fi
+
 export LOCAL_PLANNER_MODE
 export STOP_ON_STAGE_TIMEOUT
+export STATIC_LOCAL_PLANNER
 
 case "${MODE}" in
   normal)
@@ -58,7 +71,9 @@ echo "[INFO] mode=${MODE}, px4_sim_model=${PX4_SIM_MODEL}"
 echo "[INFO] num_drones=${NUM_DRONES}"
 echo "[INFO] leader_id=${LEADER_ID}"
 echo "[INFO] local_planner_mode=${LOCAL_PLANNER_MODE}"
+echo "[INFO] static_local_planner=${STATIC_LOCAL_PLANNER}"
 echo "[INFO] stop_on_stage_timeout=${STOP_ON_STAGE_TIMEOUT}"
+echo "[INFO] run_duration=${RUN_DURATION}"
 echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
 echo "[INFO] default keeps scene obstacles published and freezes moving obstacles for static-column validation"
 echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"
@@ -79,6 +94,7 @@ exec ros2 launch xtd2_mission swarm_simulation_launch.py \
   scene_freeze_dynamics:="${DYNAMIC_OBS_FREEZE}" \
   dynamic_obs_visualize_gz:=0 \
   spawned_formation_axis:=x \
+  duration:="${RUN_DURATION}" \
   scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml" \
   dynamic_obs_wall_x:=27.0 \
   start_wall_clearance:=8.0 \
