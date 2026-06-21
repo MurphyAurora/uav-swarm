@@ -147,30 +147,41 @@ if [ "${MODE}" = "lidar3d" ]; then
   echo "       cd ${WS_ROOT} && ./scripts/bridge_x500_lidar_3d.sh ${NUM_DRONES}"
 fi
 
-exec ros2 launch xtd2_mission swarm_simulation_launch.py \
-  num_drones:="${NUM_DRONES}" \
-  leader_id:="${LEADER_ID}" \
-  gz_world:=sando_forest3_walls_xtd2 \
-  gz_gui:=0 \
-  px4_sim_model:="${PX4_SIM_MODEL}" \
-  px4_use_versioned_local_position:=1 \
-  spawn_override_ned_x:="${SPAWN_OVERRIDE_NED_X}" \
-  spawn_override_ned_y:="${SPAWN_OVERRIDE_NED_Y}" \
-  dynamic_obs_enable:="${DYNAMIC_OBS_ENABLE}" \
-  dynamic_obs_mode:=scene \
-  scene_freeze_dynamics:="${DYNAMIC_OBS_FREEZE}" \
-  dynamic_obs_visualize_gz:=0 \
-  spawned_formation_axis:="${SPAWNED_FORMATION_AXIS}" \
-  duration:="${RUN_DURATION}" \
-  warmup_sec:="${WARMUP_SEC}" \
-  post_offboard_hold_sec:="${POST_OFFBOARD_HOLD_SEC}" \
-  motion_primitive_enable:="${MOTION_PRIMITIVE_ENABLE}" \
-  lidar_ttc_enable:="${LIDAR_TTC_ENABLE}" \
-  scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml" \
-  dynamic_obs_wall_x:=27.0 \
-  start_wall_clearance:=8.0 \
-  dynamic_obs_wall_y:=-14.0 \
-  dynamic_obs_target_x:="${DYNAMIC_OBS_TARGET_X}" \
-  dynamic_obs_target_y_base:="${DYNAMIC_OBS_TARGET_Y_BASE}" \
-  dynamic_obs_target_y_spacing:="${DYNAMIC_OBS_TARGET_Y_SPACING}" \
+LAUNCH_ARGS=(
+  num_drones:="${NUM_DRONES}"
+  leader_id:="${LEADER_ID}"
+  gz_world:=sando_forest3_walls_xtd2
+  gz_gui:=0
+  px4_sim_model:="${PX4_SIM_MODEL}"
+  px4_use_versioned_local_position:=1
+  dynamic_obs_enable:="${DYNAMIC_OBS_ENABLE}"
+  dynamic_obs_mode:=scene
+  scene_freeze_dynamics:="${DYNAMIC_OBS_FREEZE}"
+  dynamic_obs_visualize_gz:=0
+  spawned_formation_axis:="${SPAWNED_FORMATION_AXIS}"
+  duration:="${RUN_DURATION}"
+  warmup_sec:="${WARMUP_SEC}"
+  post_offboard_hold_sec:="${POST_OFFBOARD_HOLD_SEC}"
+  motion_primitive_enable:="${MOTION_PRIMITIVE_ENABLE}"
+  lidar_ttc_enable:="${LIDAR_TTC_ENABLE}"
+  scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml"
+  dynamic_obs_wall_x:=27.0
+  start_wall_clearance:=8.0
+  dynamic_obs_wall_y:=-14.0
+  dynamic_obs_target_x:="${DYNAMIC_OBS_TARGET_X}"
+  dynamic_obs_target_y_base:="${DYNAMIC_OBS_TARGET_Y_BASE}"
+  dynamic_obs_target_y_spacing:="${DYNAMIC_OBS_TARGET_Y_SPACING}"
   mission_z:="${MISSION_Z}"
+)
+
+# ROS2 treats an empty launch argument like "spawn_override_ned_x:=" as
+# malformed.  Only pass explicit spawn overrides when both coordinates are set.
+# Otherwise the launch file uses its declared empty defaults and auto-spawns.
+if [[ -n "${SPAWN_OVERRIDE_NED_X}" && -n "${SPAWN_OVERRIDE_NED_Y}" ]]; then
+  LAUNCH_ARGS+=(
+    spawn_override_ned_x:="${SPAWN_OVERRIDE_NED_X}"
+    spawn_override_ned_y:="${SPAWN_OVERRIDE_NED_Y}"
+  )
+fi
+
+exec ros2 launch xtd2_mission swarm_simulation_launch.py "${LAUNCH_ARGS[@]}"
