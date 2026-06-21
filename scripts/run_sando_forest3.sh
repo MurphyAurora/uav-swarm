@@ -7,11 +7,12 @@ set -euo pipefail
 #   ./scripts/run_sando_forest3.sh          # x500 with 3D GPU LiDAR
 #   ./scripts/run_sando_forest3.sh normal   # normal x500 without LiDAR
 #
-# Static planner path-slot test:
-#   STATIC_LOCAL_PLANNER=1 STATIC_PLANNER_SPAWN_ID=3 ./scripts/run_sando_forest3.sh lidar3d
-# This spawns only one UAV, but places it on the original x500_3 start slot and
-# sends it to the original x500_3 target slot.  The ROS/Gazebo vehicle name is
-# still x500_1 because only one vehicle is spawned; the tested path is slot 3.
+# Static planner coordinate test:
+#   STATIC_LOCAL_PLANNER=1 \
+#   STATIC_PLANNER_START_X=19.0 STATIC_PLANNER_START_Y=-14.0 \
+#   STATIC_PLANNER_TARGET_X=19.0 STATIC_PLANNER_TARGET_Y=30.0 STATIC_PLANNER_TARGET_Z=-3.0 \
+#   ./scripts/run_sando_forest3.sh lidar3d
+# Coordinates are NED. Only one UAV is spawned in this mode.
 
 MODE="${1:-lidar3d}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,11 +29,13 @@ DYNAMIC_OBS_TARGET_Y_BASE="${DYNAMIC_OBS_TARGET_Y_BASE:-30.0}"
 DYNAMIC_OBS_TARGET_Y_SPACING="${DYNAMIC_OBS_TARGET_Y_SPACING:-2.6}"
 MISSION_Z="${MISSION_Z:--3.0}"
 SPAWNED_FORMATION_AXIS="${SPAWNED_FORMATION_AXIS:-x}"
+SPAWN_OVERRIDE_NED_X=""
+SPAWN_OVERRIDE_NED_Y=""
 
-# Static-local-planner test mode is meant to quickly validate whether the new
-# planner can command visible single-UAV motion.  Keep the mission window long,
-# reduce the pre-mission wait, increase the visible cruise speed, and disable
-# legacy advisory velocity nodes so the log is easier to read.
+# Static-local-planner test mode is meant to validate whether the local planner
+# can command visible single-UAV motion.  Keep the mission window long, reduce
+# the pre-mission wait, and disable legacy advisory velocity nodes so the log is
+# easier to read.
 if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" || "${STATIC_LOCAL_PLANNER}" == "TRUE" ]]; then
   RUN_DURATION="${STATIC_PLANNER_DURATION:-180}"
   WARMUP_SEC="${WARMUP_SEC:-12}"
@@ -42,6 +45,31 @@ if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" ||
   export STATIC_PLANNER_MAX_SPEED="${STATIC_PLANNER_MAX_SPEED:-0.55}"
   export STATIC_PLANNER_INFLATION="${STATIC_PLANNER_INFLATION:-0.60}"
   export STATIC_PLANNER_RESOLUTION="${STATIC_PLANNER_RESOLUTION:-0.25}"
+fi
+
+if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" || "${STATIC_LOCAL_PLANNER}" == "TRUE" ]]; then
+  # Deprecated: this old slot mode changed leader_id and made other modules
+  # inconsistent.  Use explicit STATIC_PLANNER_START_X/Y instead.
+  if [[ -n "${STATIC_PLANNER_SPAWN_ID:-}" ]]; then
+    echo "[ERROR] STATIC_PLANNER_SPAWN_ID is deprecated. Use STATIC_PLANNER_START_X/Y and STATIC_PLANNER_TARGET_X/Y/Z instead." >&2
+    exit 2
+  fi
+
+  if [[ -n "${STATIC_PLANNER_START_X:-}" || -n "${STATIC_PLANNER_START_Y:-}" ]]; then
+    if [[ -z "${STATIC_PLANNER_START_X:-}" || -z "${STATIC_PLANNER_START_Y:-}" ]]; then
+      echo "[ERROR] STATIC_PLANNER_START_X and STATIC_PLANNER_START_Y must be set together." >&2
+      exit 2
+    fi
+    NUM_DRONES=1
+    LEADER_ID=1
+    export STATIC_PLANNER_DRONE_ID=1
+    SPAWN_OVERRIDE_NED_X="${STATIC_PLANNER_START_X}"
+    SPAWN_OVERRIDE_NED_Y="${STATIC_PLANNER_START_Y}"
+  fi
+
+  export STATIC_PLANNER_TARGET_X="${STATIC_PLANNER_TARGET_X:-${DYNAMIC_OBS_TARGET_X}}"
+  export STATIC_PLANNER_TARGET_Y="${STATIC_PLANNER_TARGET_Y:-${DYNAMIC_OBS_TARGET_Y_BASE}}"
+  export STATIC_PLANNER_TARGET_Z="${STATIC_PLANNER_TARGET_Z:-${MISSION_Z}}"
 else
   RUN_DURATION="${DURATION:-32}"
   WARMUP_SEC="${WARMUP_SEC:-25}"
@@ -50,45 +78,12 @@ else
   LIDAR_TTC_ENABLE="${LIDAR_TTC_ENABLE:-1}"
 fi
 
-# Single-UAV path-slot test. This does not spawn x500_3 literally. It spawns
-# one vehicle named x500_1, but places it at the original slot-k start position
-# by using the existing launch formula: offset=(i-leader_id)*spacing with i=1.
-# For slot k, leader_id = 2-k. The local planner target is moved to the same
-# slot-k target. For the SANDO forest3 launcher the formation axis is x, so the
-# slot offset must be applied to target_x, not target_y.
-if [[ -n "${STATIC_PLANNER_SPAWN_ID:-}" ]]; then
-  if [[ "${STATIC_LOCAL_PLANNER}" != "1" && "${STATIC_LOCAL_PLANNER}" != "true" && "${STATIC_LOCAL_PLANNER}" != "TRUE" ]]; then
-    echo "[ERROR] STATIC_PLANNER_SPAWN_ID requires STATIC_LOCAL_PLANNER=1" >&2
-    exit 2
-  fi
-  SPAWN_ID="${STATIC_PLANNER_SPAWN_ID}"
-  if ! [[ "${SPAWN_ID}" =~ ^[0-9]+$ ]] || [[ "${SPAWN_ID}" -lt 1 ]]; then
-    echo "[ERROR] STATIC_PLANNER_SPAWN_ID must be a positive integer, got '${SPAWN_ID}'" >&2
-    exit 2
-  fi
-  NUM_DRONES=1
-  LEADER_ID=$((2 - SPAWN_ID))
-  export STATIC_PLANNER_DRONE_ID=1
-  if [[ "${SPAWNED_FORMATION_AXIS}" == "x" ]]; then
-    export STATIC_PLANNER_TARGET_X="${STATIC_PLANNER_TARGET_X:-$(python3 - <<PY
-base=${DYNAMIC_OBS_TARGET_X}
-spacing=${DYNAMIC_OBS_TARGET_Y_SPACING}
-slot=${SPAWN_ID}
-print(base + (slot - 1) * spacing)
-PY
-)}"
-    export STATIC_PLANNER_TARGET_Y="${STATIC_PLANNER_TARGET_Y:-${DYNAMIC_OBS_TARGET_Y_BASE}}"
-  else
-    export STATIC_PLANNER_TARGET_X="${STATIC_PLANNER_TARGET_X:-${DYNAMIC_OBS_TARGET_X}}"
-    export STATIC_PLANNER_TARGET_Y="${STATIC_PLANNER_TARGET_Y:-$(python3 - <<PY
-base=${DYNAMIC_OBS_TARGET_Y_BASE}
-spacing=${DYNAMIC_OBS_TARGET_Y_SPACING}
-slot=${SPAWN_ID}
-print(base + (slot - 1) * spacing)
-PY
-)}"
-  fi
-  export STATIC_PLANNER_TARGET_Z="${STATIC_PLANNER_TARGET_Z:-${MISSION_Z}}"
+# Keep the target marker and auxiliary target table consistent with the static
+# planner target in single-UAV coordinate tests.
+if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" || "${STATIC_LOCAL_PLANNER}" == "TRUE" ]]; then
+  DYNAMIC_OBS_TARGET_X="${STATIC_PLANNER_TARGET_X}"
+  DYNAMIC_OBS_TARGET_Y_BASE="${STATIC_PLANNER_TARGET_Y}"
+  MISSION_Z="${STATIC_PLANNER_TARGET_Z}"
 fi
 
 export LOCAL_PLANNER_MODE
@@ -135,7 +130,7 @@ echo "[INFO] num_drones=${NUM_DRONES}"
 echo "[INFO] leader_id=${LEADER_ID}"
 echo "[INFO] local_planner_mode=${LOCAL_PLANNER_MODE}"
 echo "[INFO] static_local_planner=${STATIC_LOCAL_PLANNER}"
-echo "[INFO] static_planner_spawn_id=${STATIC_PLANNER_SPAWN_ID:-unset}"
+echo "[INFO] static_planner_start=(${SPAWN_OVERRIDE_NED_X:-auto},${SPAWN_OVERRIDE_NED_Y:-auto})"
 echo "[INFO] static_planner_drone_id=${STATIC_PLANNER_DRONE_ID:-unset}"
 echo "[INFO] static_planner_target=(${STATIC_PLANNER_TARGET_X:-auto},${STATIC_PLANNER_TARGET_Y:-auto},${STATIC_PLANNER_TARGET_Z:-auto})"
 echo "[INFO] static_planner_max_speed=${STATIC_PLANNER_MAX_SPEED:-unset}"
@@ -159,6 +154,8 @@ exec ros2 launch xtd2_mission swarm_simulation_launch.py \
   gz_gui:=0 \
   px4_sim_model:="${PX4_SIM_MODEL}" \
   px4_use_versioned_local_position:=1 \
+  spawn_override_ned_x:="${SPAWN_OVERRIDE_NED_X}" \
+  spawn_override_ned_y:="${SPAWN_OVERRIDE_NED_Y}" \
   dynamic_obs_enable:="${DYNAMIC_OBS_ENABLE}" \
   dynamic_obs_mode:=scene \
   scene_freeze_dynamics:="${DYNAMIC_OBS_FREEZE}" \
