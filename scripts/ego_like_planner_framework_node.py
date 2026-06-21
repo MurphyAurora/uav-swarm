@@ -22,6 +22,7 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 
 from planner_framework import PlannerConfig, PlannerState, Vec3
+from planner_framework.goal_manager import LocalGoalManager
 from planner_framework.perception_interface import PerceptionInterface
 from planner_framework.planner_core import EgoLikePlannerCore
 
@@ -33,6 +34,7 @@ class EgoLikePlannerFrameworkNode(Node):
         self.num_drones = int(args.num_drones)
         self.state_timeout = float(args.state_timeout)
         self.publish_cmd = bool(int(args.publish_cmd))
+        self.manual_waypoints = self._parse_waypoints(args.waypoints, default_z=float(args.target_z))
 
         self.config = PlannerConfig(
             horizon=float(args.horizon),
@@ -59,7 +61,10 @@ class EgoLikePlannerFrameworkNode(Node):
         self.states: Dict[int, PlannerState] = {}
         self.static_tracks: List[Dict] = []
         self.dynamic_tracks: List[Dict] = []
-        self.planners = {drone_id: EgoLikePlannerCore(self.config) for drone_id in range(1, self.num_drones + 1)}
+        self.planners = {
+            drone_id: EgoLikePlannerCore(self.config, waypoints=self.manual_waypoints)
+            for drone_id in range(1, self.num_drones + 1)
+        }
 
         self.create_subscription(String, args.state_topic, self._state_cb, 10)
         self.create_subscription(String, args.predicted_topic, self._dynamic_cb, 10)
@@ -74,8 +79,18 @@ class EgoLikePlannerFrameworkNode(Node):
         self.get_logger().info(
             'ego_like_planner_framework started: '
             f'num_drones={self.num_drones}, publish_cmd={int(self.publish_cmd)}, '
-            f'output={args.output_topic}, cmd_topic=/xtdrone2/x500_i/ego_like_cmd_vel_ned'
+            f'waypoints={len(self.manual_waypoints)}, output={args.output_topic}, '
+            f'cmd_topic=/xtdrone2/x500_i/ego_like_cmd_vel_ned'
         )
+
+    def _parse_waypoints(self, raw: str, default_z: float) -> List[Vec3]:
+        waypoints = LocalGoalManager.parse_waypoints(raw or '')
+        fixed = []
+        for wp in waypoints:
+            # For x,y waypoint input, parse_waypoints uses z=0.0.  In this node,
+            # if the user did not write a z value, keep the mission altitude.
+            fixed.append(Vec3(wp.x, wp.y, wp.z if abs(wp.z) > 1.0e-9 else float(default_z)))
+        return fixed
 
     def _state_cb(self, msg: String) -> None:
         try:
@@ -149,6 +164,7 @@ class EgoLikePlannerFrameworkNode(Node):
                 'stamp': now,
                 'framework': 'ego_like_planner_framework',
                 'num_reports': len(reports),
+                'num_waypoints': len(self.manual_waypoints),
                 'reports': reports,
             },
             ensure_ascii=False,
@@ -163,7 +179,8 @@ class EgoLikePlannerFrameworkNode(Node):
                 self.get_logger().info(
                     'ego-like framework: '
                     f'reports={len(reports)}, best=x500_{best.get("drone_id")}, '
-                    f'mode={cmd.get("mode")}, source={cmd.get("source_trajectory")}, '
+                    f'wp={best.get("active_waypoint_index")}, mode={cmd.get("mode")}, '
+                    f'source={cmd.get("source_trajectory")}, '
                     f'safe={best.get("safe_count")}, feasible={best.get("feasible_count")}'
                 )
             else:
@@ -188,6 +205,7 @@ def build_arg_parser():
     parser.add_argument('--static_topic', default='/xtdrone2/swarm/tracked_static_obstacles')
     parser.add_argument('--output_topic', default='/xtdrone2/swarm/ego_like_planner_framework')
     parser.add_argument('--publish_cmd', default='0', help='1 publishes /xtdrone2/x500_i/ego_like_cmd_vel_ned; default only publishes report')
+    parser.add_argument('--waypoints', default='', help='Optional task-level guide points: "x,y,z;x,y,z" or "x,y;x,y". These are not obstacle-map priors.')
     parser.add_argument('--period', type=float, default=0.1)
     parser.add_argument('--state_timeout', type=float, default=2.0)
     parser.add_argument('--target_x', type=float, default=30.0)
