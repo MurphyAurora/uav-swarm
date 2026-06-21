@@ -27,6 +27,7 @@ DYNAMIC_OBS_TARGET_X="${DYNAMIC_OBS_TARGET_X:-19.0}"
 DYNAMIC_OBS_TARGET_Y_BASE="${DYNAMIC_OBS_TARGET_Y_BASE:-30.0}"
 DYNAMIC_OBS_TARGET_Y_SPACING="${DYNAMIC_OBS_TARGET_Y_SPACING:-2.6}"
 MISSION_Z="${MISSION_Z:--3.0}"
+SPAWNED_FORMATION_AXIS="${SPAWNED_FORMATION_AXIS:-x}"
 
 # Static-local-planner test mode is meant to quickly validate whether the new
 # planner can command visible single-UAV motion.  Keep the mission window long,
@@ -49,11 +50,12 @@ else
   LIDAR_TTC_ENABLE="${LIDAR_TTC_ENABLE:-1}"
 fi
 
-# Single-UAV path-slot test.  This does not spawn x500_3 literally.  It spawns
+# Single-UAV path-slot test. This does not spawn x500_3 literally. It spawns
 # one vehicle named x500_1, but places it at the original slot-k start position
 # by using the existing launch formula: offset=(i-leader_id)*spacing with i=1.
-# For slot k, leader_id = 2-k.  The local planner target is also moved to the
-# slot-k target, so the tested route matches the original kth UAV route.
+# For slot k, leader_id = 2-k. The local planner target is moved to the same
+# slot-k target. For the SANDO forest3 launcher the formation axis is x, so the
+# slot offset must be applied to target_x, not target_y.
 if [[ -n "${STATIC_PLANNER_SPAWN_ID:-}" ]]; then
   if [[ "${STATIC_LOCAL_PLANNER}" != "1" && "${STATIC_LOCAL_PLANNER}" != "true" && "${STATIC_LOCAL_PLANNER}" != "TRUE" ]]; then
     echo "[ERROR] STATIC_PLANNER_SPAWN_ID requires STATIC_LOCAL_PLANNER=1" >&2
@@ -67,14 +69,25 @@ if [[ -n "${STATIC_PLANNER_SPAWN_ID:-}" ]]; then
   NUM_DRONES=1
   LEADER_ID=$((2 - SPAWN_ID))
   export STATIC_PLANNER_DRONE_ID=1
-  export STATIC_PLANNER_TARGET_X="${STATIC_PLANNER_TARGET_X:-${DYNAMIC_OBS_TARGET_X}}"
-  export STATIC_PLANNER_TARGET_Y="${STATIC_PLANNER_TARGET_Y:-$(python3 - <<PY
+  if [[ "${SPAWNED_FORMATION_AXIS}" == "x" ]]; then
+    export STATIC_PLANNER_TARGET_X="${STATIC_PLANNER_TARGET_X:-$(python3 - <<PY
+base=${DYNAMIC_OBS_TARGET_X}
+spacing=${DYNAMIC_OBS_TARGET_Y_SPACING}
+slot=${SPAWN_ID}
+print(base + (slot - 1) * spacing)
+PY
+)}"
+    export STATIC_PLANNER_TARGET_Y="${STATIC_PLANNER_TARGET_Y:-${DYNAMIC_OBS_TARGET_Y_BASE}}"
+  else
+    export STATIC_PLANNER_TARGET_X="${STATIC_PLANNER_TARGET_X:-${DYNAMIC_OBS_TARGET_X}}"
+    export STATIC_PLANNER_TARGET_Y="${STATIC_PLANNER_TARGET_Y:-$(python3 - <<PY
 base=${DYNAMIC_OBS_TARGET_Y_BASE}
 spacing=${DYNAMIC_OBS_TARGET_Y_SPACING}
 slot=${SPAWN_ID}
 print(base + (slot - 1) * spacing)
 PY
 )}"
+  fi
   export STATIC_PLANNER_TARGET_Z="${STATIC_PLANNER_TARGET_Z:-${MISSION_Z}}"
 fi
 
@@ -150,7 +163,7 @@ exec ros2 launch xtd2_mission swarm_simulation_launch.py \
   dynamic_obs_mode:=scene \
   scene_freeze_dynamics:="${DYNAMIC_OBS_FREEZE}" \
   dynamic_obs_visualize_gz:=0 \
-  spawned_formation_axis:=x \
+  spawned_formation_axis:="${SPAWNED_FORMATION_AXIS}" \
   duration:="${RUN_DURATION}" \
   warmup_sec:="${WARMUP_SEC}" \
   post_offboard_hold_sec:="${POST_OFFBOARD_HOLD_SEC}" \
