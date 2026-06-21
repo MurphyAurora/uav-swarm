@@ -8,7 +8,7 @@ fallback, and command smoothing.
 """
 
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 from .backend_selector import BackendSelector
 from .command_output import CommandOutput
@@ -22,15 +22,18 @@ from .safety_checker import SafetyChecker
 class EgoLikePlannerCore:
     """Composable local replanning core."""
 
-    def __init__(self, config: Optional[PlannerConfig] = None):
+    def __init__(self, config: Optional[PlannerConfig] = None, waypoints: Optional[Sequence[Vec3]] = None):
         self.config = config or PlannerConfig()
-        self.goal_manager = LocalGoalManager(self.config)
+        self.goal_manager = LocalGoalManager(self.config, waypoints=waypoints)
         self.frontend = FrontendPlanner(self.config)
         self.safety_checker = SafetyChecker(self.config)
         self.backend = BackendSelector(self.config)
         self.fallback = FallbackManager(self.config)
         self.output = CommandOutput(self.config)
         self._last_plan_time: Optional[float] = None
+
+    def set_waypoints(self, waypoints: Sequence[Vec3], reset: bool = True) -> None:
+        self.goal_manager.set_waypoints(waypoints, reset=reset)
 
     def plan(
         self,
@@ -43,6 +46,7 @@ class EgoLikePlannerCore:
         dt = None if self._last_plan_time is None else max(0.0, now - self._last_plan_time)
         self._last_plan_time = now
 
+        active_goal = self.goal_manager.active_waypoint(final_goal)
         local_goal = self.goal_manager.compute_local_goal(state, final_goal, perception)
         candidates = self.frontend.generate(state, local_goal)
         safety_reports = [self.safety_checker.evaluate(candidate, state, perception) for candidate in candidates]
@@ -63,8 +67,11 @@ class EgoLikePlannerCore:
         return {
             "stamp": now,
             "drone_id": state.drone_id,
+            "active_waypoint_index": self.goal_manager.active_waypoint_index(),
+            "active_goal": active_goal.to_dict(),
             "local_goal": local_goal.to_dict(),
             "final_goal": final_goal.to_dict(),
+            "mission_reached": self.goal_manager.mission_reached(state, final_goal),
             "command": command.to_dict(),
             "best": best.to_dict() if best else None,
             "candidate_count": len(candidates),
