@@ -13,6 +13,7 @@ Example:
 
 import argparse
 import json
+import os
 import time
 from typing import Dict, List
 
@@ -35,6 +36,11 @@ class EgoLikePlannerFrameworkNode(Node):
         self.state_timeout = float(args.state_timeout)
         self.publish_cmd = bool(int(args.publish_cmd))
         self.manual_waypoints = self._parse_waypoints(args.waypoints, default_z=float(args.target_z))
+        self.log_file_path = str(args.log_file or '').strip()
+        self.log_fp = None
+        if self.log_file_path:
+            os.makedirs(os.path.dirname(os.path.abspath(self.log_file_path)), exist_ok=True)
+            self.log_fp = open(self.log_file_path, 'a', encoding='utf-8')
 
         self.config = PlannerConfig(
             horizon=float(args.horizon),
@@ -80,7 +86,8 @@ class EgoLikePlannerFrameworkNode(Node):
             'ego_like_planner_framework started: '
             f'num_drones={self.num_drones}, publish_cmd={int(self.publish_cmd)}, '
             f'waypoints={len(self.manual_waypoints)}, output={args.output_topic}, '
-            f'cmd_topic=/xtdrone2/x500_i/ego_like_cmd_vel_ned'
+            f'cmd_topic=/xtdrone2/x500_i/ego_like_cmd_vel_ned, '
+            f'log_file={self.log_file_path or "disabled"}'
         )
 
     def _parse_waypoints(self, raw: str, default_z: float) -> List[Vec3]:
@@ -158,33 +165,40 @@ class EgoLikePlannerFrameworkNode(Node):
             if self.publish_cmd:
                 self._publish_cmd(drone_id, report)
 
+        payload = {
+            'stamp': now,
+            'framework': 'ego_like_planner_framework',
+            'num_reports': len(reports),
+            'num_waypoints': len(self.manual_waypoints),
+            'reports': reports,
+        }
         out = String()
-        out.data = json.dumps(
-            {
-                'stamp': now,
-                'framework': 'ego_like_planner_framework',
-                'num_reports': len(reports),
-                'num_waypoints': len(self.manual_waypoints),
-                'reports': reports,
-            },
-            ensure_ascii=False,
-        )
+        out.data = json.dumps(payload, ensure_ascii=False)
         self.report_pub.publish(out)
+        self._write_jsonl(payload)
 
         if now - self.last_log_time > 1.5:
             self.last_log_time = now
             if reports:
                 best = min(reports, key=lambda item: float(item.get('best', {}).get('score', 0.0) if item.get('best') else 99999.0))
                 cmd = best.get('command', {})
+                best_eval = best.get('best') or {}
                 self.get_logger().info(
                     'ego-like framework: '
                     f'reports={len(reports)}, best=x500_{best.get("drone_id")}, '
                     f'wp={best.get("active_waypoint_index")}, mode={cmd.get("mode")}, '
                     f'source={cmd.get("source_trajectory")}, '
-                    f'safe={best.get("safe_count")}, feasible={best.get("feasible_count")}'
+                    f'safe={best.get("safe_count")}, feasible={best.get("feasible_count")}, '
+                    f'clearance={best_eval.get("min_clearance")}, reason={cmd.get("reason")}'
                 )
             else:
                 self.get_logger().info('ego-like framework: no fresh states')
+
+    def _write_jsonl(self, payload: Dict) -> None:
+        if not self.log_fp:
+            return
+        self.log_fp.write(json.dumps(payload, ensure_ascii=False) + '\n')
+        self.log_fp.flush()
 
     def _publish_cmd(self, drone_id: int, report: Dict) -> None:
         cmd = report.get('command', {}).get('velocity', {})
@@ -196,6 +210,12 @@ class EgoLikePlannerFrameworkNode(Node):
         if pub:
             pub.publish(msg)
 
+    def destroy_node(self):
+        if self.log_fp:
+            self.log_fp.close()
+            self.log_fp = None
+        super().destroy_node()
+
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description='Run the EGO-like planner framework bridge node.')
@@ -205,6 +225,7 @@ def build_arg_parser():
     parser.add_argument('--static_topic', default='/xtdrone2/swarm/tracked_static_obstacles')
     parser.add_argument('--output_topic', default='/xtdrone2/swarm/ego_like_planner_framework')
     parser.add_argument('--publish_cmd', default='0', help='1 publishes /xtdrone2/x500_i/ego_like_cmd_vel_ned; default only publishes report')
+    parser.add_argument('--log_file', default='', help='Optional JSONL file path for planner reports, e.g. logs/ego_like_planner.jsonl')
     parser.add_argument('--waypoints', default='', help='Optional task-level guide points: "x,y,z;x,y,z" or "x,y;x,y". These are not obstacle-map priors.')
     parser.add_argument('--period', type=float, default=0.1)
     parser.add_argument('--state_timeout', type=float, default=2.0)
