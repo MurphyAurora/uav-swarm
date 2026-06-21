@@ -6,9 +6,6 @@ This node is intentionally added under scripts/ so it can be tried without
 changing the installed xtd2_mission console scripts or launch files.  It reads
 the same JSON-style swarm state / obstacle tracks used by the current branch and
 publishes both a JSON planner report and optional Twist commands.
-
-Example:
-    python3 scripts/ego_like_planner_framework_node.py --num_drones 1 --publish_cmd 1
 """
 
 import argparse
@@ -35,6 +32,7 @@ class EgoLikePlannerFrameworkNode(Node):
         self.num_drones = int(args.num_drones)
         self.state_timeout = float(args.state_timeout)
         self.publish_cmd = bool(int(args.publish_cmd))
+        self.cmd_topic_template = str(args.cmd_topic_template or '/xtdrone2/x500_{id}/ego_like_cmd_vel_ned')
         self.manual_waypoints = self._parse_waypoints(args.waypoints, default_z=float(args.target_z))
         self.log_file_path = str(args.log_file or '').strip()
         self.log_fp = None
@@ -77,7 +75,7 @@ class EgoLikePlannerFrameworkNode(Node):
         self.create_subscription(String, args.static_topic, self._static_cb, 10)
         self.report_pub = self.create_publisher(String, args.output_topic, 10)
         self.cmd_pubs = {
-            drone_id: self.create_publisher(Twist, f'/xtdrone2/x500_{drone_id}/ego_like_cmd_vel_ned', 10)
+            drone_id: self.create_publisher(Twist, self._cmd_topic_for(drone_id), 10)
             for drone_id in range(1, self.num_drones + 1)
         }
         self.timer = self.create_timer(float(args.period), self._run)
@@ -86,16 +84,17 @@ class EgoLikePlannerFrameworkNode(Node):
             'ego_like_planner_framework started: '
             f'num_drones={self.num_drones}, publish_cmd={int(self.publish_cmd)}, '
             f'waypoints={len(self.manual_waypoints)}, output={args.output_topic}, '
-            f'cmd_topic=/xtdrone2/x500_i/ego_like_cmd_vel_ned, '
+            f'cmd_topic_template={self.cmd_topic_template}, '
             f'log_file={self.log_file_path or "disabled"}'
         )
+
+    def _cmd_topic_for(self, drone_id: int) -> str:
+        return self.cmd_topic_template.format(id=int(drone_id), drone_id=int(drone_id))
 
     def _parse_waypoints(self, raw: str, default_z: float) -> List[Vec3]:
         waypoints = LocalGoalManager.parse_waypoints(raw or '')
         fixed = []
         for wp in waypoints:
-            # For x,y waypoint input, parse_waypoints uses z=0.0.  In this node,
-            # if the user did not write a z value, keep the mission altitude.
             fixed.append(Vec3(wp.x, wp.y, wp.z if abs(wp.z) > 1.0e-9 else float(default_z)))
         return fixed
 
@@ -126,8 +125,6 @@ class EgoLikePlannerFrameworkNode(Node):
             self.get_logger().warn(f'framework static track parse failed: {exc}')
 
     def _target_for_drone(self, drone_id: int) -> Vec3:
-        # Keep the same simple formation target convention as the existing
-        # primitive selector; later this should be replaced by goal_manager input.
         offset = (drone_id - int(self.args.leader_id)) * float(self.args.target_y_spacing)
         return Vec3(float(self.args.target_x), float(self.args.target_y_base) + offset, float(self.args.target_z))
 
@@ -224,7 +221,8 @@ def build_arg_parser():
     parser.add_argument('--predicted_topic', default='/xtdrone2/swarm/filtered_predicted_dynamic_obstacles')
     parser.add_argument('--static_topic', default='/xtdrone2/swarm/tracked_static_obstacles')
     parser.add_argument('--output_topic', default='/xtdrone2/swarm/ego_like_planner_framework')
-    parser.add_argument('--publish_cmd', default='0', help='1 publishes /xtdrone2/x500_i/ego_like_cmd_vel_ned; default only publishes report')
+    parser.add_argument('--publish_cmd', default='0', help='1 publishes velocity commands; default only publishes report')
+    parser.add_argument('--cmd_topic_template', default='/xtdrone2/x500_{id}/ego_like_cmd_vel_ned', help='Velocity command topic template')
     parser.add_argument('--log_file', default='', help='Optional JSONL file path for planner reports, e.g. logs/ego_like_planner.jsonl')
     parser.add_argument('--waypoints', default='', help='Optional task-level guide points: "x,y,z;x,y,z" or "x,y;x,y". These are not obstacle-map priors.')
     parser.add_argument('--period', type=float, default=0.1)
