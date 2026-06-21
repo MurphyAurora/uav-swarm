@@ -55,6 +55,13 @@ def _declare_args(param_names, defaults):
     return result
 
 
+def _optional_float(value):
+    text = str(value).strip()
+    if text == '':
+        return None
+    return float(text)
+
+
 def generate_launch_description():
 
     _pkg_dir = get_package_share_directory('xtd2_mission')
@@ -66,6 +73,8 @@ def generate_launch_description():
     defaults['ws_root'] = _ws_root
     defaults['start_delay'] = '0'
     defaults.setdefault('px4_use_versioned_local_position', '0')
+    defaults.setdefault('spawn_override_ned_x', '')
+    defaults.setdefault('spawn_override_ned_y', '')
 
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
@@ -73,7 +82,7 @@ def generate_launch_description():
         'num_drones', 'gz_world', 'gz_gui', 'px4_sim_model', 'start_port', 'px4_sys_id_base', 'px4_dir',
         'px4_disable_gcs_arm_check', 'leader_id', 'dynamic_obs_wall_x',
         'dynamic_obs_wall_y', 'dynamic_obs_target_y_spacing', 'start_wall_clearance',
-        'spawned_formation_axis',
+        'spawned_formation_axis', 'spawn_override_ned_x', 'spawn_override_ned_y',
         # Comm
         'start_delay', 'ws_root', 'px4_use_versioned_local_position',
         # Mission
@@ -188,6 +197,9 @@ def _build_px4_sitl(lc, num_drones):
     start_wall_clearance = float(lc('start_wall_clearance'))
     mission_start_x = wall_x - start_wall_clearance
     formation_axis = str(lc('spawned_formation_axis') or 'y').strip().lower()
+    spawn_override_x = _optional_float(lc('spawn_override_ned_x'))
+    spawn_override_y = _optional_float(lc('spawn_override_ned_y'))
+    has_spawn_override = spawn_override_x is not None and spawn_override_y is not None
 
     if px4_disable_gcs == '1':
         px4_post_dir = os.path.join(
@@ -211,7 +223,10 @@ def _build_px4_sitl(lc, num_drones):
     for i in range(1, num_drones + 1):
         dds_port = start_port + i * 10
         formation_offset = (i - leader_id) * target_y_spacing
-        if formation_axis == 'x':
+        if has_spawn_override and num_drones == 1:
+            spawn_ned_x = spawn_override_x
+            spawn_ned_y = spawn_override_y
+        elif formation_axis == 'x':
             spawn_ned_x = mission_start_x + formation_offset
             spawn_ned_y = wall_y
         else:
@@ -337,6 +352,12 @@ def _build_mission_nodes(lc, num_drones):
     mission_start_x = wall_x - start_wall_clearance
     formation_axis = str(lc('spawned_formation_axis') or 'y').strip().lower()
     gz_world = lc('gz_world')
+    spawn_override_x = _optional_float(lc('spawn_override_ned_x'))
+    spawn_override_y = _optional_float(lc('spawn_override_ned_y'))
+    has_spawn_override = spawn_override_x is not None and spawn_override_y is not None
+    if has_spawn_override and num_drones == 1:
+        mission_start_x = spawn_override_x
+        wall_y = spawn_override_y
 
     warmup_sec = float(lc('warmup_sec'))
     post_offboard_hold = float(lc('post_offboard_hold_sec'))
@@ -649,20 +670,6 @@ def _build_mission_nodes(lc, num_drones):
 
     actions.append(TimerAction(
         period=2.0,
-        # actions=[ExecuteProcess(
-        #     cmd=[
-        #         'xterm',
-        #         '-fa', 'Monospace',
-        #         '-fs', '16',
-        #         '-hold',
-        #         '-e',
-        #         'bash',
-        #         '-c',
-        #         setup_cmd + mission_cmd,
-        #     ],
-        #     output='screen',
-        #     name='mission_controller',
-        # )],
         actions=[ExecuteProcess(
             cmd=['bash', '-c', setup_cmd + mission_cmd],
             output='log', name='mission_controller',
