@@ -7,19 +7,29 @@ module without changing behavior all at once.
 """
 
 from .common import (
-    PlannerState,
-    Vec3,
-    Obstacle,
+    CandidateEvaluation,
     CandidateTrajectory,
-    PlannerCommand,
+    Obstacle,
     PerceptionData,
+    PlannerCommand,
+    PlannerConfig,
+    PlannerState,
+    SafetyReport,
+    TrajectoryPoint,
+    Vec3,
 )
+from .planner_core import EgoLikePlannerCore
 
 __all__ = [
-    "PlannerState",
-    "Vec3",
-    "Obstacle",
+    "CandidateEvaluation",
     "CandidateTrajectory",
-    "PlannerCommand",
+    "EgoLikePlannerCore",
+    "Obstacle",
     "PerceptionData",
+    "PlannerCommand",
+    "PlannerConfig",
+    "PlannerState",
+    "SafetyReport",
+    "TrajectoryPoint",
+    "Vec3",
 ]
