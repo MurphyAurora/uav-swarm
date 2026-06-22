@@ -22,6 +22,7 @@ DYNAMIC_OBS_FREEZE="${DYNAMIC_OBS_FREEZE:-1}"
 NUM_DRONES="${NUM_DRONES:-1}"
 LEADER_ID="${LEADER_ID:-1}"
 LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
+EGO_LIKE_ENABLE="${EGO_LIKE_ENABLE:-0}"
 STOP_ON_STAGE_TIMEOUT="${STOP_ON_STAGE_TIMEOUT:-1}"
 STATIC_LOCAL_PLANNER="${STATIC_LOCAL_PLANNER:-0}"
 DYNAMIC_OBS_TARGET_X="${DYNAMIC_OBS_TARGET_X:-19.0}"
@@ -115,10 +116,14 @@ pkill -f MicroXRCEAgent 2>/dev/null || true
 cd "${WS_ROOT}"
 "${SCRIPT_DIR}/worlds/install_sando_worlds.sh"
 
-# Apply the controller-side LiDAR unknown-obstacle safety patch before launch.
-# This keeps the experiment usable even when the working tree was pulled before
-# the controller file was manually patched.
-python3 "${SCRIPT_DIR}/apply_lidar_risk_astar_safety_patch.py"
+# Apply the controller-side LiDAR unknown-obstacle safety patch for the legacy
+# flow.  The EGO-like path already routes direct velocity through the
+# primitive/safe chain, so this old patch script is intentionally skipped there.
+if [[ "${EGO_LIKE_ENABLE}" == "1" || "${EGO_LIKE_ENABLE}" == "true" || "${EGO_LIKE_ENABLE}" == "TRUE" ]]; then
+  echo "[INFO] ego_like_enable=${EGO_LIKE_ENABLE}; skip legacy lidar risk-astar patch"
+else
+  python3 "${SCRIPT_DIR}/apply_lidar_risk_astar_safety_patch.py"
+fi
 
 set +u
 source /opt/ros/jazzy/setup.bash
@@ -139,6 +144,7 @@ echo "[INFO] stop_on_stage_timeout=${STOP_ON_STAGE_TIMEOUT}"
 echo "[INFO] warmup_sec=${WARMUP_SEC}, post_offboard_hold_sec=${POST_OFFBOARD_HOLD_SEC}"
 echo "[INFO] run_duration=${RUN_DURATION}"
 echo "[INFO] motion_primitive_enable=${MOTION_PRIMITIVE_ENABLE}, lidar_ttc_enable=${LIDAR_TTC_ENABLE}"
+echo "[INFO] ego_like_enable=${EGO_LIKE_ENABLE}"
 echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
 echo "[INFO] default keeps scene obstacles published and freezes moving obstacles for static-column validation"
 echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"
@@ -163,6 +169,7 @@ LAUNCH_ARGS=(
   warmup_sec:="${WARMUP_SEC}"
   post_offboard_hold_sec:="${POST_OFFBOARD_HOLD_SEC}"
   motion_primitive_enable:="${MOTION_PRIMITIVE_ENABLE}"
+  ego_like_enable:="${EGO_LIKE_ENABLE}"
   lidar_ttc_enable:="${LIDAR_TTC_ENABLE}"
   scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml"
   dynamic_obs_wall_x:=27.0

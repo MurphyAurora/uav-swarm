@@ -62,6 +62,10 @@ def _optional_float(value):
     return float(text)
 
 
+def _is_true(value):
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def generate_launch_description():
 
     _pkg_dir = get_package_share_directory('xtd2_mission')
@@ -75,6 +79,19 @@ def generate_launch_description():
     defaults.setdefault('px4_use_versioned_local_position', '0')
     defaults.setdefault('spawn_override_ned_x', '')
     defaults.setdefault('spawn_override_ned_y', '')
+    defaults.setdefault('ego_like_enable', '0')
+    defaults.setdefault('ego_like_publish_cmd', '1')
+    defaults.setdefault('ego_like_output_topic', '/xtdrone2/swarm/ego_like_planner_framework')
+    defaults.setdefault('ego_like_cmd_topic_template', '/xtdrone2/x500_{id}/primitive_cmd_vel_ned')
+    defaults.setdefault('ego_like_waypoints', '')
+    defaults.setdefault('ego_like_period', '0.1')
+    defaults.setdefault('ego_like_local_goal_distance', '3.0')
+    defaults.setdefault('ego_like_output_alpha', '0.55')
+    defaults.setdefault('ego_like_obstacle_margin', '0.35')
+    defaults.setdefault('ego_like_hard_clearance', '0.15')
+    defaults.setdefault('ego_like_emergency_clearance', '0.45')
+    defaults.setdefault('ego_like_static_hard_clearance', '0.25')
+    defaults.setdefault('ego_like_static_emergency_clearance', '0.55')
 
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
@@ -115,7 +132,14 @@ def generate_launch_description():
         'collision_monitor_enable', 'collision_horizon', 'collision_drone_radius',
         'collision_safety_margin', 'collision_warning_margin', 'collision_state_timeout',
         'collision_max_reports',
-        'motion_primitive_enable', 'primitive_horizon', 'primitive_dt',
+        'motion_primitive_enable',
+        'ego_like_enable', 'ego_like_publish_cmd', 'ego_like_output_topic',
+        'ego_like_cmd_topic_template', 'ego_like_waypoints', 'ego_like_period',
+        'ego_like_local_goal_distance', 'ego_like_output_alpha',
+        'ego_like_obstacle_margin', 'ego_like_hard_clearance',
+        'ego_like_emergency_clearance', 'ego_like_static_hard_clearance',
+        'ego_like_static_emergency_clearance',
+        'primitive_horizon', 'primitive_dt',
         'primitive_cruise_speed', 'primitive_lateral_speed', 'primitive_vertical_speed',
         'primitive_max_speed', 'primitive_drone_radius', 'primitive_safety_margin',
         'primitive_risk_radius', 'primitive_state_timeout', 'primitive_target_weight',
@@ -521,7 +545,51 @@ def _build_mission_nodes(lc, num_drones):
                 output='log', name='collision_risk_monitor',
             ))
 
-        if lc('motion_primitive_enable') == '1':
+        if _is_true(lc('ego_like_enable')):
+            ego_like_args = (
+                f'ros2 run xtd2_mission ego_like_planner_framework '
+                f'--num-drones {num_drones} '
+                f'--state-topic /xtdrone2/swarm/state_exchange '
+                f'--predicted-topic {predicted_topic} '
+                f'--static-topic /xtdrone2/swarm/tracked_static_obstacles '
+                f'--output-topic {lc("ego_like_output_topic")} '
+                f'--publish-cmd {lc("ego_like_publish_cmd")} '
+                f'--cmd-topic-template "{lc("ego_like_cmd_topic_template")}" '
+                f'--waypoints "{lc("ego_like_waypoints")}" '
+                f'--period {lc("ego_like_period")} '
+                f'--state-timeout {lc("primitive_state_timeout")} '
+                f'--target-x {lc("dynamic_obs_target_x")} '
+                f'--target-y-base {lc("dynamic_obs_target_y_base")} '
+                f'--target-y-spacing {lc("dynamic_obs_target_y_spacing")} '
+                f'--target-z {lc("mission_z")} '
+                f'--leader-id {lc("leader_id")} '
+                f'--horizon {lc("primitive_horizon")} '
+                f'--dt {lc("primitive_dt")} '
+                f'--cruise-speed {lc("primitive_cruise_speed")} '
+                f'--lateral-speed {lc("primitive_lateral_speed")} '
+                f'--vertical-speed {lc("primitive_vertical_speed")} '
+                f'--max-speed {lc("primitive_max_speed")} '
+                f'--max-accel 0.8 '
+                f'--drone-radius {lc("primitive_drone_radius")} '
+                f'--obstacle-margin {lc("ego_like_obstacle_margin")} '
+                f'--hard-clearance {lc("ego_like_hard_clearance")} '
+                f'--emergency-clearance {lc("ego_like_emergency_clearance")} '
+                f'--static-hard-clearance {lc("ego_like_static_hard_clearance")} '
+                f'--static-emergency-clearance {lc("ego_like_static_emergency_clearance")} '
+                f'--local-goal-distance {lc("ego_like_local_goal_distance")} '
+                f'--goal-weight {lc("primitive_target_weight")} '
+                f'--clearance-weight {lc("primitive_risk_weight")} '
+                f'--ttc-weight 4.0 '
+                f'--smooth-weight {lc("primitive_smooth_weight")} '
+                f'--output-alpha {lc("ego_like_output_alpha")} '
+                f'--ros-args -r __node:=ego_like_planner_framework'
+            )
+            actions.append(ExecuteProcess(
+                cmd=['bash', '-c', setup_cmd + ego_like_args],
+                output='log', name='ego_like_planner_framework',
+            ))
+
+        if _is_true(lc('motion_primitive_enable')) and not _is_true(lc('ego_like_enable')):
             primitive_args = (
                 f'ros2 run xtd2_mission motion_primitive_selector '
                 f'--num-drones {num_drones} '

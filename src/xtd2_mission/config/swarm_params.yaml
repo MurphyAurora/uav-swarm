@@ -122,6 +122,19 @@ collision_max_reports: 30
 
 # ===== Lightweight motion primitive selector =====
 motion_primitive_enable: true
+ego_like_enable: false
+ego_like_publish_cmd: true
+ego_like_output_topic: "/xtdrone2/swarm/ego_like_planner_framework"
+ego_like_cmd_topic_template: "/xtdrone2/x500_{id}/primitive_cmd_vel_ned"
+ego_like_waypoints: ""
+ego_like_period: 0.1
+ego_like_local_goal_distance: 3.0
+ego_like_output_alpha: 0.55
+ego_like_obstacle_margin: 0.35
+ego_like_hard_clearance: 0.15
+ego_like_emergency_clearance: 0.45
+ego_like_static_hard_clearance: 0.25
+ego_like_static_emergency_clearance: 0.55
 primitive_horizon: 3.5
 primitive_dt: 0.5
 primitive_cruise_speed: 0.34

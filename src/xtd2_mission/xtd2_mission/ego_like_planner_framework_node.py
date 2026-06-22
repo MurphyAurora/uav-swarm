@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""ROS2 bridge node for the EGO-like planner framework."""
+
+import argparse
+import json
+import os
+import time
+
+import rclpy
+from geometry_msgs.msg import Twist
+from rclpy.node import Node
+from std_msgs.msg import String
+
+from .planner_framework import EgoLikePlannerCore, PlannerConfig, PlannerState, Vec3
+from .planner_framework.goal_manager import LocalGoalManager
+from .planner_framework.perception_interface import PerceptionInterface
+
+
+def _bool_arg(value):
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+class EgoLikePlannerFrameworkNode(Node):
+    def __init__(self, args):
+        super().__init__("ego_like_planner_framework")
+        self.args = args
+        self.num_drones = int(args.num_drones)
+        self.state_timeout = float(args.state_timeout)
+        self.publish_cmd = _bool_arg(args.publish_cmd)
+        self.cmd_topic_template = str(args.cmd_topic_template)
+        self.manual_waypoints = self._parse_waypoints(args.waypoints, default_z=float(args.target_z))
+        self.log_file_path = str(args.log_file or "").strip()
+        self.log_fp = None
+        if self.log_file_path:
+            os.makedirs(os.path.dirname(os.path.abspath(self.log_file_path)), exist_ok=True)
+            self.log_fp = open(self.log_file_path, "a", buffering=1)
+
+        self.config = PlannerConfig(
+            horizon=float(args.horizon),
+            dt=float(args.dt),
+            cruise_speed=float(args.cruise_speed),
+            lateral_speed=float(args.lateral_speed),
+            vertical_speed=float(args.vertical_speed),
+            max_speed=float(args.max_speed),
+            max_accel=float(args.max_accel),
+            drone_radius=float(args.drone_radius),
+            obstacle_margin=float(args.obstacle_margin),
+            hard_clearance=float(args.hard_clearance),
+            emergency_clearance=float(args.emergency_clearance),
+            static_hard_clearance=float(args.static_hard_clearance),
+            static_emergency_clearance=float(args.static_emergency_clearance),
+            local_goal_distance=float(args.local_goal_distance),
+            goal_weight=float(args.goal_weight),
+            clearance_weight=float(args.clearance_weight),
+            ttc_weight=float(args.ttc_weight),
+            smooth_weight=float(args.smooth_weight),
+            output_alpha=float(args.output_alpha),
+        )
+
+        self.states = {}
+        self.static_tracks = []
+        self.dynamic_tracks = []
+        self._last_summary_log = 0.0
+        self.planners = {i: EgoLikePlannerCore(self.config, waypoints=self.manual_waypoints) for i in range(1, self.num_drones + 1)}
+
+        self.create_subscription(String, args.state_topic, self._state_cb, 10)
+        self.create_subscription(String, args.predicted_topic, self._dynamic_cb, 10)
+        self.create_subscription(String, args.static_topic, self._static_cb, 10)
+        self.report_pub = self.create_publisher(String, args.output_topic, 10)
+        self.cmd_pubs = {i: self.create_publisher(Twist, self._cmd_topic_for(i), 10) for i in range(1, self.num_drones + 1)}
+        self.timer = self.create_timer(float(args.period), self._run)
+        self.get_logger().info(
+            f"ego_like planner framework started: num={self.num_drones}, publish_cmd={int(self.publish_cmd)}, "
+            f"cmd_topic_template={self.cmd_topic_template}"
+        )
+
+    def destroy_node(self):
+        if self.log_fp is not None:
+            self.log_fp.close()
+        super().destroy_node()
+
+    def _cmd_topic_for(self, drone_id):
+        return self.cmd_topic_template.format(id=drone_id)
+
+    def _parse_waypoints(self, raw, default_z):
+        waypoints = LocalGoalManager.parse_waypoints(raw or "")
+        return [Vec3(w.x, w.y, w.z if abs(w.z) > 1.0e-9 else float(default_z)) for w in waypoints]
+
+    def _state_cb(self, msg):
+        try:
+            data = json.loads(msg.data)
+            self.states = {int(s["id"]): PlannerState.from_mapping(s, prefer_world=True) for s in data.get("states", [])}
+        except Exception as exc:
+            self.get_logger().warn(f"failed to parse state_exchange: {exc}")
+
+    def _dynamic_cb(self, msg):
+        try:
+            self.dynamic_tracks = json.loads(msg.data).get("tracks", [])
+        except Exception as exc:
+            self.get_logger().warn(f"failed to parse dynamic tracks: {exc}")
+
+    def _static_cb(self, msg):
+        try:
+            self.static_tracks = json.loads(msg.data).get("tracks", [])
+        except Exception as exc:
+            self.get_logger().warn(f"failed to parse static tracks: {exc}")
+
+    def _target(self, drone_id):
+        off = (int(drone_id) - int(self.args.leader_id)) * float(self.args.target_y_spacing)
+        return Vec3(float(self.args.target_x), float(self.args.target_y_base) + off, float(self.args.target_z))
+
+    def _run(self):
+        now = time.time()
+        reports = []
+        raw_states = [
+            {
+                "id": state.drone_id,
+                "x": state.position.x,
+                "y": state.position.y,
+                "z": state.position.z,
+                "vx": state.velocity.x,
+                "vy": state.velocity.y,
+                "vz": state.velocity.z,
+                "stamp": state.stamp,
+            }
+            for state in self.states.values()
+        ]
+
+        for drone_id, state in sorted(self.states.items()):
+            if drone_id not in self.planners:
+                continue
+            if now - state.stamp > self.state_timeout:
+                continue
+
+            perception = PerceptionInterface(self.config.drone_radius, 0.3, self.config.emergency_clearance)
+            perception.update_static_tracks(self.static_tracks, now)
+            perception.update_dynamic_tracks(self.dynamic_tracks, now)
+            perception.update_swarm_states(raw_states, drone_id, self.state_timeout)
+            report = self.planners[drone_id].plan(state, self._target(drone_id), perception.build(state.position))
+            reports.append(report)
+            if self.log_fp is not None:
+                self.log_fp.write(json.dumps(report, ensure_ascii=False) + "\n")
+            if self.publish_cmd:
+                self._publish_cmd(drone_id, report)
+
+        out = String()
+        out.data = json.dumps({"framework": "ego_like", "reports": reports}, ensure_ascii=False)
+        self.report_pub.publish(out)
+        self._log_summary(now, reports)
+
+    def _publish_cmd(self, drone_id, report):
+        velocity = report.get("command", {}).get("velocity", {})
+        msg = Twist()
+        msg.linear.x = float(velocity.get("x", 0.0))
+        msg.linear.y = float(velocity.get("y", 0.0))
+        msg.linear.z = float(velocity.get("z", 0.0))
+        self.cmd_pubs[drone_id].publish(msg)
+
+    def _log_summary(self, now, reports):
+        if now - self._last_summary_log < 1.0:
+            return
+        self._last_summary_log = now
+        if not reports:
+            self.get_logger().info(
+                f"ego_like summary: no fresh states, states={len(self.states)}, "
+                f"static={len(self.static_tracks)}, dynamic={len(self.dynamic_tracks)}"
+            )
+            return
+        parts = []
+        for report in reports:
+            cmd = report.get("command", {})
+            velocity = cmd.get("velocity", {})
+            local_goal = report.get("local_goal", {})
+            final_goal = report.get("final_goal", {})
+            parts.append(
+                "x500_{id} mode={mode} traj={traj} v=({vx:.2f},{vy:.2f},{vz:.2f}) "
+                "safe={safe}/{cand} feasible={feasible} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
+                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) reason={reason}".format(
+                    id=int(report.get("drone_id", 0)),
+                    mode=str(cmd.get("mode", "")),
+                    traj=str(cmd.get("source_trajectory", "")),
+                    vx=float(velocity.get("x", 0.0)),
+                    vy=float(velocity.get("y", 0.0)),
+                    vz=float(velocity.get("z", 0.0)),
+                    safe=int(report.get("safe_count", 0)),
+                    cand=int(report.get("candidate_count", 0)),
+                    feasible=int(report.get("feasible_count", 0)),
+                    lx=float(local_goal.get("x", 0.0)),
+                    ly=float(local_goal.get("y", 0.0)),
+                    lz=float(local_goal.get("z", 0.0)),
+                    gx=float(final_goal.get("x", 0.0)),
+                    gy=float(final_goal.get("y", 0.0)),
+                    gz=float(final_goal.get("z", 0.0)),
+                    reason=str(cmd.get("reason", "")),
+                )
+            )
+        self.get_logger().info(
+            f"ego_like summary: static={len(self.static_tracks)}, dynamic={len(self.dynamic_tracks)} | "
+            + " | ".join(parts)
+        )
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(description="EGO-like planner framework node")
+    parser.add_argument("--num-drones", type=int, default=1)
+    parser.add_argument("--state-topic", default="/xtdrone2/swarm/state_exchange")
+    parser.add_argument("--predicted-topic", default="/xtdrone2/swarm/filtered_predicted_dynamic_obstacles")
+    parser.add_argument("--static-topic", default="/xtdrone2/swarm/tracked_static_obstacles")
+    parser.add_argument("--output-topic", default="/xtdrone2/swarm/ego_like_planner_framework")
+    parser.add_argument("--publish-cmd", default="0")
+    parser.add_argument("--cmd-topic-template", default="/xtdrone2/x500_{id}/primitive_cmd_vel_ned")
+    parser.add_argument("--waypoints", default="")
+    parser.add_argument("--period", type=float, default=0.1)
+    parser.add_argument("--state-timeout", type=float, default=2.0)
+    parser.add_argument("--target-x", type=float, default=30.0)
+    parser.add_argument("--target-y-base", type=float, default=26.0)
+    parser.add_argument("--target-y-spacing", type=float, default=1.8)
+    parser.add_argument("--target-z", type=float, default=-3.0)
+    parser.add_argument("--leader-id", type=int, default=3)
+    parser.add_argument("--horizon", type=float, default=2.5)
+    parser.add_argument("--dt", type=float, default=0.5)
+    parser.add_argument("--cruise-speed", type=float, default=0.7)
+    parser.add_argument("--lateral-speed", type=float, default=0.45)
+    parser.add_argument("--vertical-speed", type=float, default=0.35)
+    parser.add_argument("--max-speed", type=float, default=1.0)
+    parser.add_argument("--max-accel", type=float, default=0.8)
+    parser.add_argument("--drone-radius", type=float, default=0.35)
+    parser.add_argument("--obstacle-margin", type=float, default=0.45)
+    parser.add_argument("--hard-clearance", type=float, default=0.25)
+    parser.add_argument("--emergency-clearance", type=float, default=0.8)
+    parser.add_argument("--static-hard-clearance", type=float, default=0.6)
+    parser.add_argument("--static-emergency-clearance", type=float, default=1.2)
+    parser.add_argument("--local-goal-distance", type=float, default=3.0)
+    parser.add_argument("--goal-weight", type=float, default=1.0)
+    parser.add_argument("--clearance-weight", type=float, default=8.0)
+    parser.add_argument("--ttc-weight", type=float, default=4.0)
+    parser.add_argument("--smooth-weight", type=float, default=0.4)
+    parser.add_argument("--output-alpha", type=float, default=0.55)
+    parser.add_argument("--log-file", default="")
+    return parser
+
+
+def main():
+    args, ros_args = build_arg_parser().parse_known_args()
+    rclpy.init(args=ros_args)
+    node = EgoLikePlannerFrameworkNode(args)
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
