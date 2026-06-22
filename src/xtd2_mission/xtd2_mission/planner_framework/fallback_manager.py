@@ -20,6 +20,9 @@ class FallbackManager:
         return not any(item.safety.safe for item in evaluations)
 
     def command(self, state: PlannerState, perception: PerceptionData, evaluations: Sequence[CandidateEvaluation]) -> PlannerCommand:
+        near_escape = self._nearest_obstacle_escape(state, perception)
+        if near_escape is not None:
+            return near_escape
         escape_eval = self._best_escape(evaluations)
         if escape_eval is not None:
             clearance = min(escape_eval.safety.min_clearance, escape_eval.safety.min_static_clearance)
@@ -30,6 +33,33 @@ class FallbackManager:
         if perception.near_field_danger:
             return PlannerCommand(Vec3(0.0, 0.0, -self.config.vertical_speed), "fallback_climb", "near_field_climb", "near_field_lidar_danger")
         return PlannerCommand(Vec3(), "fallback_hover", "hover", "no_safe_candidate")
+
+    def _nearest_obstacle_escape(self, state: PlannerState, perception: PerceptionData) -> Optional[PlannerCommand]:
+        if not perception.near_field_danger:
+            return None
+        nearest = None
+        nearest_clearance = 999.0
+        for obs in perception.obstacles:
+            if obs.source != "lidar_near_field":
+                continue
+            clearance = state.position.distance_to(obs.position) - float(obs.radius) - self.config.drone_radius
+            if clearance < nearest_clearance:
+                nearest = obs
+                nearest_clearance = clearance
+        if nearest is None or nearest_clearance > self.config.static_emergency_clearance:
+            return None
+        away = Vec3(
+            state.position.x - nearest.position.x,
+            state.position.y - nearest.position.y,
+            0.0,
+        ).normalized(Vec3(-1.0, 0.0, 0.0))
+        speed = min(self.config.max_speed, max(self.config.lateral_speed, 0.45 * self.config.max_speed))
+        return PlannerCommand(
+            away * speed,
+            "fallback_escape",
+            "nearest_lidar_escape",
+            f"near_field_lidar_clearance={nearest_clearance:.2f}",
+        )
 
     def _best_escape(self, evaluations: Sequence[CandidateEvaluation]) -> Optional[CandidateEvaluation]:
         escape_names = {

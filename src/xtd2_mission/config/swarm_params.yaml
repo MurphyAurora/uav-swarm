@@ -142,6 +142,15 @@ ego_like_smooth_weight: 0.4
 ego_like_progress_weight: 6.0
 ego_like_reverse_penalty: 12.0
 ego_like_lateral_penalty: 1.5
+ego_like_lidar_topic_template: "/x500_{id}/lidar/points_local"
+ego_like_lidar_timeout: 0.8
+ego_like_lidar_max_obstacles: 260
+ego_like_lidar_stride: 4
+ego_like_lidar_min_range: 0.65
+ego_like_lidar_max_range: 4.5
+ego_like_lidar_min_z: -1.8
+ego_like_lidar_vertical_limit: 1.8
+ego_like_lidar_obstacle_radius: 0.16
 primitive_horizon: 3.5
 primitive_dt: 0.5
 primitive_cruise_speed: 0.34

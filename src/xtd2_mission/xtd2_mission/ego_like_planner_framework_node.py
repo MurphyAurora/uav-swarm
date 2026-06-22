@@ -3,15 +3,18 @@
 
 import argparse
 import json
+import math
 import os
 import time
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 
-from .planner_framework import EgoLikePlannerCore, PlannerConfig, PlannerState, Vec3
+from .planner_framework import EgoLikePlannerCore, Obstacle, PlannerConfig, PlannerState, Vec3
 from .planner_framework.goal_manager import LocalGoalManager
 from .planner_framework.perception_interface import PerceptionInterface
 
@@ -61,20 +64,30 @@ class EgoLikePlannerFrameworkNode(Node):
         )
 
         self.states = {}
+        self.headings = {}
         self.static_tracks = []
         self.dynamic_tracks = []
+        self.lidar_clouds = {}
         self._last_summary_log = 0.0
         self.planners = {i: EgoLikePlannerCore(self.config, waypoints=self.manual_waypoints) for i in range(1, self.num_drones + 1)}
 
         self.create_subscription(String, args.state_topic, self._state_cb, 10)
         self.create_subscription(String, args.predicted_topic, self._dynamic_cb, 10)
         self.create_subscription(String, args.static_topic, self._static_cb, 10)
+        self.lidar_topic_template = str(args.lidar_topic_template)
+        for drone_id in range(1, self.num_drones + 1):
+            self.create_subscription(
+                PointCloud2,
+                self.lidar_topic_template.format(id=drone_id),
+                lambda msg, i=drone_id: self._lidar_cb(i, msg),
+                5,
+            )
         self.report_pub = self.create_publisher(String, args.output_topic, 10)
         self.cmd_pubs = {i: self.create_publisher(Twist, self._cmd_topic_for(i), 10) for i in range(1, self.num_drones + 1)}
         self.timer = self.create_timer(float(args.period), self._run)
         self.get_logger().info(
             f"ego_like planner framework started: num={self.num_drones}, publish_cmd={int(self.publish_cmd)}, "
-            f"cmd_topic_template={self.cmd_topic_template}"
+            f"cmd_topic_template={self.cmd_topic_template}, lidar={self.lidar_topic_template}"
         )
 
     def destroy_node(self):
@@ -93,6 +106,7 @@ class EgoLikePlannerFrameworkNode(Node):
         try:
             data = json.loads(msg.data)
             self.states = {int(s["id"]): PlannerState.from_mapping(s, prefer_world=True) for s in data.get("states", [])}
+            self.headings = {int(s["id"]): self._finite(s.get("heading", 0.0)) for s in data.get("states", [])}
         except Exception as exc:
             self.get_logger().warn(f"failed to parse state_exchange: {exc}")
 
@@ -107,6 +121,9 @@ class EgoLikePlannerFrameworkNode(Node):
             self.static_tracks = json.loads(msg.data).get("tracks", [])
         except Exception as exc:
             self.get_logger().warn(f"failed to parse static tracks: {exc}")
+
+    def _lidar_cb(self, drone_id, msg):
+        self.lidar_clouds[int(drone_id)] = {"msg": msg, "stamp": time.time()}
 
     def _target(self, drone_id):
         off = (int(drone_id) - int(self.args.leader_id)) * float(self.args.target_y_spacing)
@@ -139,7 +156,10 @@ class EgoLikePlannerFrameworkNode(Node):
             perception.update_static_tracks(self.static_tracks, now)
             perception.update_dynamic_tracks(self.dynamic_tracks, now)
             perception.update_swarm_states(raw_states, drone_id, self.state_timeout)
+            lidar_obstacles = self._lidar_obstacles(drone_id, state, now)
+            perception.update_lidar_obstacles(lidar_obstacles, now)
             report = self.planners[drone_id].plan(state, self._target(drone_id), perception.build(state.position))
+            report["lidar_obstacle_count"] = len(lidar_obstacles)
             reports.append(report)
             if self.log_fp is not None:
                 self.log_fp.write(json.dumps(report, ensure_ascii=False) + "\n")
@@ -176,9 +196,10 @@ class EgoLikePlannerFrameworkNode(Node):
             local_goal = report.get("local_goal", {})
             final_goal = report.get("final_goal", {})
             best_costs = (report.get("best") or {}).get("costs", {})
+            best = report.get("best") or {}
             parts.append(
                 "x500_{id} mode={mode} traj={traj} v=({vx:.2f},{vy:.2f},{vz:.2f}) "
-                "safe={safe}/{cand} feasible={feasible} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
+                "safe={safe}/{cand} feasible={feasible} lidar={lidar} clear={clear:.2f} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
                 "goal=({gx:.1f},{gy:.1f},{gz:.1f}) cost(g={cg:.2f},p={cp:.2f},r={cr:.2f},l={cl:.2f}) reason={reason}".format(
                     id=int(report.get("drone_id", 0)),
                     mode=str(cmd.get("mode", "")),
@@ -189,6 +210,8 @@ class EgoLikePlannerFrameworkNode(Node):
                     safe=int(report.get("safe_count", 0)),
                     cand=int(report.get("candidate_count", 0)),
                     feasible=int(report.get("feasible_count", 0)),
+                    lidar=int(report.get("lidar_obstacle_count", 0)),
+                    clear=float(best.get("min_static_clearance", best.get("min_clearance", 999.0))),
                     lx=float(local_goal.get("x", 0.0)),
                     ly=float(local_goal.get("y", 0.0)),
                     lz=float(local_goal.get("z", 0.0)),
@@ -207,6 +230,55 @@ class EgoLikePlannerFrameworkNode(Node):
             + " | ".join(parts)
         )
 
+    def _lidar_obstacles(self, drone_id, state, now):
+        cloud = self.lidar_clouds.get(int(drone_id))
+        if cloud is None or now - float(cloud["stamp"]) > float(self.args.lidar_timeout):
+            return []
+        heading = self.headings.get(int(drone_id), 0.0)
+        c = math.cos(heading)
+        s = math.sin(heading)
+        obstacles = []
+        stride = max(1, int(self.args.lidar_stride))
+        max_points = max(1, int(self.args.lidar_max_obstacles))
+        min_range = float(self.args.lidar_min_range)
+        max_range = float(self.args.lidar_max_range)
+        min_z = float(self.args.lidar_min_z)
+        vertical_limit = float(self.args.lidar_vertical_limit)
+        radius = float(self.args.lidar_obstacle_radius)
+        for idx, point in enumerate(point_cloud2.read_points(cloud["msg"], field_names=("x", "y", "z"), skip_nans=True)):
+            if idx % stride != 0:
+                continue
+            px = self._finite(point[0])
+            py = self._finite(point[1])
+            pz = self._finite(point[2])
+            horizontal = math.hypot(px, py)
+            if horizontal < min_range or horizontal > max_range:
+                continue
+            if pz < min_z or pz > vertical_limit:
+                continue
+            wx = state.position.x + c * px - s * py
+            wy = state.position.y + s * px + c * py
+            wz = state.position.z + pz
+            obstacles.append(
+                Obstacle(
+                    position=Vec3(wx, wy, wz),
+                    radius=radius,
+                    source="lidar_near_field",
+                    obstacle_id=f"lidar_{drone_id}_{len(obstacles)}",
+                )
+            )
+            if len(obstacles) >= max_points:
+                break
+        return obstacles
+
+    @staticmethod
+    def _finite(value, default=0.0):
+        try:
+            out = float(value)
+        except Exception:
+            return float(default)
+        return out if math.isfinite(out) else float(default)
+
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="EGO-like planner framework node")
@@ -214,6 +286,7 @@ def build_arg_parser():
     parser.add_argument("--state-topic", default="/xtdrone2/swarm/state_exchange")
     parser.add_argument("--predicted-topic", default="/xtdrone2/swarm/filtered_predicted_dynamic_obstacles")
     parser.add_argument("--static-topic", default="/xtdrone2/swarm/tracked_static_obstacles")
+    parser.add_argument("--lidar-topic-template", default="/x500_{id}/lidar/points_local")
     parser.add_argument("--output-topic", default="/xtdrone2/swarm/ego_like_planner_framework")
     parser.add_argument("--publish-cmd", default="0")
     parser.add_argument("--cmd-topic-template", default="/xtdrone2/x500_{id}/primitive_cmd_vel_ned")
@@ -247,6 +320,14 @@ def build_arg_parser():
     parser.add_argument("--reverse-penalty", type=float, default=12.0)
     parser.add_argument("--lateral-penalty", type=float, default=1.5)
     parser.add_argument("--output-alpha", type=float, default=0.55)
+    parser.add_argument("--lidar-timeout", type=float, default=0.8)
+    parser.add_argument("--lidar-max-obstacles", type=int, default=260)
+    parser.add_argument("--lidar-stride", type=int, default=4)
+    parser.add_argument("--lidar-min-range", type=float, default=0.65)
+    parser.add_argument("--lidar-max-range", type=float, default=4.5)
+    parser.add_argument("--lidar-min-z", type=float, default=-1.8)
+    parser.add_argument("--lidar-vertical-limit", type=float, default=1.8)
+    parser.add_argument("--lidar-obstacle-radius", type=float, default=0.16)
     parser.add_argument("--log-file", default="")
     return parser
 

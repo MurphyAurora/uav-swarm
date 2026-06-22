@@ -99,6 +99,15 @@ def generate_launch_description():
     defaults.setdefault('ego_like_progress_weight', '6.0')
     defaults.setdefault('ego_like_reverse_penalty', '12.0')
     defaults.setdefault('ego_like_lateral_penalty', '1.5')
+    defaults.setdefault('ego_like_lidar_topic_template', '/x500_{id}/lidar/points_local')
+    defaults.setdefault('ego_like_lidar_timeout', '0.8')
+    defaults.setdefault('ego_like_lidar_max_obstacles', '260')
+    defaults.setdefault('ego_like_lidar_stride', '4')
+    defaults.setdefault('ego_like_lidar_min_range', '0.65')
+    defaults.setdefault('ego_like_lidar_max_range', '4.5')
+    defaults.setdefault('ego_like_lidar_min_z', '-1.8')
+    defaults.setdefault('ego_like_lidar_vertical_limit', '1.8')
+    defaults.setdefault('ego_like_lidar_obstacle_radius', '0.16')
 
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
@@ -149,6 +158,11 @@ def generate_launch_description():
         'ego_like_clearance_weight', 'ego_like_ttc_weight',
         'ego_like_smooth_weight', 'ego_like_progress_weight',
         'ego_like_reverse_penalty', 'ego_like_lateral_penalty',
+        'ego_like_lidar_topic_template', 'ego_like_lidar_timeout',
+        'ego_like_lidar_max_obstacles', 'ego_like_lidar_stride',
+        'ego_like_lidar_min_range', 'ego_like_lidar_max_range',
+        'ego_like_lidar_min_z', 'ego_like_lidar_vertical_limit',
+        'ego_like_lidar_obstacle_radius',
         'primitive_horizon', 'primitive_dt',
         'primitive_cruise_speed', 'primitive_lateral_speed', 'primitive_vertical_speed',
         'primitive_max_speed', 'primitive_drone_radius', 'primitive_safety_margin',
@@ -562,6 +576,7 @@ def _build_mission_nodes(lc, num_drones):
                 f'--state-topic /xtdrone2/swarm/state_exchange '
                 f'--predicted-topic {predicted_topic} '
                 f'--static-topic /xtdrone2/swarm/tracked_static_obstacles '
+                f'--lidar-topic-template "{lc("ego_like_lidar_topic_template")}" '
                 f'--output-topic {lc("ego_like_output_topic")} '
                 f'--publish-cmd {lc("ego_like_publish_cmd")} '
                 f'--cmd-topic-template "{lc("ego_like_cmd_topic_template")}" '
@@ -595,6 +610,14 @@ def _build_mission_nodes(lc, num_drones):
                 f'--reverse-penalty {lc("ego_like_reverse_penalty")} '
                 f'--lateral-penalty {lc("ego_like_lateral_penalty")} '
                 f'--output-alpha {lc("ego_like_output_alpha")} '
+                f'--lidar-timeout {lc("ego_like_lidar_timeout")} '
+                f'--lidar-max-obstacles {lc("ego_like_lidar_max_obstacles")} '
+                f'--lidar-stride {lc("ego_like_lidar_stride")} '
+                f'--lidar-min-range {lc("ego_like_lidar_min_range")} '
+                f'--lidar-max-range {lc("ego_like_lidar_max_range")} '
+                f'--lidar-min-z {lc("ego_like_lidar_min_z")} '
+                f'--lidar-vertical-limit {lc("ego_like_lidar_vertical_limit")} '
+                f'--lidar-obstacle-radius {lc("ego_like_lidar_obstacle_radius")} '
                 f'--ros-args -r __node:=ego_like_planner_framework'
             )
             actions.append(ExecuteProcess(

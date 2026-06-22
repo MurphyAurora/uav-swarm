@@ -48,13 +48,25 @@ class PerceptionInterface:
         self._swarm_obstacles = obstacles
         self._last_stamp = now
 
+    def update_lidar_obstacles(self, obstacles: Iterable[Obstacle], stamp: Optional[float] = None) -> None:
+        self._lidar_obstacles = list(obstacles)
+        self._last_stamp = float(stamp if stamp is not None else time.time())
+
     def build(self, current_position: Optional[Vec3] = None) -> PerceptionData:
-        obstacles = [*self._static_obstacles, *self._dynamic_obstacles, *self._swarm_obstacles]
+        lidar_obstacles = getattr(self, "_lidar_obstacles", [])
+        obstacles = [*self._static_obstacles, *self._dynamic_obstacles, *self._swarm_obstacles, *lidar_obstacles]
         nearest = 999.0
         if current_position is not None:
             for obs in obstacles:
                 nearest = min(nearest, current_position.distance_to(obs.position) - float(obs.radius))
-        return PerceptionData(obstacles=obstacles, nearest_distance=float(nearest), frame_id=self.frame_id, stamp=self._last_stamp)
+        near_field_danger = any(obs.source == "lidar_near_field" for obs in lidar_obstacles)
+        return PerceptionData(
+            obstacles=obstacles,
+            nearest_distance=float(nearest),
+            near_field_danger=near_field_danger,
+            frame_id=self.frame_id,
+            stamp=self._last_stamp,
+        )
 
     def _obstacle_from_track(self, track: Dict, source: str) -> Obstacle:
         predictions = []
