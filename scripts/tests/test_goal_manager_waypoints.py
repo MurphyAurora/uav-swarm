@@ -3,18 +3,19 @@
 """Smoke test for waypoint support in LocalGoalManager.
 
 Run from repository root:
-    python3 scripts/test_goal_manager_waypoints.py
+    python3 scripts/tests/test_goal_manager_waypoints.py
 """
 
 import os
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "src", "xtd2_mission"))
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-from planner_framework import PlannerConfig, PlannerState, Vec3
-from planner_framework.goal_manager import LocalGoalManager
+from xtd2_mission.planner_framework import PlannerConfig, PlannerState, Vec3
+from xtd2_mission.planner_framework.goal_manager import LocalGoalManager
 
 
 def main():

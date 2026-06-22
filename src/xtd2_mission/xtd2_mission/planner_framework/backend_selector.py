@@ -58,6 +58,9 @@ class BackendSelector:
         if safe:
             moving_safe = [item for item in safe if item.trajectory.velocity.norm() > 0.05]
             if prefer_motion and moving_safe:
+                local_astar_safe = self._local_astar_items(moving_safe)
+                if local_astar_safe:
+                    return min(local_astar_safe, key=lambda item: item.score)
                 goal_tracking = [
                     item for item in moving_safe
                     if item.trajectory.name in ("track_goal", "slow_goal")
@@ -76,6 +79,9 @@ class BackendSelector:
         if feasible:
             moving_feasible = [item for item in feasible if item.trajectory.velocity.norm() > 0.05]
             if prefer_motion and moving_feasible:
+                local_astar_feasible = self._local_astar_items(moving_feasible)
+                if local_astar_feasible:
+                    return min(local_astar_feasible, key=lambda item: (-item.safety.min_clearance, item.score))
                 progress_feasible = [
                     item for item in moving_feasible
                     if item.costs.get("reverse", 0.0) <= 1.0e-6
@@ -85,6 +91,10 @@ class BackendSelector:
                 return min(moving_feasible, key=lambda item: (item.costs.get("reverse", 999.0), -item.safety.min_clearance, item.score))
             return min(feasible, key=lambda item: (-item.safety.min_clearance, item.score))
         return min(evaluations, key=lambda item: (-item.safety.min_clearance, item.score)) if evaluations else None
+
+    @staticmethod
+    def _local_astar_items(evaluations: Sequence[CandidateEvaluation]) -> List[CandidateEvaluation]:
+        return [item for item in evaluations if item.trajectory.name.startswith("local_astar:")]
 
     def _progress_terms(self, velocity: Vec3, state: PlannerState, local_goal: Vec3) -> tuple:
         to_goal = local_goal - state.position

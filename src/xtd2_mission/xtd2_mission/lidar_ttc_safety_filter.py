@@ -230,9 +230,12 @@ class LidarTtcSafetyFilter(Node):
             for name, (sx, sy) in sector_dirs.items():
                 if ux * sx + uy * sy > 0.5:
                     sector_min[name] = min(sector_min[name], horizontal)
-            hard_distance = horizontal <= self.hard_stop_distance
+            alignment = ux * dir_x + uy * dir_y
+            toward = bvx * ux + bvy * uy if speed_xy >= self.min_speed else 0.0
+            hard_contact = horizontal <= self.safety_radius + 0.18
+            hard_distance = horizontal <= self.hard_stop_distance and (alignment >= -0.05 or hard_contact)
             if hard_distance:
-                closing = max(0.0, bvx * ux + bvy * uy) if speed_xy >= self.min_speed else 0.0
+                closing = max(0.0, toward)
                 ttc = 0.0
                 used += 1
                 if worst is None or horizontal < worst['distance']:
@@ -248,15 +251,14 @@ class LidarTtcSafetyFilter(Node):
                         'pz': pz,
                         'cmd_angle_deg': cmd_angle_deg,
                         'obs_angle_deg': math.degrees(math.atan2(py, px)),
-                        'alignment': ux * dir_x + uy * dir_y,
+                        'alignment': alignment,
                 }
                 continue
             if speed_xy < self.min_speed:
                 continue
-            alignment = ux * dir_x + uy * dir_y
             if alignment < self.cone_cos:
                 continue
-            closing = bvx * ux + bvy * uy
+            closing = toward
             if closing <= self.min_speed:
                 continue
             effective_dist = max(0.0, horizontal - self.safety_radius)

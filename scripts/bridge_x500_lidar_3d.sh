@@ -32,7 +32,7 @@ trap cleanup EXIT INT TERM
 
 start_tf_helpers() {
   echo "[OK] publishing clean per-UAV LiDAR TF from /xtdrone2/swarm/state_exchange"
-  python3 "$HOME/ws_xtd2/scripts/lidar_tf_republisher.py" --num-drones "${NUM_DRONES}" &
+  python3 "$HOME/ws_xtd2/scripts/tools/lidar_tf_republisher.py" --num-drones "${NUM_DRONES}" &
   bridge_pids+=("$!")
 }
 

@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Smoke test for scripts/planner_framework.
+"""Smoke test for the installed planner framework package.
 
 Run from the repository root:
-    python3 scripts/test_planner_framework_smoke.py
+    python3 scripts/tests/test_planner_framework_smoke.py
 """
 
 import os
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "src", "xtd2_mission"))
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-from planner_framework import EgoLikePlannerCore, Obstacle, PerceptionData, PlannerConfig, PlannerState, Vec3
+from xtd2_mission.planner_framework import EgoLikePlannerCore, Obstacle, PerceptionData, PlannerConfig, PlannerState, Vec3
 
 
 def main():

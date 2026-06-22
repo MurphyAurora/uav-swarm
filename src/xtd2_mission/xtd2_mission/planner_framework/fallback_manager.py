@@ -2,6 +2,7 @@
 """Fallback commands used when no candidate is safely executable."""
 
 import time
+import math
 from typing import Optional, Sequence
 
 from .common import CandidateEvaluation, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
@@ -54,11 +55,19 @@ class FallbackManager:
         close_count = 0
         pressure = Vec3()
         nearest_clearance = 999.0
+        c = math.cos(state.heading)
+        s = math.sin(state.heading)
         for obs in perception.obstacles:
             if obs.source != "lidar_near_field":
                 continue
             clearance = state.position.distance_to(obs.position) - float(obs.radius) - self.config.drone_radius
-            if clearance > self.config.static_emergency_clearance + 0.35:
+            rel_x = obs.position.x - state.position.x
+            rel_y = obs.position.y - state.position.y
+            body_x = c * rel_x + s * rel_y
+            body_y = -s * rel_x + c * rel_y
+            hard_contact = clearance <= self.config.hard_clearance + 0.10
+            front_threat = body_x >= -0.15 and abs(body_y) <= 1.10 and clearance <= self.config.emergency_clearance
+            if not hard_contact and not front_threat:
                 continue
             away = Vec3(
                 state.position.x - obs.position.x,
@@ -71,7 +80,7 @@ class FallbackManager:
             close_count += 1
             if clearance < nearest_clearance:
                 nearest_clearance = clearance
-        if close_count <= 0 or nearest_clearance > self.config.static_emergency_clearance:
+        if close_count <= 0:
             return None
         fallback_dir = self._latched_escape_velocity.normalized(Vec3(-1.0, 0.0, 0.0))
         away = pressure.normalized(fallback_dir)
@@ -108,10 +117,16 @@ class FallbackManager:
             "left_climb",
             "right_climb",
         }
-        escape = [item for item in evaluations if item.trajectory.name in escape_names]
+        escape = [
+            item for item in evaluations
+            if item.trajectory.name in escape_names or item.trajectory.name.startswith("local_astar:")
+        ]
         if not escape:
             return None
         moving_escape = [item for item in escape if item.trajectory.velocity.norm() > 0.05]
         if moving_escape:
             escape = moving_escape
+        astar_escape = [item for item in escape if item.trajectory.name.startswith("local_astar:")]
+        if astar_escape:
+            return max(astar_escape, key=lambda item: (item.safety.feasible, item.safety.min_clearance, -item.score))
         return max(escape, key=lambda item: (item.safety.min_clearance, -item.score))

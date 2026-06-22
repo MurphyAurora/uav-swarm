@@ -22,7 +22,14 @@ DYNAMIC_OBS_FREEZE="${DYNAMIC_OBS_FREEZE:-1}"
 NUM_DRONES="${NUM_DRONES:-1}"
 LEADER_ID="${LEADER_ID:-1}"
 LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
-EGO_LIKE_ENABLE="${EGO_LIKE_ENABLE:-1}"
+EGO_LIKE_ENABLE_RAW="${EGO_LIKE_ENABLE:-}"
+EGO_LIKE_ENABLE="${EGO_LIKE_ENABLE_RAW:-1}"
+EGO_LIKE_FRONTEND_MODE="${EGO_LIKE_FRONTEND_MODE:-hybrid_astar}"
+PRIMITIVE_CRUISE_SPEED="${PRIMITIVE_CRUISE_SPEED:-0.50}"
+PRIMITIVE_LATERAL_SPEED="${PRIMITIVE_LATERAL_SPEED:-0.30}"
+PRIMITIVE_MAX_SPEED="${PRIMITIVE_MAX_SPEED:-0.75}"
+EGO_LIKE_ASTAR_INFLATION_RADIUS="${EGO_LIKE_ASTAR_INFLATION_RADIUS:-0.45}"
+EGO_LIKE_ASTAR_LATCH_CLEARANCE="${EGO_LIKE_ASTAR_LATCH_CLEARANCE:-0.55}"
 STOP_ON_STAGE_TIMEOUT="${STOP_ON_STAGE_TIMEOUT:-1}"
 STATIC_LOCAL_PLANNER="${STATIC_LOCAL_PLANNER:-0}"
 DYNAMIC_OBS_TARGET_X="${DYNAMIC_OBS_TARGET_X:-19.0}"
@@ -43,6 +50,9 @@ if [[ "${STATIC_LOCAL_PLANNER}" == "1" || "${STATIC_LOCAL_PLANNER}" == "true" ||
   POST_OFFBOARD_HOLD_SEC="${POST_OFFBOARD_HOLD_SEC:-1}"
   MOTION_PRIMITIVE_ENABLE="${MOTION_PRIMITIVE_ENABLE:-0}"
   LIDAR_TTC_ENABLE="${LIDAR_TTC_ENABLE:-0}"
+  if [[ -z "${EGO_LIKE_ENABLE_RAW}" ]]; then
+    EGO_LIKE_ENABLE=0
+  fi
   export STATIC_PLANNER_MAX_SPEED="${STATIC_PLANNER_MAX_SPEED:-0.55}"
   export STATIC_PLANNER_INFLATION="${STATIC_PLANNER_INFLATION:-0.60}"
   export STATIC_PLANNER_RESOLUTION="${STATIC_PLANNER_RESOLUTION:-0.25}"
@@ -122,7 +132,7 @@ cd "${WS_ROOT}"
 if [[ "${EGO_LIKE_ENABLE}" == "1" || "${EGO_LIKE_ENABLE}" == "true" || "${EGO_LIKE_ENABLE}" == "TRUE" ]]; then
   echo "[INFO] ego_like_enable=${EGO_LIKE_ENABLE}; skip legacy lidar risk-astar patch"
 else
-  if ! python3 "${SCRIPT_DIR}/apply_lidar_risk_astar_safety_patch.py"; then
+  if ! python3 "${SCRIPT_DIR}/tools/apply_lidar_risk_astar_safety_patch.py"; then
     echo "[WARN] legacy lidar risk-astar patch failed; continuing with current source tree" >&2
   fi
 fi
@@ -146,7 +156,9 @@ echo "[INFO] stop_on_stage_timeout=${STOP_ON_STAGE_TIMEOUT}"
 echo "[INFO] warmup_sec=${WARMUP_SEC}, post_offboard_hold_sec=${POST_OFFBOARD_HOLD_SEC}"
 echo "[INFO] run_duration=${RUN_DURATION}"
 echo "[INFO] motion_primitive_enable=${MOTION_PRIMITIVE_ENABLE}, lidar_ttc_enable=${LIDAR_TTC_ENABLE}"
-echo "[INFO] ego_like_enable=${EGO_LIKE_ENABLE}"
+echo "[INFO] ego_like_enable=${EGO_LIKE_ENABLE}, ego_like_frontend_mode=${EGO_LIKE_FRONTEND_MODE}"
+echo "[INFO] primitive_speed cruise=${PRIMITIVE_CRUISE_SPEED}, lateral=${PRIMITIVE_LATERAL_SPEED}, max=${PRIMITIVE_MAX_SPEED}"
+echo "[INFO] ego_like_astar inflation=${EGO_LIKE_ASTAR_INFLATION_RADIUS}, latch_clearance=${EGO_LIKE_ASTAR_LATCH_CLEARANCE}"
 echo "[INFO] dynamic_obs_enable=${DYNAMIC_OBS_ENABLE}, scene_freeze_dynamics=${DYNAMIC_OBS_FREEZE}"
 echo "[INFO] default keeps scene obstacles published and freezes moving obstacles for static-column validation"
 echo "[INFO] set DYNAMIC_OBS_FREEZE=0 to re-enable moving scene obstacles"
@@ -172,6 +184,12 @@ LAUNCH_ARGS=(
   post_offboard_hold_sec:="${POST_OFFBOARD_HOLD_SEC}"
   motion_primitive_enable:="${MOTION_PRIMITIVE_ENABLE}"
   ego_like_enable:="${EGO_LIKE_ENABLE}"
+  ego_like_frontend_mode:="${EGO_LIKE_FRONTEND_MODE}"
+  primitive_cruise_speed:="${PRIMITIVE_CRUISE_SPEED}"
+  primitive_lateral_speed:="${PRIMITIVE_LATERAL_SPEED}"
+  primitive_max_speed:="${PRIMITIVE_MAX_SPEED}"
+  ego_like_astar_inflation_radius:="${EGO_LIKE_ASTAR_INFLATION_RADIUS}"
+  ego_like_astar_latch_clearance:="${EGO_LIKE_ASTAR_LATCH_CLEARANCE}"
   lidar_ttc_enable:="${LIDAR_TTC_ENABLE}"
   scene_config:="${WS_ROOT}/scripts/scenes/sando/forest3_walls_dynamic.yaml"
   dynamic_obs_wall_x:=27.0

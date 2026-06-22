@@ -23,7 +23,7 @@ hard_dense_crossing
 在 `scripts/` 根目录运行：
 
 ```bash
-./run_benchmark_v1.sh
+./evaluation/run_benchmark_v1.sh
 ```
 
 等价于：

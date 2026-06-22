@@ -35,7 +35,7 @@ class EgoLikePlannerCore:
 
         active_goal = self.goal_manager.active_waypoint(final_goal)
         local_goal = self.goal_manager.compute_local_goal(state, final_goal, perception)
-        candidates = self.frontend.generate(state, local_goal)
+        candidates = self.frontend.generate(state, local_goal, perception)
         safety_reports = [self.safety_checker.evaluate(candidate, state, perception) for candidate in candidates]
         evaluations = self.backend.evaluate_all(candidates, safety_reports, state, local_goal)
         best = self.backend.select_best(evaluations, state, local_goal)
@@ -59,6 +59,7 @@ class EgoLikePlannerCore:
             "candidate_count": len(candidates),
             "safe_count": sum(1 for item in evaluations if item.safety.safe),
             "feasible_count": sum(1 for item in evaluations if item.safety.feasible),
+            "frontend": dict(self.frontend.diagnostics),
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
 

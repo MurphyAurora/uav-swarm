@@ -2,17 +2,18 @@
 # Analyze one recorded ROS/Gazebo algorithm run and put all derived outputs in results/.
 #
 # Debug workflow:
-#   EVAL_OUTPUT_MODE=debug OVERWRITE=1 ./run_algorithm_eval_once.sh <run_dir>
+#   EVAL_OUTPUT_MODE=debug OVERWRITE=1 ./evaluation/run_algorithm_eval_once.sh <run_dir>
 #
 # Paper workflow:
-#   ./run_algorithm_eval_once.sh <run_dir> results/algorithm_eval_v1/<versioned_name>
+#   ./evaluation/run_algorithm_eval_once.sh <run_dir> results/algorithm_eval_v1/<versioned_name>
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
+SCRIPTS_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${SCRIPTS_ROOT}"
 
-RUN_DIR="${1:?usage: ./run_algorithm_eval_once.sh <run_dir> [result_dir]}"
+RUN_DIR="${1:?usage: ./evaluation/run_algorithm_eval_once.sh <run_dir> [result_dir]}"
 RUN_NAME="$(basename "${RUN_DIR}")"
 EVAL_OUTPUT_MODE="${EVAL_OUTPUT_MODE:-paper}"
 if [[ $# -ge 2 ]]; then

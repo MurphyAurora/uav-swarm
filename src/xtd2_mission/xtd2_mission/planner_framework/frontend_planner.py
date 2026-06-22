@@ -3,14 +3,17 @@
 
 from typing import Iterable, List, Optional, Tuple
 
-from .common import CandidateTrajectory, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
+from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
+from .local_astar import LocalAStarPlanner
 
 
 class FrontendPlanner:
     def __init__(self, config: Optional[PlannerConfig] = None):
         self.config = config or PlannerConfig()
+        self.local_astar = LocalAStarPlanner(self.config)
+        self.diagnostics = {}
 
-    def generate(self, state: PlannerState, local_goal: Vec3) -> List[CandidateTrajectory]:
+    def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         desired = self._desired_velocity_towards_goal(state, local_goal)
         primitives = [
             ("track_goal", desired),
@@ -29,7 +32,18 @@ class FrontendPlanner:
             ("left_climb", self._body_relative(desired, 0.1, 0.8, -self.config.vertical_speed)),
             ("right_climb", self._body_relative(desired, 0.1, -0.8, -self.config.vertical_speed)),
         ]
-        return [self._rollout(name, velocity.limit_norm(self.config.max_speed), state.position) for name, velocity in primitives]
+        candidates: List[CandidateTrajectory] = []
+        mode = str(self.config.frontend_mode or "primitive").lower()
+        if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
+            astar_candidate = self.local_astar.plan_candidate(state, local_goal, perception.obstacles)
+            self.diagnostics = {"mode": mode, "local_astar": dict(self.local_astar.diagnostics)}
+            if astar_candidate is not None:
+                candidates.append(astar_candidate)
+        else:
+            self.diagnostics = {"mode": mode}
+        if mode not in ("local_astar", "astar"):
+            candidates.extend(self._rollout(name, velocity.limit_norm(self.config.max_speed), state.position) for name, velocity in primitives)
+        return candidates
 
     def generate_from_velocity_set(self, state: PlannerState, velocity_set: Iterable[Tuple[str, Vec3]]) -> List[CandidateTrajectory]:
         return [self._rollout(name, velocity.limit_norm(self.config.max_speed), state.position) for name, velocity in velocity_set]

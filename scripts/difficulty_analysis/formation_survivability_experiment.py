@@ -24,10 +24,13 @@ import pandas as pd
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+SCENARIO_DIR = os.path.join(PROJECT_ROOT, 'scenario')
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+if SCENARIO_DIR not in sys.path:
+    sys.path.insert(0, SCENARIO_DIR)
 
 from core import analyze, safe_float, write_yaml_config
 from scenario_demo import finite_float, generate_rows, load_scene, load_suite

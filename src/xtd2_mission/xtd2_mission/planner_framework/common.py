@@ -71,6 +71,7 @@ class PlannerState:
     position: Vec3
     velocity: Vec3 = field(default_factory=Vec3)
     stamp: float = 0.0
+    heading: float = 0.0
 
     @staticmethod
     def from_mapping(data: Dict, prefer_world: bool = False) -> "PlannerState":
@@ -83,6 +84,7 @@ class PlannerState:
                 float(data.get("vz", 0.0)),
             ),
             stamp=float(data.get("stamp", 0.0)),
+            heading=float(data.get("heading", 0.0)),
         )
 
 
@@ -190,6 +192,7 @@ class PerceptionData:
 
 @dataclass
 class PlannerConfig:
+    frontend_mode: str = "hybrid_astar"
     horizon: float = 2.5
     dt: float = 0.5
     cruise_speed: float = 0.7
@@ -214,6 +217,25 @@ class PlannerConfig:
     lateral_penalty: float = 1.5
     risk_radius: float = 5.0
     output_alpha: float = 0.55
+    astar_grid_forward: float = 7.0
+    astar_grid_back: float = 2.5
+    astar_grid_left: float = 5.0
+    astar_grid_right: float = 5.0
+    astar_resolution: float = 0.25
+    astar_inflation_radius: float = 0.45
+    astar_local_goal_dist: float = 4.5
+    astar_lookahead_dist: float = 1.35
+    astar_min_range: float = 0.35
+    astar_max_range: float = 7.5
+    astar_z_min: float = -1.4
+    astar_z_max: float = 1.6
+    astar_path_latch_sec: float = 1.4
+    astar_replan_interval: float = 0.8
+    astar_progress_stall_sec: float = 3.0
+    astar_progress_epsilon: float = 0.20
+    astar_progress_move_epsilon: float = 0.22
+    astar_recovery_sec: float = 1.6
+    astar_latch_clearance: float = 0.60
 
 
 def nearest_prediction(predictions: Iterable[Tuple[float, Vec3]], t: float) -> Vec3:

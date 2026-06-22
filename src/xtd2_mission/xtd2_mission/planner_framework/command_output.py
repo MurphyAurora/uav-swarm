@@ -14,10 +14,6 @@ class CommandOutput:
 
     def process(self, command: PlannerCommand, dt: Optional[float] = None) -> PlannerCommand:
         raw = command.velocity.limit_norm(self.config.max_speed)
-        if command.mode.startswith("fallback_"):
-            self._last_velocity = raw
-            self._has_last = True
-            return PlannerCommand(raw, command.mode, command.source_trajectory, command.reason)
         if not self._has_last:
             self._last_velocity = raw
             self._has_last = True

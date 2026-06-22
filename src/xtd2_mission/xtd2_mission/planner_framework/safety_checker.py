@@ -21,7 +21,7 @@ class SafetyChecker:
                 if clearance < min_clearance:
                     min_clearance = clearance
                     min_source = obs.source
-                if obs.source in ("static", "lidar_near_field"):
+                if obs.source == "static":
                     min_static_clearance = min(min_static_clearance, clearance)
                 min_ttc = min(min_ttc, self._estimate_ttc(state.position, trajectory.velocity, obs))
 

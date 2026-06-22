@@ -39,6 +39,7 @@ class EgoLikePlannerFrameworkNode(Node):
             self.log_fp = open(self.log_file_path, "a", buffering=1)
 
         self.config = PlannerConfig(
+            frontend_mode=str(args.frontend_mode),
             horizon=float(args.horizon),
             dt=float(args.dt),
             cruise_speed=float(args.cruise_speed),
@@ -61,6 +62,25 @@ class EgoLikePlannerFrameworkNode(Node):
             reverse_penalty=float(args.reverse_penalty),
             lateral_penalty=float(args.lateral_penalty),
             output_alpha=float(args.output_alpha),
+            astar_grid_forward=float(args.astar_grid_forward),
+            astar_grid_back=float(args.astar_grid_back),
+            astar_grid_left=float(args.astar_grid_left),
+            astar_grid_right=float(args.astar_grid_right),
+            astar_resolution=float(args.astar_resolution),
+            astar_inflation_radius=float(args.astar_inflation_radius),
+            astar_local_goal_dist=float(args.astar_local_goal_dist),
+            astar_lookahead_dist=float(args.astar_lookahead_dist),
+            astar_min_range=float(args.astar_min_range),
+            astar_max_range=float(args.astar_max_range),
+            astar_z_min=float(args.astar_z_min),
+            astar_z_max=float(args.astar_z_max),
+            astar_path_latch_sec=float(args.astar_path_latch_sec),
+            astar_replan_interval=float(args.astar_replan_interval),
+            astar_progress_stall_sec=float(args.astar_progress_stall_sec),
+            astar_progress_epsilon=float(args.astar_progress_epsilon),
+            astar_progress_move_epsilon=float(args.astar_progress_move_epsilon),
+            astar_recovery_sec=float(args.astar_recovery_sec),
+            astar_latch_clearance=float(args.astar_latch_clearance),
         )
 
         self.states = {}
@@ -87,7 +107,8 @@ class EgoLikePlannerFrameworkNode(Node):
         self.timer = self.create_timer(float(args.period), self._run)
         self.get_logger().info(
             f"ego_like planner framework started: num={self.num_drones}, publish_cmd={int(self.publish_cmd)}, "
-            f"cmd_topic_template={self.cmd_topic_template}, lidar={self.lidar_topic_template}"
+            f"frontend_mode={self.config.frontend_mode}, cmd_topic_template={self.cmd_topic_template}, "
+            f"lidar={self.lidar_topic_template}"
         )
 
     def destroy_node(self):
@@ -142,6 +163,7 @@ class EgoLikePlannerFrameworkNode(Node):
                 "vy": state.velocity.y,
                 "vz": state.velocity.z,
                 "stamp": state.stamp,
+                "heading": state.heading,
             }
             for state in self.states.values()
         ]
@@ -197,10 +219,12 @@ class EgoLikePlannerFrameworkNode(Node):
             final_goal = report.get("final_goal", {})
             best_costs = (report.get("best") or {}).get("costs", {})
             best = report.get("best") or {}
+            frontend = ((report.get("frontend") or {}).get("local_astar") or {})
             parts.append(
                 "x500_{id} mode={mode} traj={traj} v=({vx:.2f},{vy:.2f},{vz:.2f}) "
                 "safe={safe}/{cand} feasible={feasible} lidar={lidar} clear={clear:.2f} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
-                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) cost(g={cg:.2f},p={cp:.2f},r={cr:.2f},l={cl:.2f}) reason={reason}".format(
+                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) astar={astar} repl={repl} stuck={stuck:.1f}s "
+                "cost(g={cg:.2f},p={cp:.2f},r={cr:.2f},l={cl:.2f}) reason={reason}".format(
                     id=int(report.get("drone_id", 0)),
                     mode=str(cmd.get("mode", "")),
                     traj=str(cmd.get("source_trajectory", "")),
@@ -218,6 +242,9 @@ class EgoLikePlannerFrameworkNode(Node):
                     gx=float(final_goal.get("x", 0.0)),
                     gy=float(final_goal.get("y", 0.0)),
                     gz=float(final_goal.get("z", 0.0)),
+                    astar=str(frontend.get("status", "off")),
+                    repl=str(frontend.get("replan_reason", frontend.get("label", ""))),
+                    stuck=float(frontend.get("stalled_sec", 0.0)),
                     cg=float(best_costs.get("goal", 0.0)),
                     cp=float(best_costs.get("progress", 0.0)),
                     cr=float(best_costs.get("reverse", 0.0)),
@@ -291,6 +318,7 @@ def build_arg_parser():
     parser.add_argument("--publish-cmd", default="0")
     parser.add_argument("--cmd-topic-template", default="/xtdrone2/x500_{id}/primitive_cmd_vel_ned")
     parser.add_argument("--waypoints", default="")
+    parser.add_argument("--frontend-mode", default="hybrid_astar", choices=("primitive", "hybrid_astar", "local_astar", "astar", "hybrid"))
     parser.add_argument("--period", type=float, default=0.1)
     parser.add_argument("--state-timeout", type=float, default=2.0)
     parser.add_argument("--target-x", type=float, default=30.0)
@@ -320,6 +348,25 @@ def build_arg_parser():
     parser.add_argument("--reverse-penalty", type=float, default=12.0)
     parser.add_argument("--lateral-penalty", type=float, default=1.5)
     parser.add_argument("--output-alpha", type=float, default=0.55)
+    parser.add_argument("--astar-grid-forward", type=float, default=7.0)
+    parser.add_argument("--astar-grid-back", type=float, default=2.5)
+    parser.add_argument("--astar-grid-left", type=float, default=5.0)
+    parser.add_argument("--astar-grid-right", type=float, default=5.0)
+    parser.add_argument("--astar-resolution", type=float, default=0.25)
+    parser.add_argument("--astar-inflation-radius", type=float, default=0.45)
+    parser.add_argument("--astar-local-goal-dist", type=float, default=4.5)
+    parser.add_argument("--astar-lookahead-dist", type=float, default=1.35)
+    parser.add_argument("--astar-min-range", type=float, default=0.35)
+    parser.add_argument("--astar-max-range", type=float, default=7.5)
+    parser.add_argument("--astar-z-min", type=float, default=-1.4)
+    parser.add_argument("--astar-z-max", type=float, default=1.6)
+    parser.add_argument("--astar-path-latch-sec", type=float, default=1.4)
+    parser.add_argument("--astar-replan-interval", type=float, default=0.8)
+    parser.add_argument("--astar-progress-stall-sec", type=float, default=3.0)
+    parser.add_argument("--astar-progress-epsilon", type=float, default=0.20)
+    parser.add_argument("--astar-progress-move-epsilon", type=float, default=0.22)
+    parser.add_argument("--astar-recovery-sec", type=float, default=1.6)
+    parser.add_argument("--astar-latch-clearance", type=float, default=0.60)
     parser.add_argument("--lidar-timeout", type=float, default=0.8)
     parser.add_argument("--lidar-max-obstacles", type=int, default=260)
     parser.add_argument("--lidar-stride", type=int, default=4)

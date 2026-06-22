@@ -84,6 +84,7 @@ def generate_launch_description():
     defaults.setdefault('ego_like_output_topic', '/xtdrone2/swarm/ego_like_planner_framework')
     defaults.setdefault('ego_like_cmd_topic_template', '/xtdrone2/x500_{id}/primitive_cmd_vel_ned')
     defaults.setdefault('ego_like_waypoints', '')
+    defaults.setdefault('ego_like_frontend_mode', 'hybrid_astar')
     defaults.setdefault('ego_like_period', '0.1')
     defaults.setdefault('ego_like_local_goal_distance', '3.0')
     defaults.setdefault('ego_like_output_alpha', '0.55')
@@ -108,6 +109,16 @@ def generate_launch_description():
     defaults.setdefault('ego_like_lidar_min_z', '-1.8')
     defaults.setdefault('ego_like_lidar_vertical_limit', '1.8')
     defaults.setdefault('ego_like_lidar_obstacle_radius', '0.16')
+    defaults.setdefault('ego_like_astar_inflation_radius', '0.45')
+    defaults.setdefault('ego_like_astar_local_goal_dist', '4.5')
+    defaults.setdefault('ego_like_astar_lookahead_dist', '1.35')
+    defaults.setdefault('ego_like_astar_path_latch_sec', '1.4')
+    defaults.setdefault('ego_like_astar_replan_interval', '0.8')
+    defaults.setdefault('ego_like_astar_progress_stall_sec', '3.0')
+    defaults.setdefault('ego_like_astar_progress_epsilon', '0.20')
+    defaults.setdefault('ego_like_astar_progress_move_epsilon', '0.22')
+    defaults.setdefault('ego_like_astar_recovery_sec', '1.6')
+    defaults.setdefault('ego_like_astar_latch_clearance', '0.60')
     defaults.setdefault('lidar_ttc_strong_filter', '1')
 
     # All unique param names across stages
@@ -151,7 +162,7 @@ def generate_launch_description():
         'collision_max_reports',
         'motion_primitive_enable',
         'ego_like_enable', 'ego_like_publish_cmd', 'ego_like_output_topic',
-        'ego_like_cmd_topic_template', 'ego_like_waypoints', 'ego_like_period',
+        'ego_like_cmd_topic_template', 'ego_like_waypoints', 'ego_like_frontend_mode', 'ego_like_period',
         'ego_like_local_goal_distance', 'ego_like_output_alpha',
         'ego_like_obstacle_margin', 'ego_like_hard_clearance',
         'ego_like_emergency_clearance', 'ego_like_static_hard_clearance',
@@ -164,6 +175,12 @@ def generate_launch_description():
         'ego_like_lidar_min_range', 'ego_like_lidar_max_range',
         'ego_like_lidar_min_z', 'ego_like_lidar_vertical_limit',
         'ego_like_lidar_obstacle_radius',
+        'ego_like_astar_inflation_radius', 'ego_like_astar_local_goal_dist',
+        'ego_like_astar_lookahead_dist',
+        'ego_like_astar_path_latch_sec', 'ego_like_astar_replan_interval',
+        'ego_like_astar_progress_stall_sec', 'ego_like_astar_progress_epsilon',
+        'ego_like_astar_progress_move_epsilon', 'ego_like_astar_recovery_sec',
+        'ego_like_astar_latch_clearance',
         'primitive_horizon', 'primitive_dt',
         'primitive_cruise_speed', 'primitive_lateral_speed', 'primitive_vertical_speed',
         'primitive_max_speed', 'primitive_drone_radius', 'primitive_safety_margin',
@@ -583,6 +600,7 @@ def _build_mission_nodes(lc, num_drones):
                 f'--publish-cmd {lc("ego_like_publish_cmd")} '
                 f'--cmd-topic-template "{lc("ego_like_cmd_topic_template")}" '
                 f'--waypoints "{lc("ego_like_waypoints")}" '
+                f'--frontend-mode {lc("ego_like_frontend_mode")} '
                 f'--period {lc("ego_like_period")} '
                 f'--state-timeout {lc("primitive_state_timeout")} '
                 f'--target-x {lc("dynamic_obs_target_x")} '
@@ -620,6 +638,16 @@ def _build_mission_nodes(lc, num_drones):
                 f'--lidar-min-z {lc("ego_like_lidar_min_z")} '
                 f'--lidar-vertical-limit {lc("ego_like_lidar_vertical_limit")} '
                 f'--lidar-obstacle-radius {lc("ego_like_lidar_obstacle_radius")} '
+                f'--astar-inflation-radius {lc("ego_like_astar_inflation_radius")} '
+                f'--astar-local-goal-dist {lc("ego_like_astar_local_goal_dist")} '
+                f'--astar-lookahead-dist {lc("ego_like_astar_lookahead_dist")} '
+                f'--astar-path-latch-sec {lc("ego_like_astar_path_latch_sec")} '
+                f'--astar-replan-interval {lc("ego_like_astar_replan_interval")} '
+                f'--astar-progress-stall-sec {lc("ego_like_astar_progress_stall_sec")} '
+                f'--astar-progress-epsilon {lc("ego_like_astar_progress_epsilon")} '
+                f'--astar-progress-move-epsilon {lc("ego_like_astar_progress_move_epsilon")} '
+                f'--astar-recovery-sec {lc("ego_like_astar_recovery_sec")} '
+                f'--astar-latch-clearance {lc("ego_like_astar_latch_clearance")} '
                 f'--ros-args -r __node:=ego_like_planner_framework'
             )
             actions.append(ExecuteProcess(
