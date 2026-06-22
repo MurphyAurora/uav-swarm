@@ -22,7 +22,7 @@ DYNAMIC_OBS_FREEZE="${DYNAMIC_OBS_FREEZE:-1}"
 NUM_DRONES="${NUM_DRONES:-1}"
 LEADER_ID="${LEADER_ID:-1}"
 LOCAL_PLANNER_MODE="${LOCAL_PLANNER_MODE:-risk_astar}"
-EGO_LIKE_ENABLE="${EGO_LIKE_ENABLE:-0}"
+EGO_LIKE_ENABLE="${EGO_LIKE_ENABLE:-1}"
 STOP_ON_STAGE_TIMEOUT="${STOP_ON_STAGE_TIMEOUT:-1}"
 STATIC_LOCAL_PLANNER="${STATIC_LOCAL_PLANNER:-0}"
 DYNAMIC_OBS_TARGET_X="${DYNAMIC_OBS_TARGET_X:-19.0}"
@@ -122,7 +122,9 @@ cd "${WS_ROOT}"
 if [[ "${EGO_LIKE_ENABLE}" == "1" || "${EGO_LIKE_ENABLE}" == "true" || "${EGO_LIKE_ENABLE}" == "TRUE" ]]; then
   echo "[INFO] ego_like_enable=${EGO_LIKE_ENABLE}; skip legacy lidar risk-astar patch"
 else
-  python3 "${SCRIPT_DIR}/apply_lidar_risk_astar_safety_patch.py"
+  if ! python3 "${SCRIPT_DIR}/apply_lidar_risk_astar_safety_patch.py"; then
+    echo "[WARN] legacy lidar risk-astar patch failed; continuing with current source tree" >&2
+  fi
 fi
 
 set +u
