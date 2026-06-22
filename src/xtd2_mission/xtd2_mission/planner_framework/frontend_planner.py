@@ -19,6 +19,10 @@ class FrontendPlanner:
             ("back", self._body_relative(desired, -0.55, 0.0, 0.0)),
             ("strafe_left", self._body_relative(desired, 0.25, 1.0, 0.0)),
             ("strafe_right", self._body_relative(desired, 0.25, -1.0, 0.0)),
+            ("wide_left", self._body_relative(desired, 0.45, 2.2, 0.0)),
+            ("wide_right", self._body_relative(desired, 0.45, -2.2, 0.0)),
+            ("hard_left", self._body_relative(desired, 0.0, 2.8, 0.0)),
+            ("hard_right", self._body_relative(desired, 0.0, -2.8, 0.0)),
             ("climb", Vec3(0.0, 0.0, -self.config.vertical_speed)),
             ("descend", Vec3(0.0, 0.0, self.config.vertical_speed)),
             ("back_climb", self._body_relative(desired, -0.45, 0.0, -self.config.vertical_speed)),
@@ -41,8 +45,9 @@ class FrontendPlanner:
     def _body_relative(self, desired: Vec3, forward_scale: float, lateral_scale: float, vertical: float) -> Vec3:
         forward = Vec3(desired.x, desired.y, 0.0).normalized(Vec3(1.0, 0.0, 0.0))
         lateral = Vec3(-forward.y, forward.x, 0.0)
-        vx = forward.x * self.config.cruise_speed * forward_scale + lateral.x * self.config.lateral_speed * lateral_scale
-        vy = forward.y * self.config.cruise_speed * forward_scale + lateral.y * self.config.lateral_speed * lateral_scale
+        lateral_speed = max(self.config.lateral_speed, 0.45 * self.config.max_speed)
+        vy = forward.y * self.config.cruise_speed * forward_scale + lateral.y * lateral_speed * lateral_scale
+        vx = forward.x * self.config.cruise_speed * forward_scale + lateral.x * lateral_speed * lateral_scale
         return Vec3(vx, vy, vertical)
 
     def _rollout(self, name: str, velocity: Vec3, start: Vec3) -> CandidateTrajectory:

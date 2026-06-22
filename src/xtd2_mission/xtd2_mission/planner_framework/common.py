@@ -209,6 +209,9 @@ class PlannerConfig:
     clearance_weight: float = 8.0
     ttc_weight: float = 4.0
     smooth_weight: float = 0.4
+    progress_weight: float = 6.0
+    reverse_penalty: float = 12.0
+    lateral_penalty: float = 1.5
     risk_radius: float = 5.0
     output_alpha: float = 0.55
 

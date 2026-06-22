@@ -77,16 +77,23 @@ class LocalGoalManager:
     def _nudge_goal_away_from_blocked_direction(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData) -> Vec3:
         forward = (local_goal - state.position).normalized(Vec3(1.0, 0.0, 0.0))
         lateral = Vec3(-forward.y, forward.x, 0.0).normalized(Vec3(0.0, 1.0, 0.0))
-        shift_score = 0.0
+        best_shift = 0.0
+        best_clearance = None
         for obs in perception.obstacles:
             rel = obs.position - state.position
             along = rel.x * forward.x + rel.y * forward.y + rel.z * forward.z
             if along < 0.0 or along > self.config.local_goal_distance:
                 continue
+            if obs.source == "static" and along > 1.5:
+                continue
             side = rel.x * lateral.x + rel.y * lateral.y
             clearance = abs(side) - (obs.radius + self.config.drone_radius + self.config.obstacle_margin)
-            if clearance < 0.6:
-                shift_score += -1.0 if side > 0.0 else 1.0
-        if abs(shift_score) < 1.0e-6:
+            if clearance >= 0.35:
+                continue
+            if best_clearance is None or clearance < best_clearance:
+                best_clearance = clearance
+                best_shift = -1.0 if side > 0.0 else 1.0
+        if abs(best_shift) < 1.0e-6:
             return local_goal
-        return local_goal + lateral * (0.8 * (1.0 if shift_score > 0.0 else -1.0))
+        shift_mag = 0.45 if best_clearance is not None and best_clearance >= 0.0 else 0.7
+        return local_goal + lateral * (shift_mag * best_shift)

@@ -135,6 +135,13 @@ ego_like_hard_clearance: 0.15
 ego_like_emergency_clearance: 0.45
 ego_like_static_hard_clearance: 0.25
 ego_like_static_emergency_clearance: 0.55
+ego_like_goal_weight: 1.0
+ego_like_clearance_weight: 8.0
+ego_like_ttc_weight: 4.0
+ego_like_smooth_weight: 0.4
+ego_like_progress_weight: 6.0
+ego_like_reverse_penalty: 12.0
+ego_like_lateral_penalty: 1.5
 primitive_horizon: 3.5
 primitive_dt: 0.5
 primitive_cruise_speed: 0.34

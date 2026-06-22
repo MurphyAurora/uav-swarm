@@ -21,15 +21,35 @@ class FallbackManager:
 
     def command(self, state: PlannerState, perception: PerceptionData, evaluations: Sequence[CandidateEvaluation]) -> PlannerCommand:
         escape_eval = self._best_escape(evaluations)
-        if escape_eval is not None and escape_eval.safety.feasible:
-            return PlannerCommand(escape_eval.trajectory.velocity, "fallback_escape", escape_eval.trajectory.name, escape_eval.safety.reason)
+        if escape_eval is not None:
+            clearance = min(escape_eval.safety.min_clearance, escape_eval.safety.min_static_clearance)
+            soft_escape_ok = clearance >= -0.10 and escape_eval.trajectory.velocity.norm() > 0.05
+            if escape_eval.safety.feasible or soft_escape_ok:
+                return PlannerCommand(escape_eval.trajectory.velocity, "fallback_escape", escape_eval.trajectory.name, escape_eval.safety.reason)
         if perception.near_field_danger:
             return PlannerCommand(Vec3(0.0, 0.0, -self.config.vertical_speed), "fallback_climb", "near_field_climb", "near_field_lidar_danger")
         return PlannerCommand(Vec3(), "fallback_hover", "hover", "no_safe_candidate")
 
     def _best_escape(self, evaluations: Sequence[CandidateEvaluation]) -> Optional[CandidateEvaluation]:
-        escape_names = {"wait", "back", "strafe_left", "strafe_right", "climb", "descend", "back_climb", "left_climb", "right_climb"}
+        escape_names = {
+            "wait",
+            "back",
+            "strafe_left",
+            "strafe_right",
+            "wide_left",
+            "wide_right",
+            "hard_left",
+            "hard_right",
+            "climb",
+            "descend",
+            "back_climb",
+            "left_climb",
+            "right_climb",
+        }
         escape = [item for item in evaluations if item.trajectory.name in escape_names]
         if not escape:
             return None
+        moving_escape = [item for item in escape if item.trajectory.velocity.norm() > 0.05]
+        if moving_escape:
+            escape = moving_escape
         return max(escape, key=lambda item: (item.safety.min_clearance, -item.score))

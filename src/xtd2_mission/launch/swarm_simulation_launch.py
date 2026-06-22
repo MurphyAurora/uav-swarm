@@ -92,6 +92,13 @@ def generate_launch_description():
     defaults.setdefault('ego_like_emergency_clearance', '0.45')
     defaults.setdefault('ego_like_static_hard_clearance', '0.25')
     defaults.setdefault('ego_like_static_emergency_clearance', '0.55')
+    defaults.setdefault('ego_like_goal_weight', '1.0')
+    defaults.setdefault('ego_like_clearance_weight', '8.0')
+    defaults.setdefault('ego_like_ttc_weight', '4.0')
+    defaults.setdefault('ego_like_smooth_weight', '0.4')
+    defaults.setdefault('ego_like_progress_weight', '6.0')
+    defaults.setdefault('ego_like_reverse_penalty', '12.0')
+    defaults.setdefault('ego_like_lateral_penalty', '1.5')
 
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
@@ -138,7 +145,10 @@ def generate_launch_description():
         'ego_like_local_goal_distance', 'ego_like_output_alpha',
         'ego_like_obstacle_margin', 'ego_like_hard_clearance',
         'ego_like_emergency_clearance', 'ego_like_static_hard_clearance',
-        'ego_like_static_emergency_clearance',
+        'ego_like_static_emergency_clearance', 'ego_like_goal_weight',
+        'ego_like_clearance_weight', 'ego_like_ttc_weight',
+        'ego_like_smooth_weight', 'ego_like_progress_weight',
+        'ego_like_reverse_penalty', 'ego_like_lateral_penalty',
         'primitive_horizon', 'primitive_dt',
         'primitive_cruise_speed', 'primitive_lateral_speed', 'primitive_vertical_speed',
         'primitive_max_speed', 'primitive_drone_radius', 'primitive_safety_margin',
@@ -577,10 +587,13 @@ def _build_mission_nodes(lc, num_drones):
                 f'--static-hard-clearance {lc("ego_like_static_hard_clearance")} '
                 f'--static-emergency-clearance {lc("ego_like_static_emergency_clearance")} '
                 f'--local-goal-distance {lc("ego_like_local_goal_distance")} '
-                f'--goal-weight {lc("primitive_target_weight")} '
-                f'--clearance-weight {lc("primitive_risk_weight")} '
-                f'--ttc-weight 4.0 '
-                f'--smooth-weight {lc("primitive_smooth_weight")} '
+                f'--goal-weight {lc("ego_like_goal_weight")} '
+                f'--clearance-weight {lc("ego_like_clearance_weight")} '
+                f'--ttc-weight {lc("ego_like_ttc_weight")} '
+                f'--smooth-weight {lc("ego_like_smooth_weight")} '
+                f'--progress-weight {lc("ego_like_progress_weight")} '
+                f'--reverse-penalty {lc("ego_like_reverse_penalty")} '
+                f'--lateral-penalty {lc("ego_like_lateral_penalty")} '
                 f'--output-alpha {lc("ego_like_output_alpha")} '
                 f'--ros-args -r __node:=ego_like_planner_framework'
             )

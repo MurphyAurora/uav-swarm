@@ -54,6 +54,9 @@ class EgoLikePlannerFrameworkNode(Node):
             clearance_weight=float(args.clearance_weight),
             ttc_weight=float(args.ttc_weight),
             smooth_weight=float(args.smooth_weight),
+            progress_weight=float(args.progress_weight),
+            reverse_penalty=float(args.reverse_penalty),
+            lateral_penalty=float(args.lateral_penalty),
             output_alpha=float(args.output_alpha),
         )
 
@@ -172,10 +175,11 @@ class EgoLikePlannerFrameworkNode(Node):
             velocity = cmd.get("velocity", {})
             local_goal = report.get("local_goal", {})
             final_goal = report.get("final_goal", {})
+            best_costs = (report.get("best") or {}).get("costs", {})
             parts.append(
                 "x500_{id} mode={mode} traj={traj} v=({vx:.2f},{vy:.2f},{vz:.2f}) "
                 "safe={safe}/{cand} feasible={feasible} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
-                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) reason={reason}".format(
+                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) cost(g={cg:.2f},p={cp:.2f},r={cr:.2f},l={cl:.2f}) reason={reason}".format(
                     id=int(report.get("drone_id", 0)),
                     mode=str(cmd.get("mode", "")),
                     traj=str(cmd.get("source_trajectory", "")),
@@ -191,6 +195,10 @@ class EgoLikePlannerFrameworkNode(Node):
                     gx=float(final_goal.get("x", 0.0)),
                     gy=float(final_goal.get("y", 0.0)),
                     gz=float(final_goal.get("z", 0.0)),
+                    cg=float(best_costs.get("goal", 0.0)),
+                    cp=float(best_costs.get("progress", 0.0)),
+                    cr=float(best_costs.get("reverse", 0.0)),
+                    cl=float(best_costs.get("lateral", 0.0)),
                     reason=str(cmd.get("reason", "")),
                 )
             )
@@ -235,6 +243,9 @@ def build_arg_parser():
     parser.add_argument("--clearance-weight", type=float, default=8.0)
     parser.add_argument("--ttc-weight", type=float, default=4.0)
     parser.add_argument("--smooth-weight", type=float, default=0.4)
+    parser.add_argument("--progress-weight", type=float, default=6.0)
+    parser.add_argument("--reverse-penalty", type=float, default=12.0)
+    parser.add_argument("--lateral-penalty", type=float, default=1.5)
     parser.add_argument("--output-alpha", type=float, default=0.55)
     parser.add_argument("--log-file", default="")
     return parser
