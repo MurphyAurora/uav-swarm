@@ -1096,11 +1096,13 @@ class FixedPointMission(Node):
         cloud = self.latest_lidar_clouds.get(key)
         st = self.latest_states.get(key)
         if cloud is None or st is None:
-            return vx, vy, vz, 'no_lidar'
-        if now_t - float(cloud.get('stamp', 0.0)) > 2.0:
-            return vx, vy, vz, 'stale_lidar'
+            return 0.0, 0.0, 0.0, 'final_no_lidar_hold'
+        if now_t - float(cloud.get('stamp', 0.0)) > 0.8:
+            return 0.0, 0.0, 0.0, 'final_stale_lidar_hold'
 
         nearest_any = None
+        nearest_px = 0.0
+        nearest_py = 0.0
         for idx, point in enumerate(point_cloud2.read_points(cloud['msg'], field_names=('x', 'y', 'z'), skip_nans=True)):
             if idx >= 2500:
                 break
@@ -1112,9 +1114,19 @@ class FixedPointMission(Node):
                 continue
             if nearest_any is None or horizontal < nearest_any:
                 nearest_any = horizontal
+                nearest_px = px
+                nearest_py = py
 
-        if nearest_any is not None and nearest_any < 0.50:
+        if nearest_any is not None and nearest_any < 0.75:
             return 0.0, 0.0, 0.0, 'final_contact_stop'
+        if nearest_any is not None and nearest_any < 1.15:
+            heading = self._finite_float(st.get('heading', 0.0))
+            mag = max(math.hypot(nearest_px, nearest_py), 1e-6)
+            escape_speed = 0.22
+            bvx = -escape_speed * nearest_px / mag
+            bvy = -escape_speed * nearest_py / mag
+            evx, evy = self._body_to_world_xy(bvx, bvy, heading)
+            return evx, evy, 0.0, 'final_contact_escape'
         return vx, vy, vz, 'pass'
 
     def _estimate_virtual_ref_from_states(self, follower_offsets, use_heading_offsets=False, heading=0.0, max_age_sec=1.0):
@@ -1196,7 +1208,7 @@ class FixedPointMission(Node):
         dz = pz - bz
         return self._limit_vector(dx, dy, dz, max_delta)
 
-    def _selected_avoid_vel(self, drone_id, max_age_sec=1.2):
+    def _selected_avoid_vel(self, drone_id, max_age_sec=0.35):
         source = self.avoid_source
         if source in ('none', 'off', '0', 'false'):
             return (0.0, 0.0, 0.0, 'none', False)
@@ -1208,15 +1220,8 @@ class FixedPointMission(Node):
             if safe_ok:
                 cmd = safe
                 label = 'primitive+lidar_ttc'
-            elif safe is not None:
-                safe_age = time.time() - float(safe.get('stamp', 0.0))
-                if safe_age <= 2.0:
-                    cmd = safe
-                    label = 'primitive+lidar_ttc_stale'
-                else:
-                    return (0.0, 0.0, 0.0, 'primitive+lidar_ttc_missing', True)
             else:
-                cmd = self.primitive_avoid_cmds.get(int(drone_id))
+                return (0.0, 0.0, 0.0, 'primitive+lidar_ttc_missing', True)
         elif source == 'orca':
             cmd = self.orca_avoid_cmds.get(int(drone_id))
         elif source == 'fused':
@@ -1243,7 +1248,7 @@ class FixedPointMission(Node):
             True,
         )
 
-    def _safe_primitive_override(self, drone_id, max_age_sec=1.2):
+    def _safe_primitive_override(self, drone_id, max_age_sec=0.35):
         safe = self.safe_primitive_cmds.get(int(drone_id))
         prim = self.primitive_avoid_cmds.get(int(drone_id))
         now_t = time.time()
@@ -1265,7 +1270,7 @@ class FixedPointMission(Node):
             return (0.0, 0.0, 0.0, 'safe_primitive_inactive', False)
         return svx, svy, 0.0, 'safe_primitive_override', True
 
-    def _latest_primitive_chain_cmd(self, drone_id, max_age_sec=1.2):
+    def _latest_primitive_chain_cmd(self, drone_id, max_age_sec=0.35):
         """Return the newest command from primitive -> safety chain.
 
         Direct-pose SANDO stages publish velocity commands themselves.  When the
@@ -1282,16 +1287,7 @@ class FixedPointMission(Node):
                 'safe_primitive_chain',
                 True,
             )
-        prim = self.primitive_avoid_cmds.get(int(drone_id))
-        if prim is not None and now_t - float(prim.get('stamp', 0.0)) <= max_age_sec:
-            return (
-                float(prim.get('vx', 0.0)),
-                float(prim.get('vy', 0.0)),
-                float(prim.get('vz', 0.0)),
-                'primitive_chain',
-                True,
-            )
-        return 0.0, 0.0, 0.0, 'primitive_chain_missing', False
+        return 0.0, 0.0, 0.0, 'safe_primitive_chain_missing', True
 
     def _publish_pose(self, drone_id, x, y, z):
         pose = Pose()
@@ -2282,7 +2278,7 @@ class FixedPointMission(Node):
                 if direct_pose_mode:
                     chain_vx, chain_vy, chain_vz, chain_label, chain_ok = self._latest_primitive_chain_cmd(
                         drone_id,
-                        max_age_sec=max(1.2, 4.0 * sleep_dt),
+                        max_age_sec=0.35,
                     )
                     if chain_ok and self.avoid_source == 'primitive':
                         vx, vy, vz = self._limit_vector(chain_vx, chain_vy, chain_vz, max_follower_speed)
