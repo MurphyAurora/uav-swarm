@@ -191,6 +191,7 @@ lidar_ttc_projection_gain: 1.35
 lidar_ttc_brake_gain: 0.08
 lidar_ttc_back_speed: 0.45
 lidar_ttc_climb_speed: 0.0
+lidar_ttc_strong_filter: 1
 
 # ===== Path planner =====
 path_planner_mode: "astar"

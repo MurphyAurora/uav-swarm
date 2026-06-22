@@ -50,6 +50,7 @@ class LidarTtcSafetyFilter(Node):
         climb_speed=0.18,
         cmd_timeout=0.6,
         point_timeout=0.8,
+        strong_filter=True,
     ):
         super().__init__('lidar_ttc_safety_filter')
         self.num_drones = int(num_drones)
@@ -74,6 +75,7 @@ class LidarTtcSafetyFilter(Node):
         self.climb_speed = float(climb_speed)
         self.cmd_timeout = float(cmd_timeout)
         self.point_timeout = float(point_timeout)
+        self.strong_filter = bool(strong_filter)
         self.hard_stop_distance = max(self.safety_radius + 0.45, 1.25)
 
         self.cmds = {}
@@ -81,6 +83,7 @@ class LidarTtcSafetyFilter(Node):
         self.headings = {}
         self.escape_until = {}
         self.escape_dir = {}
+        self.escape_body_velocity = {}
         self.hard_stop_count = {}
         self.last_log_time = 0.0
 
@@ -114,6 +117,7 @@ class LidarTtcSafetyFilter(Node):
             f'cone_cos={self.cone_cos:.2f}, safety_radius={self.safety_radius:.2f}, '
             f'hard_stop_distance={self.hard_stop_distance:.2f}, '
             f'self_filter_radius={self.self_filter_radius:.2f}, '
+            f'strong_filter={int(self.strong_filter)}, '
             f'input={self.input_topic_template}, output={self.output_topic_template}, '
             f'lidar={self.lidar_topic_template}'
         )
@@ -190,12 +194,14 @@ class LidarTtcSafetyFilter(Node):
         bvz = vz
         now = time.time()
         speed_xy = math.hypot(bvx, bvy)
-        if speed_xy < self.min_speed:
-            return self._result(drone_id, 'pass', vx, vy, vz, 999.0, 999.0, 0.0, 0)
-
-        dir_x = bvx / speed_xy
-        dir_y = bvy / speed_xy
-        cmd_angle_deg = math.degrees(math.atan2(dir_y, dir_x))
+        if speed_xy >= self.min_speed:
+            dir_x = bvx / speed_xy
+            dir_y = bvy / speed_xy
+            cmd_angle_deg = math.degrees(math.atan2(dir_y, dir_x))
+        else:
+            dir_x = 1.0
+            dir_y = 0.0
+            cmd_angle_deg = 0.0
         worst = None
         used = 0
         sector_min = {
@@ -226,7 +232,7 @@ class LidarTtcSafetyFilter(Node):
                     sector_min[name] = min(sector_min[name], horizontal)
             hard_distance = horizontal <= self.hard_stop_distance
             if hard_distance:
-                closing = max(0.0, bvx * ux + bvy * uy)
+                closing = max(0.0, bvx * ux + bvy * uy) if speed_xy >= self.min_speed else 0.0
                 ttc = 0.0
                 used += 1
                 if worst is None or horizontal < worst['distance']:
@@ -243,7 +249,9 @@ class LidarTtcSafetyFilter(Node):
                         'cmd_angle_deg': cmd_angle_deg,
                         'obs_angle_deg': math.degrees(math.atan2(py, px)),
                         'alignment': ux * dir_x + uy * dir_y,
-                    }
+                }
+                continue
+            if speed_xy < self.min_speed:
                 continue
             alignment = ux * dir_x + uy * dir_y
             if alignment < self.cone_cos:
@@ -281,7 +289,7 @@ class LidarTtcSafetyFilter(Node):
         active_escape = now < self.escape_until.get(int(drone_id), 0.0)
         if active_escape:
             mode = self.escape_dir.get(int(drone_id), 'escape_back')
-            nbvx, nbvy = self._escape_velocity(mode)
+            nbvx, nbvy = self.escape_body_velocity.get(int(drone_id), self._escape_velocity(mode))
             nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
             return self._result(
                 drone_id, mode, nvx, nvy, 0.0,
@@ -297,11 +305,16 @@ class LidarTtcSafetyFilter(Node):
         if worst['ttc'] <= self.emergency_ttc or hard_distance:
             count = self.hard_stop_count.get(int(drone_id), 0) + 1
             self.hard_stop_count[int(drone_id)] = count
-            if count >= 2:
-                escape_mode = max(sector_min, key=sector_min.get)
+            if self.strong_filter or count >= 2:
+                if self.strong_filter and hard_distance:
+                    nbvx, nbvy = self._away_velocity(ux, uy)
+                    escape_mode = 'shield_escape'
+                else:
+                    escape_mode = max(sector_min, key=sector_min.get)
+                    nbvx, nbvy = self._escape_velocity(escape_mode)
                 self.escape_until[int(drone_id)] = now + 0.45
                 self.escape_dir[int(drone_id)] = escape_mode
-                nbvx, nbvy = self._escape_velocity(escape_mode)
+                self.escape_body_velocity[int(drone_id)] = (nbvx, nbvy)
                 nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
                 return self._result(
                     drone_id, escape_mode, nvx, nvy, 0.0,
@@ -356,6 +369,13 @@ class LidarTtcSafetyFilter(Node):
         if mode == 'escape_right':
             return 0.0, -speed
         return -speed, 0.0
+
+    def _away_velocity(self, ux, uy):
+        speed = max(0.15, abs(self.back_speed))
+        mag = math.hypot(float(ux), float(uy))
+        if mag < 1e-6:
+            return -speed, 0.0
+        return -speed * float(ux) / mag, -speed * float(uy) / mag
 
     def _publish(self, drone_id, vx, vy, vz):
         msg = Twist()
@@ -437,6 +457,7 @@ def main():
     parser.add_argument('--climb-speed', type=float, default=0.18)
     parser.add_argument('--cmd-timeout', type=float, default=0.6)
     parser.add_argument('--point-timeout', type=float, default=0.8)
+    parser.add_argument('--strong-filter', type=int, default=1)
     args, _ = parser.parse_known_args()
 
     rclpy.init()
@@ -463,6 +484,7 @@ def main():
         climb_speed=args.climb_speed,
         cmd_timeout=args.cmd_timeout,
         point_timeout=args.point_timeout,
+        strong_filter=bool(args.strong_filter),
     )
     try:
         rclpy.spin(node)

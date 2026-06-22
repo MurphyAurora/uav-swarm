@@ -108,6 +108,7 @@ def generate_launch_description():
     defaults.setdefault('ego_like_lidar_min_z', '-1.8')
     defaults.setdefault('ego_like_lidar_vertical_limit', '1.8')
     defaults.setdefault('ego_like_lidar_obstacle_radius', '0.16')
+    defaults.setdefault('lidar_ttc_strong_filter', '1')
 
     # All unique param names across stages
     all_param_names = list(dict.fromkeys([
@@ -180,6 +181,7 @@ def generate_launch_description():
         'lidar_ttc_min_range', 'lidar_ttc_min_z', 'lidar_ttc_vertical_limit', 'lidar_ttc_cone_angle_deg',
         'lidar_ttc_safety_radius', 'lidar_ttc_self_filter_radius', 'lidar_ttc_projection_gain',
         'lidar_ttc_brake_gain', 'lidar_ttc_back_speed', 'lidar_ttc_climb_speed',
+        'lidar_ttc_strong_filter',
         'path_planner_mode', 'astar_grid_resolution', 'astar_smooth_enable',
         'mission_start_x', 'duration', 'eval_mode', 'mission_mode',
         'formation_kp', 'leader_track_kp', 'max_follower_speed',
@@ -689,6 +691,7 @@ def _build_mission_nodes(lc, num_drones):
                 f'--brake-gain {lc("lidar_ttc_brake_gain")} '
                 f'--back-speed {lc("lidar_ttc_back_speed")} '
                 f'--climb-speed {lc("lidar_ttc_climb_speed")} '
+                f'--strong-filter {lc("lidar_ttc_strong_filter")} '
                 f'--ros-args -r __node:=lidar_ttc_safety_filter'
             )
             actions.append(ExecuteProcess(
