@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fallback commands used when no candidate is safely executable."""
 
+import time
 from typing import Optional, Sequence
 
 from .common import CandidateEvaluation, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
@@ -9,6 +10,9 @@ from .common import CandidateEvaluation, PerceptionData, PlannerCommand, Planner
 class FallbackManager:
     def __init__(self, config: Optional[PlannerConfig] = None):
         self.config = config or PlannerConfig()
+        self._latched_escape_until = 0.0
+        self._latched_escape_velocity = Vec3()
+        self._latched_escape_reason = ""
 
     def should_fallback(self, best: Optional[CandidateEvaluation], evaluations: Sequence[CandidateEvaluation], perception: PerceptionData) -> bool:
         if best is None:
@@ -36,29 +40,56 @@ class FallbackManager:
 
     def _nearest_obstacle_escape(self, state: PlannerState, perception: PerceptionData) -> Optional[PlannerCommand]:
         if not perception.near_field_danger:
+            self._latched_escape_until = 0.0
             return None
-        nearest = None
+        now = time.time()
+        if now < self._latched_escape_until and self._latched_escape_velocity.norm() > 0.05:
+            return PlannerCommand(
+                self._latched_escape_velocity,
+                "fallback_escape",
+                "latched_lidar_escape",
+                self._latched_escape_reason,
+            )
+
+        close_count = 0
+        pressure = Vec3()
         nearest_clearance = 999.0
         for obs in perception.obstacles:
             if obs.source != "lidar_near_field":
                 continue
             clearance = state.position.distance_to(obs.position) - float(obs.radius) - self.config.drone_radius
+            if clearance > self.config.static_emergency_clearance + 0.35:
+                continue
+            away = Vec3(
+                state.position.x - obs.position.x,
+                state.position.y - obs.position.y,
+                0.0,
+            )
+            distance = max(away.norm(), 1.0e-3)
+            weight = 1.0 / max(0.12, clearance + 0.35)
+            pressure = pressure + away * (weight / distance)
+            close_count += 1
             if clearance < nearest_clearance:
-                nearest = obs
                 nearest_clearance = clearance
-        if nearest is None or nearest_clearance > self.config.static_emergency_clearance:
+        if close_count <= 0 or nearest_clearance > self.config.static_emergency_clearance:
             return None
-        away = Vec3(
-            state.position.x - nearest.position.x,
-            state.position.y - nearest.position.y,
-            0.0,
-        ).normalized(Vec3(-1.0, 0.0, 0.0))
+        fallback_dir = self._latched_escape_velocity.normalized(Vec3(-1.0, 0.0, 0.0))
+        away = pressure.normalized(fallback_dir)
+        if self._latched_escape_velocity.norm() > 0.05:
+            prev = self._latched_escape_velocity.normalized()
+            if away.x * prev.x + away.y * prev.y < 0.25:
+                away = prev
         speed = min(self.config.max_speed, max(self.config.lateral_speed, 0.45 * self.config.max_speed))
+        velocity = away * speed
+        reason = f"near_field_lidar_clearance={nearest_clearance:.2f}, close_points={close_count}"
+        self._latched_escape_velocity = velocity
+        self._latched_escape_reason = reason
+        self._latched_escape_until = now + 1.0
         return PlannerCommand(
-            away * speed,
+            velocity,
             "fallback_escape",
-            "nearest_lidar_escape",
-            f"near_field_lidar_clearance={nearest_clearance:.2f}",
+            "latched_lidar_escape",
+            reason,
         )
 
     def _best_escape(self, evaluations: Sequence[CandidateEvaluation]) -> Optional[CandidateEvaluation]:
