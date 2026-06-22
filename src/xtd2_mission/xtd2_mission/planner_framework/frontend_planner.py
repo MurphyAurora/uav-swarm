@@ -51,7 +51,7 @@ class FrontendPlanner:
         return Vec3(vx, vy, vertical)
 
     def _rollout(self, name: str, velocity: Vec3, start: Vec3) -> CandidateTrajectory:
-        points = []
+        points = [TrajectoryPoint(t=0.0, position=start)]
         steps = max(1, int(round(self.config.horizon / max(self.config.dt, 1.0e-6))))
         for idx in range(1, steps + 1):
             t = idx * self.config.dt

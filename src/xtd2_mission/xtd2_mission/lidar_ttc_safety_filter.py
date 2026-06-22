@@ -272,16 +272,23 @@ class LidarTtcSafetyFilter(Node):
                     'alignment': alignment,
                 }
 
+        if worst is None:
+            self.hard_stop_count[int(drone_id)] = 0
+            if used <= 0:
+                self.escape_until[int(drone_id)] = 0.0
+            return self._result(drone_id, 'pass', vx, vy, vz, 999.0, 999.0, 0.0, used)
+
         active_escape = now < self.escape_until.get(int(drone_id), 0.0)
         if active_escape:
             mode = self.escape_dir.get(int(drone_id), 'escape_back')
             nbvx, nbvy = self._escape_velocity(mode)
             nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)
-            return self._result(drone_id, mode, nvx, nvy, 0.0, 0.0, 999.0, 0.0, used)
-
-        if worst is None:
-            self.hard_stop_count[int(drone_id)] = 0
-            return self._result(drone_id, 'pass', vx, vy, vz, 999.0, 999.0, 0.0, used)
+            return self._result(
+                drone_id, mode, nvx, nvy, 0.0,
+                worst['ttc'], worst['distance'], worst['closing'], used,
+                worst['px'], worst['py'], worst['pz'],
+                worst['cmd_angle_deg'], worst['obs_angle_deg'], worst['alignment'],
+            )
 
         ux = worst['ux']
         uy = worst['uy']
@@ -292,7 +299,7 @@ class LidarTtcSafetyFilter(Node):
             self.hard_stop_count[int(drone_id)] = count
             if count >= 2:
                 escape_mode = max(sector_min, key=sector_min.get)
-                self.escape_until[int(drone_id)] = now + 1.2
+                self.escape_until[int(drone_id)] = now + 0.45
                 self.escape_dir[int(drone_id)] = escape_mode
                 nbvx, nbvy = self._escape_velocity(escape_mode)
                 nvx, nvy = self._body_to_world_xy(nbvx, nbvy, heading)

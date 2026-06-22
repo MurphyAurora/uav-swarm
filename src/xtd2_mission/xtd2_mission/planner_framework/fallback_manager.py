@@ -24,7 +24,8 @@ class FallbackManager:
         if escape_eval is not None:
             clearance = min(escape_eval.safety.min_clearance, escape_eval.safety.min_static_clearance)
             soft_escape_ok = clearance >= -0.10 and escape_eval.trajectory.velocity.norm() > 0.05
-            if escape_eval.safety.feasible or soft_escape_ok:
+            no_feasible_motion = not any(item.safety.feasible for item in evaluations)
+            if escape_eval.safety.feasible or soft_escape_ok or no_feasible_motion:
                 return PlannerCommand(escape_eval.trajectory.velocity, "fallback_escape", escape_eval.trajectory.name, escape_eval.safety.reason)
         if perception.near_field_danger:
             return PlannerCommand(Vec3(0.0, 0.0, -self.config.vertical_speed), "fallback_climb", "near_field_climb", "near_field_lidar_danger")
