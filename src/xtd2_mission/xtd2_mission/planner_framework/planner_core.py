@@ -25,9 +25,15 @@ class EgoLikePlannerCore:
         self.output = CommandOutput(self.config)
         self._last_plan_time: Optional[float] = None
         self._last_shield_info: Dict[str, object] = {"active": False}
+        self._planning_heading: Optional[float] = None
+        self._planning_heading_desired: Optional[float] = None
 
     def set_waypoints(self, waypoints: Sequence[Vec3], reset: bool = True) -> None:
         self.goal_manager.set_waypoints(waypoints, reset=reset)
+        if reset:
+            self._planning_heading = None
+            self._planning_heading_desired = None
+            self.output.reset()
 
     def plan(self, state: PlannerState, final_goal: Vec3, perception: Optional[PerceptionData] = None) -> Dict:
         perception = perception or PerceptionData()
@@ -37,7 +43,7 @@ class EgoLikePlannerCore:
 
         active_goal = self.goal_manager.active_waypoint(final_goal)
         local_goal = self.goal_manager.compute_local_goal(state, final_goal, perception)
-        planning_state, planning_heading = self._goal_aligned_state(state, local_goal)
+        planning_state, planning_heading = self._goal_aligned_state(state, local_goal, dt)
 
         candidates = self.frontend.generate(planning_state, local_goal, perception)
         safety_reports = [self.safety_checker.evaluate(candidate, state, perception) for candidate in candidates]
@@ -49,8 +55,13 @@ class EgoLikePlannerCore:
         elif best.safety.safe:
             command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
         else:
+            # The path tracker already limits velocity by path clearance.  Do not
+            # crush every hard-feasible trajectory to 0.08 m/s; mature planners
+            # keep executing a feasible short trajectory slowly enough to escape
+            # the soft shell, otherwise the vehicle just stalls in front of the gap.
+            cautious_speed = 0.18 if best.safety.min_clearance >= 0.30 else 0.12
             command = PlannerCommand(
-                best.trajectory.velocity.limit_norm(min(0.08, self.config.max_speed)),
+                best.trajectory.velocity.limit_norm(min(cautious_speed, self.config.max_speed)),
                 "planner_cautious",
                 best.trajectory.name,
                 best.safety.reason,
@@ -69,6 +80,8 @@ class EgoLikePlannerCore:
                 "heading_deg": float(math.degrees(state.heading)),
                 "planning_heading": float(planning_heading),
                 "planning_heading_deg": float(math.degrees(planning_heading)),
+                "planning_heading_desired": float(self._planning_heading_desired or planning_heading),
+                "planning_heading_desired_deg": float(math.degrees(self._planning_heading_desired or planning_heading)),
                 "stamp": float(state.stamp),
             },
             "coordinate_debug": self._coordinate_debug(state, planning_state, final_goal, local_goal, command.velocity),
@@ -88,12 +101,27 @@ class EgoLikePlannerCore:
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
 
-    def _goal_aligned_state(self, state: PlannerState, local_goal: Vec3) -> tuple[PlannerState, float]:
+    def _goal_aligned_state(self, state: PlannerState, local_goal: Vec3, dt: Optional[float]) -> tuple[PlannerState, float]:
         to_goal = local_goal - state.position
         if math.hypot(to_goal.x, to_goal.y) > 0.20:
-            heading = math.atan2(to_goal.y, to_goal.x)
+            desired = math.atan2(to_goal.y, to_goal.x)
         else:
-            heading = state.heading
+            desired = self._planning_heading if self._planning_heading is not None else state.heading
+        self._planning_heading_desired = desired
+        if self._planning_heading is None:
+            self._planning_heading = desired
+        else:
+            # A mature local planner does not rotate its planning frame by tens of
+            # degrees every frame.  Rate-limit the frame so subgoals and tracker
+            # velocity stay consistent while still following the mission direction.
+            step = max(0.08, min(0.22, 0.85 * (dt if dt is not None else 0.1)))
+            delta = math.atan2(math.sin(desired - self._planning_heading), math.cos(desired - self._planning_heading))
+            delta = max(-step, min(step, delta))
+            self._planning_heading = math.atan2(
+                math.sin(self._planning_heading + delta),
+                math.cos(self._planning_heading + delta),
+            )
+        heading = self._planning_heading
         return PlannerState(
             drone_id=state.drone_id,
             position=state.position,
@@ -145,8 +173,8 @@ class EgoLikePlannerCore:
 
         original = Vec3(command.velocity.x, command.velocity.y, 0.0)
         new_v = Vec3(original.x, original.y, 0.0)
-        protect_dist = 1.35
-        hard_stop_dist = 0.95
+        protect_dist = 1.25
+        hard_stop_dist = 0.88
         min_dist = 999.0
         min_clearance = 999.0
         max_closing = 0.0
@@ -185,7 +213,7 @@ class EgoLikePlannerCore:
         if projected <= 0:
             return command
         if new_v.norm() < 0.02:
-            if min_dist <= 1.02:
+            if min_dist <= 0.95:
                 self._last_shield_info = {
                     "active": True,
                     "action": "project_stop",
@@ -210,7 +238,10 @@ class EgoLikePlannerCore:
             }
             return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:reverse_blocked")
 
-        new_v = new_v.limit_norm(min(command.velocity.norm(), 0.10))
+        # Keep the projected vector, but do not cap it to a crawl.  PathTracker
+        # and planner_cautious already bound the speed; the shield only removes
+        # the dangerous component.
+        new_v = new_v.limit_norm(min(command.velocity.norm(), 0.18))
         out = Vec3(new_v.x, new_v.y, command.velocity.z)
         self._last_shield_info = {
             "active": True,
