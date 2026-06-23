@@ -15,11 +15,7 @@ class CommandOutput:
     def process(self, command: PlannerCommand, dt: Optional[float] = None) -> PlannerCommand:
         raw = command.velocity.limit_norm(self.config.max_speed)
 
-        # Hard safety stop must be immediate.  The debug log showed frames like
-        # mode=fallback_hover while the published velocity was still non-zero
-        # because the output smoother kept part of the previous planner command.
-        # That residual velocity is enough to slide into a nearby obstacle.
-        if self._is_hard_stop(command):
+        if command.mode == "fallback_hover":
             self._last_velocity = Vec3()
             self._has_last = True
             return PlannerCommand(Vec3(), command.mode, command.source_trajectory, command.reason)
@@ -37,21 +33,6 @@ class CommandOutput:
         smoothed = smoothed.limit_norm(self.config.max_speed)
         self._last_velocity = smoothed
         return PlannerCommand(smoothed, command.mode, command.source_trajectory, command.reason)
-
-    @staticmethod
-    def _is_hard_stop(command: PlannerCommand) -> bool:
-        if command.mode != "fallback_hover":
-            return False
-        reason = str(command.reason or "")
-        if reason.startswith("stop_first_blocked_astar"):
-            return True
-        return reason in (
-            "no_safe_candidate",
-            "near_field_lidar_danger_stop_first",
-            "hard_clearance_violation",
-            "static_clearance_violation",
-            "emergency_margin_violation",
-        )
 
     def reset(self) -> None:
         self._last_velocity = Vec3()
