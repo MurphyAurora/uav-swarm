@@ -38,8 +38,6 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         bypass_target_body, bypass_mode = self._bypass_target(local_map.points, mission_target_body, now, front_blocked, mission_corridor_blocked)
         target_body = bypass_target_body if bypass_target_body is not None else mission_target_body
         corridor_blocked = not self._target_corridor_clear(local_map.points, target_body)
-        # Keep the inherited side latch aligned with the explicit bypass state so
-        # candidate generation does not choose the opposite side.
         if self._bypass_active and abs(self._bypass_side) > 0.5:
             self._side_latch = self._bypass_side
             self._side_latch_until = max(self._side_latch_until, now + 0.5)
@@ -52,6 +50,9 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         if replan_reason:
             selected = self._select_path(local_map, start, target_body)
             if selected is None:
+                candidate = self._direct_bypass_candidate(state, local_goal, local_map, nearest, target_body, bypass_mode, replan_reason)
+                if candidate is not None:
+                    return candidate
                 self.tracker.reset()
                 self._committed_world_path = []
                 self.diagnostics = self._diag("no_astar_path", replan_reason, local_map, nearest, front_blocked, corridor_blocked, self._bypass_diag(bypass_mode, target_body))
@@ -62,6 +63,9 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         if len(body_path) < 2 or not self._path_is_valid(local_map, body_path):
             selected = self._select_path(local_map, start, target_body)
             if selected is None:
+                candidate = self._direct_bypass_candidate(state, local_goal, local_map, nearest, target_body, bypass_mode, "invalid_path_direct_bypass")
+                if candidate is not None:
+                    return candidate
                 self.tracker.reset()
                 self._committed_world_path = []
                 self.diagnostics = self._diag("committed_path_invalid", "invalid_path_no_replacement", local_map, nearest, front_blocked, corridor_blocked, self._bypass_diag(bypass_mode, target_body))
@@ -69,7 +73,12 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             self._commit_path(state, selected, local_goal, now)
             body_path = self._committed_body_path(state)
 
-        body_path = self._trim_passed_points(body_path)
+        return self._track_body_path(state, local_goal, local_map, body_path, nearest, front_blocked, corridor_blocked, mission_corridor_blocked, target_body, bypass_mode, replan_reason or "latched", "tracking_committed_path")
+
+    def _track_body_path(self, state: PlannerState, local_goal: Vec3, local_map, body_path, nearest: float,
+                         front_blocked: bool, corridor_blocked: bool, mission_corridor_blocked: bool,
+                         target_body: Tuple[float, float], bypass_mode: str, replan_reason: str, status: str) -> CandidateTrajectory:
+        body_path = self._trim_passed_points(list(body_path))
         clear = self._sampled_path_clearance(body_path, local_map.points)
         metadata: Dict = {
             "frontend": "local_astar_tracker",
@@ -82,26 +91,20 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             "mission_corridor_blocked": mission_corridor_blocked,
             "side_latch": self._side_latch,
             "label": self._committed_label,
-            "replan_reason": replan_reason or "latched",
+            "replan_reason": replan_reason,
             "bypass_active": self._bypass_active,
             "bypass_side": self._bypass_side,
             "bypass_mode": bypass_mode,
             "bypass_target_body": {"x": float(target_body[0]), "y": float(target_body[1])},
         }
         candidate = self.tracker.track(
-            f"local_astar:{self._committed_label}",
-            state,
-            body_path,
-            local_goal,
-            nearest,
-            clear,
-            metadata,
+            f"local_astar:{self._committed_label}", state, body_path, local_goal, nearest, clear, metadata
         )
         extra = self._bypass_diag(bypass_mode, target_body)
         extra.update(
             {
                 "label": self._committed_label,
-                "committed_left_sec": max(0.0, self._committed_until - now),
+                "committed_left_sec": max(0.0, self._committed_until - time.time()),
                 "path_len": len(body_path),
                 "min_path_clearance": float(clear),
                 "lookahead_body": dict(candidate.metadata.get("lookahead_body", {})),
@@ -111,19 +114,51 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
                 "mission_corridor_blocked": mission_corridor_blocked,
             }
         )
-        self.diagnostics = self._diag(
-            "tracking_committed_path", replan_reason or "latched", local_map, nearest, front_blocked, corridor_blocked, extra
+        self.diagnostics = self._diag(status, replan_reason, local_map, nearest, front_blocked, corridor_blocked, extra)
+        return candidate
+
+    def _direct_bypass_candidate(self, state: PlannerState, local_goal: Vec3, local_map, nearest: float,
+                                 target_body: Tuple[float, float], bypass_mode: str, reason: str) -> Optional[CandidateTrajectory]:
+        if not self._bypass_active or abs(self._bypass_side) < 0.5:
+            return None
+        side = self._bypass_side
+        body_path = [
+            (0.0, 0.0),
+            (0.45, side * 0.55),
+            (1.05, side * 1.10),
+            (1.85, side * 1.65),
+            (2.65, side * 1.95),
+        ]
+        clear = self._sampled_path_clearance(body_path, local_map.points)
+        # Direct bypass is a fallback trajectory, so require at least a minimal
+        # hard buffer.  SafetyChecker still evaluates the final trajectory.
+        if clear < max(0.55, self.config.hard_clearance + 0.20):
+            return None
+        self._committed_label = f"direct_bypass_{'left' if side > 0 else 'right'}"
+        self._committed_until = time.time() + 0.8
+        mission_corridor_blocked = True
+        candidate = self._track_body_path(
+            state,
+            local_goal,
+            local_map,
+            body_path,
+            nearest,
+            True,
+            False,
+            mission_corridor_blocked,
+            target_body,
+            bypass_mode,
+            reason,
+            "direct_bypass_path",
         )
+        candidate.metadata["direct_bypass"] = True
         return candidate
 
     def _bypass_target(self, points, mission_target_body: Tuple[float, float], now: float,
                        front_blocked: bool, mission_corridor_blocked: bool):
-        """NORMAL/BYPASS/REJOIN state for static-obstacle bring-up."""
         if self._bypass_active:
             min_hold = now - self._bypass_started >= 1.2
             clear_to_goal = self._target_corridor_clear(points, mission_target_body)
-            # Do not drop bypass immediately after a single clear frame; holding
-            # avoids the common turn-stop-turn oscillation.
             if min_hold and clear_to_goal and now >= self._bypass_until:
                 self._bypass_active = False
                 self._bypass_side = 0.0
@@ -143,8 +178,6 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         return None, "normal"
 
     def _make_bypass_goal(self, side: float) -> Tuple[float, float]:
-        # Explicit, forward-left/right subgoal.  It is intentionally not behind
-        # the drone, so the tracker cannot turn this into a reverse escape.
         bx = min(3.2, max(2.2, 0.65 * self.config.astar_local_goal_dist))
         by = float(side) * max(1.8, self.config.drone_radius + self.config.obstacle_margin + 1.15)
         by = max(-self.config.astar_grid_right + 0.5, min(self.config.astar_grid_left - 0.5, by))
