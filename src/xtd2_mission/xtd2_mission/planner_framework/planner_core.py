@@ -60,6 +60,7 @@ class EgoLikePlannerCore:
             "safe_count": sum(1 for item in evaluations if item.safety.safe),
             "feasible_count": sum(1 for item in evaluations if item.safety.feasible),
             "frontend": dict(self.frontend.diagnostics),
+            "goal_manager": self.goal_manager.diagnostics(),
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
 

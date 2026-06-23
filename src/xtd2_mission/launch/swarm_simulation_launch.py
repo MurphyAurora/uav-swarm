@@ -104,12 +104,12 @@ def generate_launch_description():
     defaults.setdefault('ego_like_lidar_timeout', '0.8')
     defaults.setdefault('ego_like_lidar_max_obstacles', '260')
     defaults.setdefault('ego_like_lidar_stride', '4')
-    defaults.setdefault('ego_like_lidar_min_range', '0.65')
+    defaults.setdefault('ego_like_lidar_min_range', '1.10')
     defaults.setdefault('ego_like_lidar_max_range', '4.5')
     defaults.setdefault('ego_like_lidar_min_z', '-1.8')
     defaults.setdefault('ego_like_lidar_vertical_limit', '1.8')
     defaults.setdefault('ego_like_lidar_obstacle_radius', '0.16')
-    defaults.setdefault('ego_like_astar_inflation_radius', '0.45')
+    defaults.setdefault('ego_like_astar_inflation_radius', '0.35')
     defaults.setdefault('ego_like_astar_local_goal_dist', '4.5')
     defaults.setdefault('ego_like_astar_lookahead_dist', '1.35')
     defaults.setdefault('ego_like_astar_path_latch_sec', '1.4')
@@ -118,7 +118,7 @@ def generate_launch_description():
     defaults.setdefault('ego_like_astar_progress_epsilon', '0.20')
     defaults.setdefault('ego_like_astar_progress_move_epsilon', '0.22')
     defaults.setdefault('ego_like_astar_recovery_sec', '1.6')
-    defaults.setdefault('ego_like_astar_latch_clearance', '0.60')
+    defaults.setdefault('ego_like_astar_latch_clearance', '0.45')
     defaults.setdefault('lidar_ttc_strong_filter', '1')
 
     # All unique param names across stages

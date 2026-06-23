@@ -28,6 +28,14 @@ class FixedPointMission(Node):
         self.latest_lidar_clouds = {}
         self.final_safety_until = {}
         self.final_safety_velocity = {}
+        self.last_safe_primitive_cmds = {}
+        ego_like_enabled = os.environ.get('EGO_LIKE_ENABLE', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+        self.safe_primitive_latch_sec = float(os.environ.get('SAFE_PRIMITIVE_LATCH_SEC', '0.00' if ego_like_enabled else '1.20'))
+        self.safe_primitive_max_age_sec = float(os.environ.get('SAFE_PRIMITIVE_MAX_AGE_SEC', '0.80'))
+        self.final_lidar_contact_guard = bool(int(os.environ.get('FINAL_LIDAR_CONTACT_GUARD', '0' if os.environ.get('EGO_LIKE_ENABLE', '0') == '1' else '1')))
+        self.final_lidar_self_filter_radius = float(os.environ.get('FINAL_LIDAR_SELF_FILTER_RADIUS', '1.25'))
+        self.final_lidar_contact_stop_distance = float(os.environ.get('FINAL_LIDAR_CONTACT_STOP_DISTANCE', '0.85'))
+        self.final_lidar_contact_escape_distance = float(os.environ.get('FINAL_LIDAR_CONTACT_ESCAPE_DISTANCE', '1.00'))
         self.latest_states = {}
         self.latest_target_markers = {}
         self.latest_target_stamp = 0.0
@@ -91,6 +99,12 @@ class FixedPointMission(Node):
             f"初始化{num_drones}架无人机控制器，领航机=无人机{leader_id}, "
             f"avoid_source={self.avoid_source}, local_planner_mode={self.local_planner_mode}"
         )
+        self.get_logger().info(
+            f"primitive safety chain: max_age={self.safe_primitive_max_age_sec:.2f}s, "
+            f"latch={self.safe_primitive_latch_sec:.2f}s, "
+            f"final_contact_guard={int(self.final_lidar_contact_guard)}, "
+            f"final_self_filter={self.final_lidar_self_filter_radius:.2f}m"
+        )
 
     def _avoid_cmd_cb(self, source, drone_id, msg: Twist):
         item = {
@@ -101,6 +115,7 @@ class FixedPointMission(Node):
         }
         if source == 'safe_primitive':
             self.safe_primitive_cmds[int(drone_id)] = item
+            self.last_safe_primitive_cmds[int(drone_id)] = item
         elif source == 'primitive':
             self.primitive_avoid_cmds[int(drone_id)] = item
         else:
@@ -1091,6 +1106,8 @@ class FixedPointMission(Node):
 
     def _final_lidar_safety_filter(self, drone_id, vx, vy, vz):
         """Last-resort contact guard after unified selection."""
+        if not self.final_lidar_contact_guard:
+            return vx, vy, vz, 'pass'
         key = int(drone_id)
         now_t = time.time()
         cloud = self.latest_lidar_clouds.get(key)
@@ -1110,16 +1127,21 @@ class FixedPointMission(Node):
             py = self._finite_float(point[1])
             pz = self._finite_float(point[2])
             horizontal = math.hypot(px, py)
-            if horizontal < 0.45 or horizontal > 1.60 or pz < -1.6 or pz > 2.1:
+            if (
+                horizontal < self.final_lidar_self_filter_radius
+                or horizontal > 1.60
+                or pz < -1.6
+                or pz > 2.1
+            ):
                 continue
             if nearest_any is None or horizontal < nearest_any:
                 nearest_any = horizontal
                 nearest_px = px
                 nearest_py = py
 
-        if nearest_any is not None and nearest_any < 0.75:
+        if nearest_any is not None and nearest_any < self.final_lidar_contact_stop_distance:
             return 0.0, 0.0, 0.0, 'final_contact_stop'
-        if nearest_any is not None and nearest_any < 1.15:
+        if nearest_any is not None and nearest_any < self.final_lidar_contact_escape_distance:
             heading = self._finite_float(st.get('heading', 0.0))
             mag = max(math.hypot(nearest_px, nearest_py), 1e-6)
             escape_speed = 0.22
@@ -1208,7 +1230,7 @@ class FixedPointMission(Node):
         dz = pz - bz
         return self._limit_vector(dx, dy, dz, max_delta)
 
-    def _selected_avoid_vel(self, drone_id, max_age_sec=0.35):
+    def _selected_avoid_vel(self, drone_id, max_age_sec=0.80):
         source = self.avoid_source
         if source in ('none', 'off', '0', 'false'):
             return (0.0, 0.0, 0.0, 'none', False)
@@ -1248,7 +1270,7 @@ class FixedPointMission(Node):
             True,
         )
 
-    def _safe_primitive_override(self, drone_id, max_age_sec=0.35):
+    def _safe_primitive_override(self, drone_id, max_age_sec=0.80):
         safe = self.safe_primitive_cmds.get(int(drone_id))
         prim = self.primitive_avoid_cmds.get(int(drone_id))
         now_t = time.time()
@@ -1270,7 +1292,7 @@ class FixedPointMission(Node):
             return (0.0, 0.0, 0.0, 'safe_primitive_inactive', False)
         return svx, svy, 0.0, 'safe_primitive_override', True
 
-    def _latest_primitive_chain_cmd(self, drone_id, max_age_sec=0.35):
+    def _latest_primitive_chain_cmd(self, drone_id, max_age_sec=None):
         """Return the newest command from primitive -> safety chain.
 
         Direct-pose SANDO stages publish velocity commands themselves.  When the
@@ -1278,6 +1300,8 @@ class FixedPointMission(Node):
         the same primitive/safe chain that debug_velocity_chain.py observes.
         """
         now_t = time.time()
+        if max_age_sec is None:
+            max_age_sec = self.safe_primitive_max_age_sec
         safe = self.safe_primitive_cmds.get(int(drone_id))
         if safe is not None and now_t - float(safe.get('stamp', 0.0)) <= max_age_sec:
             return (
@@ -1287,6 +1311,15 @@ class FixedPointMission(Node):
                 'safe_primitive_chain',
                 True,
             )
+        latched = self.last_safe_primitive_cmds.get(int(drone_id))
+        if self.safe_primitive_latch_sec > 0.0 and latched is not None and now_t - float(latched.get('stamp', 0.0)) <= self.safe_primitive_latch_sec:
+            return (
+                float(latched.get('vx', 0.0)),
+                float(latched.get('vy', 0.0)),
+                float(latched.get('vz', 0.0)),
+                'safe_primitive_chain_latched',
+                True,
+            )
         return 0.0, 0.0, 0.0, 'safe_primitive_chain_missing', True
 
     def _publish_pose(self, drone_id, x, y, z):
@@ -1294,8 +1327,15 @@ class FixedPointMission(Node):
         pose.position.x = float(x)
         pose.position.y = float(y)
         pose.position.z = float(z)
-        pose.orientation.w = 1.0
+        self._set_pose_yaw_from_heading(pose, drone_id)
         self.pubs[drone_id].publish(pose)
+
+    def _set_pose_yaw_from_heading(self, pose, drone_id):
+        st = self.latest_states.get(int(drone_id), {})
+        heading = self._finite_float(st.get('heading', 0.0))
+        half = 0.5 * heading
+        pose.orientation.z = math.sin(half)
+        pose.orientation.w = math.cos(half)
 
     def _estimate_stage_duration(self, start_xyz, target_xyz, min_duration, max_speed, margin_sec=4.0):
         dx = float(target_xyz[0]) - float(start_xyz[0])
@@ -1883,7 +1923,7 @@ class FixedPointMission(Node):
             pose.position.x = x
             pose.position.y = y
             pose.position.z = z
-            pose.orientation.w = 1.0
+            self._set_pose_yaw_from_heading(pose, drone_id)
             poses[drone_id] = pose
             self.get_logger().info(f"{stage_name}: 无人机{drone_id} -> ({x}, {y}, {z})")
 
@@ -2278,7 +2318,6 @@ class FixedPointMission(Node):
                 if direct_pose_mode:
                     chain_vx, chain_vy, chain_vz, chain_label, chain_ok = self._latest_primitive_chain_cmd(
                         drone_id,
-                        max_age_sec=0.35,
                     )
                     if chain_ok and self.avoid_source == 'primitive':
                         vx, vy, vz = self._limit_vector(chain_vx, chain_vy, chain_vz, max_follower_speed)
@@ -2434,7 +2473,7 @@ class FixedPointMission(Node):
         pose.position.x = x
         pose.position.y = y
         pose.position.z = z
-        pose.orientation.w = 1.0
+        self._set_pose_yaw_from_heading(pose, drone_id)
         
         self.get_logger().info(f"无人机{drone_id}悬停在固定点: ({x}, {y}, {z})")
         
@@ -2455,7 +2494,7 @@ class FixedPointMission(Node):
             pose.position.x = x
             pose.position.y = y
             pose.position.z = z
-            pose.orientation.w = 1.0
+            self._set_pose_yaw_from_heading(pose, drone_id)
             poses[drone_id] = pose
             self.get_logger().info(
                 f"无人机{drone_id}将悬停在: ({x}, {y}, {z})"

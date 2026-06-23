@@ -87,7 +87,15 @@ class BackendSelector:
                     if item.costs.get("reverse", 0.0) <= 1.0e-6
                 ]
                 if progress_feasible:
-                    return min(progress_feasible, key=lambda item: (-item.safety.min_clearance, item.score))
+                    return min(
+                        progress_feasible,
+                        key=lambda item: (
+                            item.costs.get("progress", 999.0),
+                            item.costs.get("lateral", 999.0),
+                            -item.safety.min_clearance,
+                            item.score,
+                        ),
+                    )
                 return min(moving_feasible, key=lambda item: (item.costs.get("reverse", 999.0), -item.safety.min_clearance, item.score))
             return min(feasible, key=lambda item: (-item.safety.min_clearance, item.score))
         return min(evaluations, key=lambda item: (-item.safety.min_clearance, item.score)) if evaluations else None

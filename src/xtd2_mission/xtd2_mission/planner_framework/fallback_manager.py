@@ -31,9 +31,8 @@ class FallbackManager:
         escape_eval = self._best_escape(evaluations)
         if escape_eval is not None:
             clearance = min(escape_eval.safety.min_clearance, escape_eval.safety.min_static_clearance)
-            soft_escape_ok = clearance >= -0.10 and escape_eval.trajectory.velocity.norm() > 0.05
-            no_feasible_motion = not any(item.safety.feasible for item in evaluations)
-            if escape_eval.safety.feasible or soft_escape_ok or no_feasible_motion:
+            soft_escape_ok = clearance >= self.config.hard_clearance and escape_eval.trajectory.velocity.norm() > 0.05
+            if escape_eval.safety.feasible or soft_escape_ok:
                 return PlannerCommand(escape_eval.trajectory.velocity, "fallback_escape", escape_eval.trajectory.name, escape_eval.safety.reason)
         if perception.near_field_danger:
             return PlannerCommand(Vec3(0.0, 0.0, -self.config.vertical_speed), "fallback_climb", "near_field_climb", "near_field_lidar_danger")
@@ -65,9 +64,8 @@ class FallbackManager:
             rel_y = obs.position.y - state.position.y
             body_x = c * rel_x + s * rel_y
             body_y = -s * rel_x + c * rel_y
-            hard_contact = clearance <= self.config.hard_clearance + 0.10
-            front_threat = body_x >= -0.15 and abs(body_y) <= 1.10 and clearance <= self.config.emergency_clearance
-            if not hard_contact and not front_threat:
+            hard_contact = clearance <= self.config.hard_clearance + 0.05
+            if not hard_contact:
                 continue
             away = Vec3(
                 state.position.x - obs.position.x,

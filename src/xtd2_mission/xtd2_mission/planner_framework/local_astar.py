@@ -41,11 +41,21 @@ class LocalAStarPlanner:
         target_body = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
         target_dist = state.position.distance_to(local_goal)
         stalled_sec = self._update_progress(now, target_dist)
-        if stalled_sec > self.config.astar_progress_stall_sec and now > self._recovery_until:
+        nearest = min((math.hypot(x, y) for x, y in local_map.points), default=999.0)
+        front_blocked = self._front_blocked(local_map.points)
+        recovery_allowed = front_blocked and nearest < max(2.2, self.config.astar_latch_clearance + 1.0)
+        if stalled_sec > self.config.astar_progress_stall_sec and not recovery_allowed:
+            self._last_progress_dist = target_dist
+            self._last_progress_position = state.position
+            self._last_progress_time = now
+            stalled_sec = 0.0
+        if stalled_sec > self.config.astar_progress_stall_sec and recovery_allowed and now > self._recovery_until:
             self._recovery_side = self._pick_escape_side(local_map.points, target_body)
             self._recovery_until = now + self.config.astar_recovery_sec
             self._committed_world_path = []
 
+        if now < self._recovery_until and not recovery_allowed:
+            self._recovery_until = 0.0
         if now < self._recovery_until:
             return self._recovery_candidate(state, target_body, local_map, now, stalled_sec)
 
@@ -60,6 +70,9 @@ class LocalAStarPlanner:
                     "replan_reason": replan_reason,
                     "raw_points": local_map.raw_count,
                     "stalled_sec": stalled_sec,
+                    "nearest": nearest,
+                    "front_blocked": front_blocked,
+                    "recovery_allowed": recovery_allowed,
                 }
                 return None
 
@@ -73,6 +86,9 @@ class LocalAStarPlanner:
                     "replan_reason": "invalid_path_no_replacement",
                     "raw_points": local_map.raw_count,
                     "stalled_sec": stalled_sec,
+                    "nearest": nearest,
+                    "front_blocked": front_blocked,
+                    "recovery_allowed": recovery_allowed,
                 }
                 return None
             self._commit_path(state, selected, local_goal, now)
@@ -80,9 +96,12 @@ class LocalAStarPlanner:
 
         body_path = self._trim_passed_points(body_path)
         look_x, look_y = self._lookahead(body_path)
+        if look_x < 0.18:
+            look_x = 0.18
+            if abs(look_y) < 0.18:
+                look_y = 0.18 if target_body[1] >= 0.0 else -0.18
         look_norm = max(math.hypot(look_x, look_y), 1.0e-6)
         speed = min(self.config.max_speed, self.config.cruise_speed)
-        nearest = min((math.hypot(x, y) for x, y in local_map.points), default=999.0)
         if nearest < 1.2:
             speed = min(speed, max(0.16, 0.34 * self.config.max_speed))
         bx = speed * look_x / look_norm
@@ -105,6 +124,9 @@ class LocalAStarPlanner:
             "path_len": len(body_path),
             "min_path_clearance": min_path_clearance,
             "lookahead_body": {"x": look_x, "y": look_y},
+            "nearest": nearest,
+            "front_blocked": front_blocked,
+            "recovery_allowed": recovery_allowed,
         }
         return self._path_rollout(
             f"local_astar:{self._committed_label}",
@@ -122,6 +144,9 @@ class LocalAStarPlanner:
                 "lookahead_body": {"x": look_x, "y": look_y},
                 "replan_reason": replan_reason or "latched",
                 "stalled_sec": stalled_sec,
+                "nearest": nearest,
+                "front_blocked": front_blocked,
+                "recovery_allowed": recovery_allowed,
             },
         )
 
@@ -205,12 +230,12 @@ class LocalAStarPlanner:
         right_clear = self._sector_clearance(local_map.points, -self.config.astar_grid_right, -0.25)
         back_clear = self._sector_clearance(local_map.points, -0.9, 0.9, x_min=-self.config.astar_grid_back, x_max=-0.2)
         side = self._recovery_side or self._pick_escape_side(local_map.points, target_body)
-        lateral = 0.38 * side
-        back = -0.18 if back_clear > 0.55 else 0.0
+        lateral = 0.34 * side
+        forward = 0.18 if target_body[0] >= -0.2 else 0.0
         if max(left_clear, right_clear) < 0.75:
             lateral = 0.22 * side
-            back = -0.24 if back_clear > 0.45 else 0.0
-        bx, by = self._smooth_cmd_body(back, lateral)
+            forward = 0.12 if target_body[0] >= -0.2 else 0.0
+        bx, by = self._smooth_cmd_body(forward, lateral)
         vx, vy = self._body_to_world(bx, by, state.heading)
         velocity = Vec3(vx, vy, 0.0).limit_norm(self.config.max_speed)
         label = "recovery_left" if side > 0.0 else "recovery_right"
@@ -260,9 +285,9 @@ class LocalAStarPlanner:
         candidates: List[Tuple[GridIndex, str]] = []
         seen = set()
         if self._front_blocked(local_map.points):
-            angle_offsets_deg = [35, -35, 55, -55, 75, -75, 18, -18, 95, -95, 120, -120, 0]
+            angle_offsets_deg = [30, -30, 45, -45, 60, -60, 75, -75, 18, -18, 0]
         else:
-            angle_offsets_deg = [0, 18, -18, 35, -35, 55, -55, 75, -75, 95, -95, 120, -120]
+            angle_offsets_deg = [0, 18, -18, 30, -30, 45, -45, 60, -60, 75, -75]
         radii = [self.config.astar_local_goal_dist, 3.6, 2.8, 2.1]
         for deg in angle_offsets_deg:
             for radius in radii:
@@ -277,6 +302,8 @@ class LocalAStarPlanner:
                     continue
                 bx, by = local_map.grid_to_body(free)
                 if math.hypot(bx, by) < 1.0:
+                    continue
+                if bx < 0.15:
                     continue
                 seen.add(free)
                 candidates.append((free, f"{deg:+d}deg/{radius:.1f}m"))

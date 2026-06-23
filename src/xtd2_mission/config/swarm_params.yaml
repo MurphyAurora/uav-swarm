@@ -146,7 +146,7 @@ ego_like_lidar_topic_template: "/x500_{id}/lidar/points_local"
 ego_like_lidar_timeout: 0.8
 ego_like_lidar_max_obstacles: 260
 ego_like_lidar_stride: 4
-ego_like_lidar_min_range: 0.65
+ego_like_lidar_min_range: 1.10
 ego_like_lidar_max_range: 4.5
 ego_like_lidar_min_z: -1.8
 ego_like_lidar_vertical_limit: 1.8
@@ -185,8 +185,8 @@ lidar_ttc_min_range: 0.25
 lidar_ttc_min_z: -1.8
 lidar_ttc_vertical_limit: 1.8
 lidar_ttc_cone_angle_deg: 55.0
-lidar_ttc_safety_radius: 0.95
-lidar_ttc_self_filter_radius: 0.65
+lidar_ttc_safety_radius: 0.75
+lidar_ttc_self_filter_radius: 1.10
 lidar_ttc_projection_gain: 1.35
 lidar_ttc_brake_gain: 0.08
 lidar_ttc_back_speed: 0.45

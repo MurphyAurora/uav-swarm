@@ -220,10 +220,11 @@ class EgoLikePlannerFrameworkNode(Node):
             best_costs = (report.get("best") or {}).get("costs", {})
             best = report.get("best") or {}
             frontend = ((report.get("frontend") or {}).get("local_astar") or {})
+            goal_diag = report.get("goal_manager") or {}
             parts.append(
                 "x500_{id} mode={mode} traj={traj} v=({vx:.2f},{vy:.2f},{vz:.2f}) "
                 "safe={safe}/{cand} feasible={feasible} lidar={lidar} clear={clear:.2f} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
-                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) astar={astar} repl={repl} stuck={stuck:.1f}s "
+                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) goal_mode={goal_mode} astar={astar} repl={repl} stuck={stuck:.1f}s "
                 "cost(g={cg:.2f},p={cp:.2f},r={cr:.2f},l={cl:.2f}) reason={reason}".format(
                     id=int(report.get("drone_id", 0)),
                     mode=str(cmd.get("mode", "")),
@@ -242,6 +243,7 @@ class EgoLikePlannerFrameworkNode(Node):
                     gx=float(final_goal.get("x", 0.0)),
                     gy=float(final_goal.get("y", 0.0)),
                     gz=float(final_goal.get("z", 0.0)),
+                    goal_mode=str(goal_diag.get("goal_reason", "")),
                     astar=str(frontend.get("status", "off")),
                     repl=str(frontend.get("replan_reason", frontend.get("label", ""))),
                     stuck=float(frontend.get("stalled_sec", 0.0)),

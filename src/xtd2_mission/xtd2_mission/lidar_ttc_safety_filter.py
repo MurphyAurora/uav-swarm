@@ -77,6 +77,7 @@ class LidarTtcSafetyFilter(Node):
         self.point_timeout = float(point_timeout)
         self.strong_filter = bool(strong_filter)
         self.hard_stop_distance = max(self.safety_radius + 0.45, 1.25)
+        self.contact_stop_distance = max(0.90, self.safety_radius + 0.20)
 
         self.cmds = {}
         self.clouds = {}
@@ -116,6 +117,7 @@ class LidarTtcSafetyFilter(Node):
             f'min_z={self.min_z:.2f}, vertical_limit={self.vertical_limit:.2f}, '
             f'cone_cos={self.cone_cos:.2f}, safety_radius={self.safety_radius:.2f}, '
             f'hard_stop_distance={self.hard_stop_distance:.2f}, '
+            f'contact_stop_distance={self.contact_stop_distance:.2f}, '
             f'self_filter_radius={self.self_filter_radius:.2f}, '
             f'strong_filter={int(self.strong_filter)}, '
             f'input={self.input_topic_template}, output={self.output_topic_template}, '
@@ -203,6 +205,7 @@ class LidarTtcSafetyFilter(Node):
             dir_y = 0.0
             cmd_angle_deg = 0.0
         worst = None
+        nearest = None
         used = 0
         sector_min = {
             'escape_left': self.max_range,
@@ -227,13 +230,27 @@ class LidarTtcSafetyFilter(Node):
                 continue
             ux = px / max(horizontal, 1e-6)
             uy = py / max(horizontal, 1e-6)
+            if nearest is None or horizontal < nearest['distance']:
+                nearest = {
+                    'distance': horizontal,
+                    'ux': ux,
+                    'uy': uy,
+                    'px': px,
+                    'py': py,
+                    'pz': pz,
+                    'obs_angle_deg': math.degrees(math.atan2(py, px)),
+                }
             for name, (sx, sy) in sector_dirs.items():
                 if ux * sx + uy * sy > 0.5:
                     sector_min[name] = min(sector_min[name], horizontal)
             alignment = ux * dir_x + uy * dir_y
             toward = bvx * ux + bvy * uy if speed_xy >= self.min_speed else 0.0
-            hard_contact = horizontal <= self.safety_radius + 0.18
-            hard_distance = horizontal <= self.hard_stop_distance and (alignment >= -0.05 or hard_contact)
+            hard_contact = horizontal <= max(self.min_range, self.self_filter_radius)
+            hard_distance = (
+                horizontal <= self.hard_stop_distance
+                and speed_xy >= self.min_speed
+                and (toward > self.min_speed or alignment >= 0.35 or hard_contact)
+            )
             if hard_distance:
                 closing = max(0.0, toward)
                 ttc = 0.0
@@ -286,6 +303,13 @@ class LidarTtcSafetyFilter(Node):
             self.hard_stop_count[int(drone_id)] = 0
             if used <= 0:
                 self.escape_until[int(drone_id)] = 0.0
+            if nearest is not None and nearest['distance'] <= self.contact_stop_distance:
+                return self._result(
+                    drone_id, 'contact_hold', 0.0, 0.0, 0.0,
+                    0.0, nearest['distance'], 0.0, 1,
+                    nearest['px'], nearest['py'], nearest['pz'],
+                    cmd_angle_deg, nearest['obs_angle_deg'], 0.0,
+                )
             return self._result(drone_id, 'pass', vx, vy, vz, 999.0, 999.0, 0.0, used)
 
         active_escape = now < self.escape_until.get(int(drone_id), 0.0)

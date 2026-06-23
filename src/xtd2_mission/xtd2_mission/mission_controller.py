@@ -12,12 +12,15 @@ import sys
 import time
 import argparse
 import subprocess
+import json
+import math
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.task import Future
 from geometry_msgs.msg import Pose
+from std_msgs.msg import String
 from px4_msgs.msg import VehicleStatus
 from xtd2_msgs.srv import XTD2Cmd
 
@@ -107,6 +110,8 @@ class MissionController(Node):
         for ns in self.namespaces:
             topic = f'/xtdrone2/{ns}/cmd_pose_local_ned'
             self.warmup_pubs[ns] = self.create_publisher(Pose, topic, 10)
+        self.latest_headings = {}
+        self.create_subscription(String, '/xtdrone2/swarm/state_exchange', self._state_cb, 10)
 
         # --- Service clients (created on demand) ---
         self._cmd_clients = {}
@@ -152,15 +157,32 @@ class MissionController(Node):
     def _vehicle_status_cb(self, px4_ns, msg):
         self._latest_vehicle_status[px4_ns] = msg
 
+    def _state_cb(self, msg):
+        try:
+            data = json.loads(msg.data)
+            for item in data.get('states', []):
+                drone_id = int(item.get('id', 0))
+                heading = float(item.get('heading', 0.0))
+                if math.isfinite(heading):
+                    self.latest_headings[drone_id] = heading
+        except Exception:
+            return
+
+    def _set_pose_yaw_from_heading(self, pose, drone_id):
+        heading = self.latest_headings.get(int(drone_id), 0.0)
+        half = 0.5 * float(heading)
+        pose.orientation.z = math.sin(half)
+        pose.orientation.w = math.cos(half)
+
     def _warmup_callback(self):
         """Publish warmup setpoints at 20Hz for all drones."""
-        for ns in self.namespaces:
+        for idx, ns in enumerate(self.namespaces, start=1):
             pose = Pose()
             if self.vertical_takeoff:
                 pose.position.x = 0.0
                 pose.position.y = 0.0
             pose.position.z = self.takeoff_z
-            pose.orientation.w = 1.0
+            self._set_pose_yaw_from_heading(pose, idx)
             self.warmup_pubs[ns].publish(pose)
 
         elapsed = time.time() - self._warmup_start

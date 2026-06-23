@@ -56,10 +56,14 @@ class PerceptionInterface:
         lidar_obstacles = getattr(self, "_lidar_obstacles", [])
         obstacles = [*self._static_obstacles, *self._dynamic_obstacles, *self._swarm_obstacles, *lidar_obstacles]
         nearest = 999.0
+        nearest_lidar_clearance = 999.0
         if current_position is not None:
             for obs in obstacles:
-                nearest = min(nearest, current_position.distance_to(obs.position) - float(obs.radius))
-        near_field_danger = any(obs.source == "lidar_near_field" for obs in lidar_obstacles)
+                clearance = current_position.distance_to(obs.position) - float(obs.radius)
+                nearest = min(nearest, clearance)
+                if obs.source == "lidar_near_field":
+                    nearest_lidar_clearance = min(nearest_lidar_clearance, clearance - self.drone_radius)
+        near_field_danger = nearest_lidar_clearance <= self.near_field_distance
         return PerceptionData(
             obstacles=obstacles,
             nearest_distance=float(nearest),
