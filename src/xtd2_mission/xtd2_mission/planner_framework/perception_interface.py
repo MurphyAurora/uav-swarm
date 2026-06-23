@@ -19,7 +19,15 @@ class PerceptionInterface:
         self._last_stamp = 0.0
 
     def update_static_tracks(self, tracks: Iterable[Dict], stamp: Optional[float] = None) -> None:
-        self._static_obstacles = [self._obstacle_from_track(track, "static") for track in tracks]
+        """Do not inject map/world-truth static tracks into the local planner.
+
+        For the unknown-environment experiment, static obstacles must enter the
+        planner through the local LiDAR point cloud.  The upstream static-track
+        topic may be useful for visualization/debugging, but using it here would
+        turn the test into a semi-known-map setup and can also over-constrain the
+        local A* grid.
+        """
+        self._static_obstacles = []
         self._last_stamp = float(stamp if stamp is not None else time.time())
 
     def update_dynamic_tracks(self, tracks: Iterable[Dict], stamp: Optional[float] = None) -> None:
