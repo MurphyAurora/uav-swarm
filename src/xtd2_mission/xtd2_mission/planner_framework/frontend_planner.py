@@ -4,7 +4,7 @@
 from typing import Iterable, List, Optional, Tuple
 
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
-from .local_astar import LocalAStarPlanner
+from .local_astar_stable import LocalAStarPlanner
 
 
 class FrontendPlanner:
