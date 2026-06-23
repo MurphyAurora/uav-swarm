@@ -37,7 +37,9 @@ class EgoLikePlannerCore:
 
         active_goal = self.goal_manager.active_waypoint(final_goal)
         local_goal = self.goal_manager.compute_local_goal(state, final_goal, perception)
-        candidates = self.frontend.generate(state, local_goal, perception)
+        planning_state, planning_heading = self._goal_aligned_state(state, local_goal)
+
+        candidates = self.frontend.generate(planning_state, local_goal, perception)
         safety_reports = [self.safety_checker.evaluate(candidate, state, perception) for candidate in candidates]
         evaluations = self.backend.evaluate_all(candidates, safety_reports, state, local_goal)
         best = self.backend.select_best(evaluations, state, local_goal)
@@ -47,10 +49,6 @@ class EgoLikePlannerCore:
         elif best.safety.safe:
             command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
         else:
-            # If SafetyChecker says the trajectory is hard-feasible, keep a tiny
-            # bypass motion instead of turning a soft-margin warning into a dead
-            # stop.  The 20:09 log showed scored_paths>0 and feasible=1, but this
-            # old hard-coded 0.38m gate stopped the vehicle forever.
             command = PlannerCommand(
                 best.trajectory.velocity.limit_norm(min(0.08, self.config.max_speed)),
                 "planner_cautious",
@@ -69,9 +67,11 @@ class EgoLikePlannerCore:
                 "velocity": state.velocity.to_dict(),
                 "heading": float(state.heading),
                 "heading_deg": float(math.degrees(state.heading)),
+                "planning_heading": float(planning_heading),
+                "planning_heading_deg": float(math.degrees(planning_heading)),
                 "stamp": float(state.stamp),
             },
-            "coordinate_debug": self._coordinate_debug(state, final_goal, local_goal, command.velocity),
+            "coordinate_debug": self._coordinate_debug(state, planning_state, final_goal, local_goal, command.velocity),
             "active_waypoint_index": self.goal_manager.active_waypoint_index(),
             "active_goal": active_goal.to_dict(),
             "local_goal": local_goal.to_dict(),
@@ -88,14 +88,34 @@ class EgoLikePlannerCore:
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
 
-    def _coordinate_debug(self, state: PlannerState, final_goal: Vec3, local_goal: Vec3, command_velocity: Vec3) -> Dict[str, object]:
+    def _goal_aligned_state(self, state: PlannerState, local_goal: Vec3) -> tuple[PlannerState, float]:
+        to_goal = local_goal - state.position
+        if math.hypot(to_goal.x, to_goal.y) > 0.20:
+            heading = math.atan2(to_goal.y, to_goal.x)
+        else:
+            heading = state.heading
+        return PlannerState(
+            drone_id=state.drone_id,
+            position=state.position,
+            velocity=state.velocity,
+            stamp=state.stamp,
+            heading=heading,
+        ), heading
+
+    def _coordinate_debug(self, state: PlannerState, planning_state: PlannerState, final_goal: Vec3, local_goal: Vec3, command_velocity: Vec3) -> Dict[str, object]:
         to_final = final_goal - state.position
         to_local = local_goal - state.position
         heading = state.heading
+        pc = math.cos(planning_state.heading)
+        ps = math.sin(planning_state.heading)
         c = math.cos(heading)
         s = math.sin(heading)
         body_cmd_x = c * command_velocity.x + s * command_velocity.y
         body_cmd_y = -s * command_velocity.x + c * command_velocity.y
+        plan_cmd_x = pc * command_velocity.x + ps * command_velocity.y
+        plan_cmd_y = -ps * command_velocity.x + pc * command_velocity.y
+        plan_goal_x = pc * to_local.x + ps * to_local.y
+        plan_goal_y = -ps * to_local.x + pc * to_local.y
         body_goal_x = c * to_local.x + s * to_local.y
         body_goal_y = -s * to_local.x + c * to_local.y
         xy_speed = math.hypot(command_velocity.x, command_velocity.y)
@@ -106,9 +126,11 @@ class EgoLikePlannerCore:
         return {
             "to_final_world": to_final.to_dict(),
             "to_local_world": to_local.to_dict(),
-            "to_local_body": {"x": float(body_goal_x), "y": float(body_goal_y)},
+            "to_local_body_vehicle_heading": {"x": float(body_goal_x), "y": float(body_goal_y)},
+            "to_local_body_planning_heading": {"x": float(plan_goal_x), "y": float(plan_goal_y)},
             "command_world": command_velocity.to_dict(),
-            "command_body_from_heading": {"x": float(body_cmd_x), "y": float(body_cmd_y)},
+            "command_body_vehicle_heading": {"x": float(body_cmd_x), "y": float(body_cmd_y)},
+            "command_body_planning_heading": {"x": float(plan_cmd_x), "y": float(plan_cmd_y)},
             "command_enu_to_ned_hypothesis": {"x": float(command_velocity.y), "y": float(command_velocity.x), "z": float(-command_velocity.z)},
             "progress_dot_to_local": float(progress_dot),
         }
@@ -123,9 +145,6 @@ class EgoLikePlannerCore:
 
         original = Vec3(command.velocity.x, command.velocity.y, 0.0)
         new_v = Vec3(original.x, original.y, 0.0)
-        # Shield must not stop a feasible bypass just because a LiDAR point is
-        # around 1.1-1.2m away.  It now removes closing velocity first and brakes
-        # only on very close contact.
         protect_dist = 1.35
         hard_stop_dist = 0.95
         min_dist = 999.0
@@ -166,9 +185,6 @@ class EgoLikePlannerCore:
         if projected <= 0:
             return command
         if new_v.norm() < 0.02:
-            # Do not convert soft projection into a full stop unless it is a real
-            # near-contact case.  Otherwise the vehicle will never slide sideways
-            # out of the soft shell.
             if min_dist <= 1.02:
                 self._last_shield_info = {
                     "active": True,
