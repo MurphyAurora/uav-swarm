@@ -20,6 +20,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         self._bypass_side = 0.0
         self._bypass_until = 0.0
         self._bypass_started = 0.0
+        self._rejoin_forced_until = 0.0
 
     def plan_candidate(self, state: PlannerState, local_goal: Vec3, obstacles) -> Optional[CandidateTrajectory]:
         now = time.time()
@@ -27,7 +28,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         start = local_map.body_to_grid(0.0, 0.0)
         if start is None:
             self.tracker.reset()
-            self._bypass_active = False
+            self._clear_bypass(now, force_rejoin=False)
             self.diagnostics = {"status": "no_start_cell"}
             return None
 
@@ -45,7 +46,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             self._update_side_latch(local_map.points, target_body, now, front_blocked, corridor_blocked)
 
         replan_reason = self._replan_reason(now, state, local_goal, local_map, corridor_blocked)
-        if bypass_mode in ("bypass_start", "bypass_hold", "rejoin") and not replan_reason:
+        if bypass_mode in ("bypass_start", "bypass_hold", "rejoin", "force_rejoin") and not replan_reason:
             replan_reason = bypass_mode
         if replan_reason:
             selected = self._select_path(local_map, start, target_body)
@@ -96,6 +97,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             "bypass_side": self._bypass_side,
             "bypass_mode": bypass_mode,
             "bypass_target_body": {"x": float(target_body[0]), "y": float(target_body[1])},
+            "rejoin_forced_left_sec": max(0.0, self._rejoin_forced_until - time.time()),
         }
         candidate = self.tracker.track(
             f"local_astar:{self._committed_label}", state, body_path, local_goal, nearest, clear, metadata
@@ -130,8 +132,6 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             (2.65, side * 1.95),
         ]
         clear = self._sampled_path_clearance(body_path, local_map.points)
-        # Direct bypass is a fallback trajectory, so require at least a minimal
-        # hard buffer.  SafetyChecker still evaluates the final trajectory.
         if clear < max(0.55, self.config.hard_clearance + 0.20):
             return None
         self._committed_label = f"direct_bypass_{'left' if side > 0 else 'right'}"
@@ -157,25 +157,42 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
     def _bypass_target(self, points, mission_target_body: Tuple[float, float], now: float,
                        front_blocked: bool, mission_corridor_blocked: bool):
         if self._bypass_active:
-            min_hold = now - self._bypass_started >= 1.2
+            min_hold = now - self._bypass_started >= 0.8
             clear_to_goal = self._target_corridor_clear(points, mission_target_body)
-            if min_hold and clear_to_goal and now >= self._bypass_until:
-                self._bypass_active = False
-                self._bypass_side = 0.0
-                self._bypass_until = 0.0
-                return None, "rejoin"
+            goal_behind_or_side = mission_target_body[0] < 0.8
+            side_error_large = abs(mission_target_body[1]) > 2.6 and not mission_corridor_blocked
+            timed_out = now - self._bypass_started > 4.0
+            if min_hold and (clear_to_goal or not mission_corridor_blocked or goal_behind_or_side or side_error_large or timed_out):
+                self._clear_bypass(now, force_rejoin=True)
+                return None, "force_rejoin"
             self._bypass_until = max(self._bypass_until, now + 0.35)
             return self._make_bypass_goal(self._bypass_side), "bypass_hold"
+
+        if now < self._rejoin_forced_until and not mission_corridor_blocked:
+            return None, "rejoin"
 
         if front_blocked or mission_corridor_blocked:
             side = self._pick_side(points, mission_target_body)
             self._bypass_active = True
             self._bypass_side = side
             self._bypass_started = now
-            self._bypass_until = now + 2.4
+            self._bypass_until = now + 1.8
             return self._make_bypass_goal(side), "bypass_start"
 
         return None, "normal"
+
+    def _clear_bypass(self, now: float, force_rejoin: bool) -> None:
+        self._bypass_active = False
+        self._bypass_side = 0.0
+        self._bypass_until = 0.0
+        self._side_latch = 0.0
+        self._side_latch_until = 0.0
+        self._committed_world_path = []
+        self._committed_label = ""
+        self._committed_until = 0.0
+        self.tracker.reset()
+        if force_rejoin:
+            self._rejoin_forced_until = now + 1.2
 
     def _make_bypass_goal(self, side: float) -> Tuple[float, float]:
         bx = min(3.2, max(2.2, 0.65 * self.config.astar_local_goal_dist))
@@ -190,4 +207,5 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             "bypass_mode": mode,
             "bypass_target_body": {"x": float(target_body[0]), "y": float(target_body[1])},
             "bypass_left_sec": max(0.0, self._bypass_until - time.time()),
+            "rejoin_forced_left_sec": max(0.0, self._rejoin_forced_until - time.time()),
         }
