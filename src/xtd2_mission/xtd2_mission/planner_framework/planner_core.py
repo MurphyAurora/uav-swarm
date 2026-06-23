@@ -47,17 +47,16 @@ class EgoLikePlannerCore:
         elif best.safety.safe:
             command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
         else:
-            min_clearance = float(best.safety.min_clearance)
-            min_ttc = float(best.safety.min_ttc)
-            if min_clearance < 0.38 or min_ttc < 1.2:
-                command = PlannerCommand(Vec3(), "fallback_hover", "hover", f"soft_margin_too_close:{best.safety.reason}")
-            else:
-                command = PlannerCommand(
-                    best.trajectory.velocity.limit_norm(min(0.12, self.config.max_speed)),
-                    "planner_cautious",
-                    best.trajectory.name,
-                    best.safety.reason,
-                )
+            # If SafetyChecker says the trajectory is hard-feasible, keep a tiny
+            # bypass motion instead of turning a soft-margin warning into a dead
+            # stop.  The 20:09 log showed scored_paths>0 and feasible=1, but this
+            # old hard-coded 0.38m gate stopped the vehicle forever.
+            command = PlannerCommand(
+                best.trajectory.velocity.limit_norm(min(0.08, self.config.max_speed)),
+                "planner_cautious",
+                best.trajectory.name,
+                best.safety.reason,
+            )
 
         command = self._lidar_velocity_shield(command, state, perception)
         command = self.output.process(command, dt=dt)
@@ -104,14 +103,13 @@ class EgoLikePlannerCore:
         progress_dot = 0.0
         if xy_speed > 1.0e-6 and goal_xy > 1.0e-6:
             progress_dot = (command_velocity.x * to_local.x + command_velocity.y * to_local.y) / (xy_speed * goal_xy)
-        enu_to_ned = {"x": float(command_velocity.y), "y": float(command_velocity.x), "z": float(-command_velocity.z)}
         return {
             "to_final_world": to_final.to_dict(),
             "to_local_world": to_local.to_dict(),
             "to_local_body": {"x": float(body_goal_x), "y": float(body_goal_y)},
             "command_world": command_velocity.to_dict(),
             "command_body_from_heading": {"x": float(body_cmd_x), "y": float(body_cmd_y)},
-            "command_enu_to_ned_hypothesis": enu_to_ned,
+            "command_enu_to_ned_hypothesis": {"x": float(command_velocity.y), "y": float(command_velocity.x), "z": float(-command_velocity.z)},
             "progress_dot_to_local": float(progress_dot),
         }
 
@@ -125,8 +123,11 @@ class EgoLikePlannerCore:
 
         original = Vec3(command.velocity.x, command.velocity.y, 0.0)
         new_v = Vec3(original.x, original.y, 0.0)
-        protect_dist = max(1.55, self.config.drone_radius + self.config.obstacle_margin + 0.95)
-        hard_stop_dist = max(1.18, self.config.drone_radius + self.config.obstacle_margin + 0.65)
+        # Shield must not stop a feasible bypass just because a LiDAR point is
+        # around 1.1-1.2m away.  It now removes closing velocity first and brakes
+        # only on very close contact.
+        protect_dist = 1.35
+        hard_stop_dist = 0.95
         min_dist = 999.0
         min_clearance = 999.0
         max_closing = 0.0
@@ -138,7 +139,7 @@ class EgoLikePlannerCore:
             dist = rel_xy.norm()
             if dist <= 1.0e-6:
                 continue
-            clearance = dist - (self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin)
+            clearance = dist - (self.config.drone_radius + float(obs.radius) + 0.20)
             if dist < min_dist:
                 min_dist = dist
                 min_clearance = clearance
@@ -147,7 +148,7 @@ class EgoLikePlannerCore:
             unit = rel_xy * (1.0 / dist)
             closing = new_v.x * unit.x + new_v.y * unit.y
             max_closing = max(max_closing, closing)
-            if dist <= hard_stop_dist and closing > 0.01:
+            if dist <= hard_stop_dist and closing > 0.02:
                 self._last_shield_info = {
                     "active": True,
                     "action": "brake",
@@ -164,17 +165,22 @@ class EgoLikePlannerCore:
 
         if projected <= 0:
             return command
-        if new_v.norm() < 0.035:
-            self._last_shield_info = {
-                "active": True,
-                "action": "project_stop",
-                "dist": float(min_dist),
-                "clearance": float(min_clearance),
-                "closing": float(max_closing),
-                "old_velocity": command.velocity.to_dict(),
-                "new_velocity": Vec3().to_dict(),
-            }
-            return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:project_stop")
+        if new_v.norm() < 0.02:
+            # Do not convert soft projection into a full stop unless it is a real
+            # near-contact case.  Otherwise the vehicle will never slide sideways
+            # out of the soft shell.
+            if min_dist <= 1.02:
+                self._last_shield_info = {
+                    "active": True,
+                    "action": "project_stop",
+                    "dist": float(min_dist),
+                    "clearance": float(min_clearance),
+                    "closing": float(max_closing),
+                    "old_velocity": command.velocity.to_dict(),
+                    "new_velocity": Vec3().to_dict(),
+                }
+                return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:project_stop")
+            return command
 
         if new_v.x * original.x + new_v.y * original.y < 0.0:
             self._last_shield_info = {
@@ -188,7 +194,7 @@ class EgoLikePlannerCore:
             }
             return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:reverse_blocked")
 
-        new_v = new_v.limit_norm(min(command.velocity.norm(), 0.14))
+        new_v = new_v.limit_norm(min(command.velocity.norm(), 0.10))
         out = Vec3(new_v.x, new_v.y, command.velocity.z)
         self._last_shield_info = {
             "active": True,
