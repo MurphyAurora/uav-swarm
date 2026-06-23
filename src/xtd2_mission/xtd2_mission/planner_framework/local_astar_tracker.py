@@ -21,6 +21,11 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         self._bypass_until = 0.0
         self._bypass_started = 0.0
         self._rejoin_forced_until = 0.0
+        self._last_progress_position: Optional[Vec3] = None
+        self._last_progress_time = time.time()
+        self._last_stuck_clear_time = 0.0
+        self._planner_state = "DIRECT"
+        self._last_stuck = False
 
     def plan_candidate(self, state: PlannerState, local_goal: Vec3, obstacles) -> Optional[CandidateTrajectory]:
         now = time.time()
@@ -29,13 +34,22 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         if start is None:
             self.tracker.reset()
             self._clear_bypass(now, force_rejoin=False)
-            self.diagnostics = {"status": "no_start_cell"}
+            self.diagnostics = {"status": "no_start_cell", "planner_state": "BRAKE"}
             return None
 
         mission_target_body = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
         nearest = min((math.hypot(x, y) for x, y in local_map.points), default=999.0)
         front_blocked = self._front_blocked(local_map.points)
         mission_corridor_blocked = not self._target_corridor_clear(local_map.points, mission_target_body)
+        stuck = self._update_stuck_state(state, now)
+        if stuck:
+            self._committed_world_path = []
+            self._committed_label = ""
+            self._committed_until = 0.0
+            self._last_replan_time = 0.0
+            self.tracker.reset()
+            self._last_stuck_clear_time = now
+
         bypass_target_body, bypass_mode = self._bypass_target(local_map.points, mission_target_body, now, front_blocked, mission_corridor_blocked)
         target_body = bypass_target_body if bypass_target_body is not None else mission_target_body
         corridor_blocked = not self._target_corridor_clear(local_map.points, target_body)
@@ -45,44 +59,68 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         else:
             self._update_side_latch(local_map.points, target_body, now, front_blocked, corridor_blocked)
 
+        self._planner_state = self._state_name(front_blocked, mission_corridor_blocked, bypass_mode, stuck)
+        body_path = self._committed_body_path(state)
+        committed_valid = len(body_path) >= 2 and self._path_is_valid(local_map, body_path)
+        committed_clear = self._sampled_path_clearance(body_path, local_map.points) if committed_valid else -999.0
+        # Mature planner latch: keep tracking a valid short path for a small time
+        # window instead of resampling a different subgoal every frame.  This is
+        # what prevents the local turn-in-place loops.
+        if committed_valid and now < self._committed_until and not stuck:
+            return self._track_body_path(
+                state,
+                local_goal,
+                local_map,
+                body_path,
+                nearest,
+                front_blocked,
+                corridor_blocked,
+                mission_corridor_blocked,
+                target_body,
+                bypass_mode,
+                "latched_valid_path",
+                "tracking_committed_path",
+                committed_clear,
+            )
+
         replan_reason = self._replan_reason(now, state, local_goal, local_map, corridor_blocked)
+        if stuck:
+            replan_reason = "stuck_replan"
         if bypass_mode in ("bypass_start", "bypass_hold", "rejoin", "force_rejoin") and not replan_reason:
             replan_reason = bypass_mode
-        if replan_reason:
+        if replan_reason or not committed_valid:
             selected = self._select_path(local_map, start, target_body)
             if selected is None:
-                candidate = self._direct_bypass_candidate(state, local_goal, local_map, nearest, target_body, bypass_mode, replan_reason)
+                candidate = self._direct_bypass_candidate(state, local_goal, local_map, nearest, target_body, bypass_mode, replan_reason or "no_selected_subgoal")
                 if candidate is not None:
                     return candidate
                 self.tracker.reset()
                 self._committed_world_path = []
-                self.diagnostics = self._diag("no_astar_path", replan_reason, local_map, nearest, front_blocked, corridor_blocked, self._bypass_diag(bypass_mode, target_body))
-                return None
-            self._commit_path(state, selected, local_goal, now)
-
-        body_path = self._committed_body_path(state)
-        if len(body_path) < 2 or not self._path_is_valid(local_map, body_path):
-            selected = self._select_path(local_map, start, target_body)
-            if selected is None:
-                candidate = self._direct_bypass_candidate(state, local_goal, local_map, nearest, target_body, bypass_mode, "invalid_path_direct_bypass")
-                if candidate is not None:
-                    return candidate
-                self.tracker.reset()
-                self._committed_world_path = []
-                self.diagnostics = self._diag("committed_path_invalid", "invalid_path_no_replacement", local_map, nearest, front_blocked, corridor_blocked, self._bypass_diag(bypass_mode, target_body))
+                self.diagnostics = self._diag(
+                    "no_astar_path", replan_reason or "no_selected_subgoal", local_map, nearest,
+                    front_blocked, corridor_blocked, self._bypass_diag(bypass_mode, target_body)
+                )
+                self.diagnostics.update(self._state_diag(stuck, committed_valid, committed_clear))
                 return None
             self._commit_path(state, selected, local_goal, now)
             body_path = self._committed_body_path(state)
+            committed_clear = self._sampled_path_clearance(body_path, local_map.points)
 
-        return self._track_body_path(state, local_goal, local_map, body_path, nearest, front_blocked, corridor_blocked, mission_corridor_blocked, target_body, bypass_mode, replan_reason or "latched", "tracking_committed_path")
+        return self._track_body_path(
+            state, local_goal, local_map, body_path, nearest, front_blocked, corridor_blocked,
+            mission_corridor_blocked, target_body, bypass_mode, replan_reason or "latched", "tracking_committed_path",
+            committed_clear,
+        )
 
     def _track_body_path(self, state: PlannerState, local_goal: Vec3, local_map, body_path, nearest: float,
                          front_blocked: bool, corridor_blocked: bool, mission_corridor_blocked: bool,
-                         target_body: Tuple[float, float], bypass_mode: str, replan_reason: str, status: str) -> CandidateTrajectory:
+                         target_body: Tuple[float, float], bypass_mode: str, replan_reason: str,
+                         status: str, precomputed_clear: Optional[float] = None) -> CandidateTrajectory:
         body_path = self._trim_passed_points(list(body_path))
-        clear = self._sampled_path_clearance(body_path, local_map.points)
+        clear = float(precomputed_clear) if precomputed_clear is not None else self._sampled_path_clearance(body_path, local_map.points)
         metadata: Dict = {
             "frontend": "local_astar_tracker",
+            "planner_state": self._planner_state,
             "path_len": len(body_path),
             "raw_points": local_map.raw_count,
             "min_path_clearance": float(clear),
@@ -98,6 +136,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
             "bypass_mode": bypass_mode,
             "bypass_target_body": {"x": float(target_body[0]), "y": float(target_body[1])},
             "rejoin_forced_left_sec": max(0.0, self._rejoin_forced_until - time.time()),
+            "stuck": self._last_stuck,
         }
         candidate = self.tracker.track(
             f"local_astar:{self._committed_label}", state, body_path, local_goal, nearest, clear, metadata
@@ -105,6 +144,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         extra = self._bypass_diag(bypass_mode, target_body)
         extra.update(
             {
+                "planner_state": self._planner_state,
                 "label": self._committed_label,
                 "committed_left_sec": max(0.0, self._committed_until - time.time()),
                 "path_len": len(body_path),
@@ -116,6 +156,7 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
                 "mission_corridor_blocked": mission_corridor_blocked,
             }
         )
+        extra.update(self._state_diag(self._last_stuck, True, clear))
         self.diagnostics = self._diag(status, replan_reason, local_map, nearest, front_blocked, corridor_blocked, extra)
         return candidate
 
@@ -138,18 +179,8 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         self._committed_until = time.time() + 0.8
         mission_corridor_blocked = True
         candidate = self._track_body_path(
-            state,
-            local_goal,
-            local_map,
-            body_path,
-            nearest,
-            True,
-            False,
-            mission_corridor_blocked,
-            target_body,
-            bypass_mode,
-            reason,
-            "direct_bypass_path",
+            state, local_goal, local_map, body_path, nearest, True, False, mission_corridor_blocked,
+            target_body, bypass_mode, reason, "direct_bypass_path", clear
         )
         candidate.metadata["direct_bypass"] = True
         return candidate
@@ -199,6 +230,42 @@ class LocalAStarPlanner(StableLocalAStarPlanner):
         by = float(side) * max(1.8, self.config.drone_radius + self.config.obstacle_margin + 1.15)
         by = max(-self.config.astar_grid_right + 0.5, min(self.config.astar_grid_left - 0.5, by))
         return bx, by
+
+    def _update_stuck_state(self, state: PlannerState, now: float) -> bool:
+        if self._last_progress_position is None:
+            self._last_progress_position = state.position
+            self._last_progress_time = now
+            self._last_stuck = False
+            return False
+        moved = state.position.distance_to(self._last_progress_position)
+        if moved > 0.35:
+            self._last_progress_position = state.position
+            self._last_progress_time = now
+            self._last_stuck = False
+            return False
+        stuck = now - self._last_progress_time > 2.0 and now - self._last_stuck_clear_time > 1.0
+        self._last_stuck = bool(stuck)
+        return bool(stuck)
+
+    def _state_name(self, front_blocked: bool, mission_corridor_blocked: bool, bypass_mode: str, stuck: bool) -> str:
+        if stuck:
+            return "REPLAN_STUCK"
+        if bypass_mode in ("rejoin", "force_rejoin"):
+            return "REJOIN"
+        if self._bypass_active or bypass_mode in ("bypass_start", "bypass_hold"):
+            return "TRACK_PATH"
+        if front_blocked or mission_corridor_blocked:
+            return "SEARCH_SUBGOAL"
+        return "DIRECT"
+
+    def _state_diag(self, stuck: bool, committed_valid: bool, committed_clear: float) -> Dict[str, object]:
+        return {
+            "planner_state": self._planner_state,
+            "stuck": bool(stuck),
+            "committed_valid": bool(committed_valid),
+            "committed_clearance": float(committed_clear),
+            "progress_age_sec": max(0.0, time.time() - self._last_progress_time),
+        }
 
     def _bypass_diag(self, mode: str, target_body: Tuple[float, float]) -> Dict[str, object]:
         return {
