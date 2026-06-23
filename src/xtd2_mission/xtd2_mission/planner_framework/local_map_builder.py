@@ -59,11 +59,8 @@ class LocalMapBuilder:
         c = math.cos(state.heading)
         s = math.sin(state.heading)
         points: List[BodyPoint] = []
-        lidar_available = any(obs.source == "lidar_near_field" for obs in obstacles)
         for obs in obstacles:
             if obs.source not in ("static", "lidar_near_field"):
-                continue
-            if lidar_available and obs.source == "static":
                 continue
             rel_x = obs.position.x - state.position.x
             rel_y = obs.position.y - state.position.y
