@@ -5,7 +5,7 @@ import math
 import time
 from typing import Optional, Sequence
 
-from .common import CandidateEvaluation, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
+from .common import CandidateEvaluation, Obstacle, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
 
 
 class FallbackManager:
@@ -25,14 +25,14 @@ class FallbackManager:
         return not any(item.safety.safe for item in evaluations)
 
     def command(self, state: PlannerState, perception: PerceptionData, evaluations: Sequence[CandidateEvaluation]) -> PlannerCommand:
-        """Fallback policy with a cautious-progress band.
+        """Fallback policy with escape-aware cautious progress.
 
-        Hard violations still stop immediately.  However, the latest log showed
-        a different failure mode: local_astar was feasible and kept about
-        0.53--0.56 m clearance, but it was below the conservative emergency
-        margin, so the stop-first fallback hovered forever.  In that band we
-        allow a very slow local_astar command so the vehicle can crawl around
-        the obstacle and replan continuously instead of freezing.
+        A subtle failure mode from the debug log was: the current pose was already
+        inside the soft emergency margin, so every candidate had
+        ``emergency_margin_violation`` because the trajectory starts at t=0.
+        The candidate was still hard-feasible and moving away, but the old
+        fallback stopped it forever.  This method now allows a slow local_astar
+        recovery when the trajectory is hard-feasible and improves clearance.
         """
         near_escape = self._nearest_obstacle_escape(state, perception)
         if near_escape is not None:
@@ -41,12 +41,16 @@ class FallbackManager:
         best = self._best_escape(evaluations)
         if best is not None and best.trajectory.name.startswith("local_astar:"):
             if self._cautious_astar_ok(best, perception):
-                velocity = best.trajectory.velocity.limit_norm(min(0.18, self.config.max_speed))
+                # Use a very small speed so it can leave the soft safety shell
+                # without reintroducing the earlier circling/collision behavior.
+                speed_limit = min(0.14, self.config.max_speed)
+                velocity = best.trajectory.velocity.limit_norm(speed_limit)
+                current_clearance, future_clearance = self._trajectory_clearance_change(best, perception)
                 return PlannerCommand(
                     velocity,
                     "fallback_cautious",
                     best.trajectory.name,
-                    f"cautious_astar:{best.safety.reason}",
+                    f"cautious_astar:{best.safety.reason}:clearance {current_clearance:.2f}->{future_clearance:.2f}",
                 )
             return PlannerCommand(
                 Vec3(),
@@ -64,11 +68,42 @@ class FallbackManager:
             return False
         if not best.safety.feasible:
             return False
-        if perception.near_field_danger:
+        # This is the soft-margin band.  Hard violations are still rejected by
+        # best.safety.feasible above.  Do not reject near_field_danger here: that
+        # flag is precisely what becomes true when the vehicle needs to crawl out
+        # of the soft shell.
+        current_clearance, future_clearance = self._trajectory_clearance_change(best, perception)
+        if current_clearance < self.config.hard_clearance:
             return False
-        clearance = min(best.safety.min_clearance, best.safety.min_static_clearance)
-        # Keep this below the normal emergency margin but above the hard shell.
-        return clearance >= max(0.45, self.config.hard_clearance + 0.20)
+        improving = future_clearance >= current_clearance + 0.03
+        not_getting_worse = future_clearance >= current_clearance - 0.02
+        enough_buffer = current_clearance >= max(self.config.hard_clearance + 0.05, 0.30)
+        return bool(enough_buffer and (improving or not_getting_worse))
+
+    def _trajectory_clearance_change(self, best: CandidateEvaluation, perception: PerceptionData) -> tuple:
+        points = list(best.trajectory.points or [])
+        if not points or not perception.obstacles:
+            return 999.0, 999.0
+        start = points[0].position
+        end = points[-1].position
+        current_clearance = self._min_clearance_at(start, perception.obstacles)
+        future_clearance = self._min_clearance_at(end, perception.obstacles)
+        # Also consider a mid-horizon point, because local A* rollouts may curve
+        # around the obstacle before the final horizon point.
+        mid = points[len(points) // 2].position
+        mid_clearance = self._min_clearance_at(mid, perception.obstacles)
+        return current_clearance, max(future_clearance, mid_clearance)
+
+    def _min_clearance_at(self, position: Vec3, obstacles: Sequence[Obstacle]) -> float:
+        best = 999.0
+        for obs in obstacles:
+            clearance = position.distance_to(obs.position_at(0.0)) - self._safety_radius(obs)
+            if clearance < best:
+                best = clearance
+        return float(best)
+
+    def _safety_radius(self, obs: Obstacle) -> float:
+        return self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin
 
     def _nearest_obstacle_escape(self, state: PlannerState, perception: PerceptionData) -> Optional[PlannerCommand]:
         """Only use moving escape for true near-contact LiDAR danger."""
