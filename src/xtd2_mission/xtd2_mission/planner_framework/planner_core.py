@@ -40,10 +40,23 @@ class EgoLikePlannerCore:
         evaluations = self.backend.evaluate_all(candidates, safety_reports, state, local_goal)
         best = self.backend.select_best(evaluations, state, local_goal)
 
-        if self.fallback.should_fallback(best, evaluations, perception):
+        if best is None or not best.safety.feasible:
             command = self.fallback.command(state, perception, evaluations)
-        else:
+        elif best.safety.safe:
             command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
+        else:
+            # Soft-margin recovery belongs to the normal planner path, not to
+            # fallback.  The old chain treated every safe=0 trajectory as a
+            # fallback condition, even when it was hard-feasible and moving away
+            # from the obstacle.  That created a deadlock: the current pose was
+            # already inside the soft shell, so every trajectory began with an
+            # emergency_margin_violation and the vehicle could not crawl out.
+            command = PlannerCommand(
+                best.trajectory.velocity.limit_norm(min(0.16, self.config.max_speed)),
+                "planner_cautious",
+                best.trajectory.name,
+                best.safety.reason,
+            )
         command = self.output.process(command, dt=dt)
 
         return {
