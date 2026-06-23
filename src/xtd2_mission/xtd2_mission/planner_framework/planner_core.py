@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Top-level EGO-like planner orchestration."""
 
+import math
 import time
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Optional, Sequence
 
 from .backend_selector import BackendSelector
 from .command_output import CommandOutput
-from .common import Obstacle, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
+from .common import PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
 from .fallback_manager import FallbackManager
 from .frontend_planner import FrontendPlanner
 from .goal_manager import LocalGoalManager
@@ -46,11 +47,6 @@ class EgoLikePlannerCore:
         elif best.safety.safe:
             command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
         else:
-            # Soft-margin motion is allowed only when there is still a real
-            # buffer.  The previous version allowed planner_cautious even at
-            # min_clearance around 0.20 m; that was too close and let the vehicle
-            # slide into the wall.  Below this threshold, stop and wait for a
-            # better local A* path instead of trying to crawl out blindly.
             min_clearance = float(best.safety.min_clearance)
             min_ttc = float(best.safety.min_ttc)
             if min_clearance < 0.38 or min_ttc < 1.2:
@@ -69,6 +65,14 @@ class EgoLikePlannerCore:
         return {
             "stamp": now,
             "drone_id": state.drone_id,
+            "state": {
+                "position": state.position.to_dict(),
+                "velocity": state.velocity.to_dict(),
+                "heading": float(state.heading),
+                "heading_deg": float(math.degrees(state.heading)),
+                "stamp": float(state.stamp),
+            },
+            "coordinate_debug": self._coordinate_debug(state, final_goal, local_goal, command.velocity),
             "active_waypoint_index": self.goal_manager.active_waypoint_index(),
             "active_goal": active_goal.to_dict(),
             "local_goal": local_goal.to_dict(),
@@ -85,15 +89,33 @@ class EgoLikePlannerCore:
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
 
-    def _lidar_velocity_shield(self, command: PlannerCommand, state: PlannerState, perception: PerceptionData) -> PlannerCommand:
-        """Final CBF-like velocity filter.
+    def _coordinate_debug(self, state: PlannerState, final_goal: Vec3, local_goal: Vec3, command_velocity: Vec3) -> Dict[str, object]:
+        to_final = final_goal - state.position
+        to_local = local_goal - state.position
+        heading = state.heading
+        c = math.cos(heading)
+        s = math.sin(heading)
+        body_cmd_x = c * command_velocity.x + s * command_velocity.y
+        body_cmd_y = -s * command_velocity.x + c * command_velocity.y
+        body_goal_x = c * to_local.x + s * to_local.y
+        body_goal_y = -s * to_local.x + c * to_local.y
+        xy_speed = math.hypot(command_velocity.x, command_velocity.y)
+        goal_xy = math.hypot(to_local.x, to_local.y)
+        progress_dot = 0.0
+        if xy_speed > 1.0e-6 and goal_xy > 1.0e-6:
+            progress_dot = (command_velocity.x * to_local.x + command_velocity.y * to_local.y) / (xy_speed * goal_xy)
+        enu_to_ned = {"x": float(command_velocity.y), "y": float(command_velocity.x), "z": float(-command_velocity.z)}
+        return {
+            "to_final_world": to_final.to_dict(),
+            "to_local_world": to_local.to_dict(),
+            "to_local_body": {"x": float(body_goal_x), "y": float(body_goal_y)},
+            "command_world": command_velocity.to_dict(),
+            "command_body_from_heading": {"x": float(body_cmd_x), "y": float(body_cmd_y)},
+            "command_enu_to_ned_hypothesis": enu_to_ned,
+            "progress_dot_to_local": float(progress_dot),
+        }
 
-        Important: this layer must never invent a reverse/away velocity.  The
-        previous hard_away branch used the closest LiDAR point even when it was
-        on the side/behind the vehicle, so it could command motion backwards into
-        a wall.  The shield now only removes velocity components that close on
-        obstacles; if the situation is too close, it brakes.
-        """
+    def _lidar_velocity_shield(self, command: PlannerCommand, state: PlannerState, perception: PerceptionData) -> PlannerCommand:
         self._last_shield_info = {"active": False}
         if command.velocity.norm() <= 1.0e-6:
             return command
@@ -135,7 +157,7 @@ class EgoLikePlannerCore:
                     "old_velocity": command.velocity.to_dict(),
                     "new_velocity": Vec3().to_dict(),
                 }
-                return PlannerCommand(Vec3(0.0, 0.0, 0.0), "fallback_hover", "hover", f"{command.reason}|shield:brake")
+                return PlannerCommand(Vec3(), "fallback_hover", "hover", f"{command.reason}|shield:brake")
             if closing > 0.0:
                 new_v = new_v - unit * closing
                 projected += 1
@@ -154,8 +176,6 @@ class EgoLikePlannerCore:
             }
             return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:project_stop")
 
-        # Do not let the filter reverse the command.  If projection leaves only a
-        # velocity pointing opposite to the original command, braking is safer.
         if new_v.x * original.x + new_v.y * original.y < 0.0:
             self._last_shield_info = {
                 "active": True,
