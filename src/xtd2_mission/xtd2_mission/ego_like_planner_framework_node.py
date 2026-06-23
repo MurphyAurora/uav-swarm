@@ -32,7 +32,7 @@ class EgoLikePlannerFrameworkNode(Node):
         self.publish_cmd = _bool_arg(args.publish_cmd)
         self.cmd_topic_template = str(args.cmd_topic_template)
         self.manual_waypoints = self._parse_waypoints(args.waypoints, default_z=float(args.target_z))
-        self.log_file_path = str(args.log_file or "").strip()
+        self.log_file_path = self._resolve_log_file(str(args.log_file or "").strip())
         self.log_fp = None
         if self.log_file_path:
             os.makedirs(os.path.dirname(os.path.abspath(self.log_file_path)), exist_ok=True)
@@ -54,6 +54,13 @@ class EgoLikePlannerFrameworkNode(Node):
             static_hard_clearance=float(args.static_hard_clearance),
             static_emergency_clearance=float(args.static_emergency_clearance),
             local_goal_distance=float(args.local_goal_distance),
+            local_goal_nudge_enable=_bool_arg(args.local_goal_nudge_enable),
+            corridor_enable=_bool_arg(args.corridor_enable),
+            corridor_lookahead=float(args.corridor_lookahead),
+            corridor_half_width=float(args.corridor_half_width),
+            corridor_side_offset=float(args.corridor_side_offset),
+            corridor_forward_offset=float(args.corridor_forward_offset),
+            corridor_latch_sec=float(args.corridor_latch_sec),
             goal_weight=float(args.goal_weight),
             clearance_weight=float(args.clearance_weight),
             ttc_weight=float(args.ttc_weight),
@@ -88,6 +95,7 @@ class EgoLikePlannerFrameworkNode(Node):
         self.static_tracks = []
         self.dynamic_tracks = []
         self.lidar_clouds = {}
+        self.lidar_stats = {}
         self._last_summary_log = 0.0
         self.planners = {i: EgoLikePlannerCore(self.config, waypoints=self.manual_waypoints) for i in range(1, self.num_drones + 1)}
 
@@ -108,13 +116,21 @@ class EgoLikePlannerFrameworkNode(Node):
         self.get_logger().info(
             f"ego_like planner framework started: num={self.num_drones}, publish_cmd={int(self.publish_cmd)}, "
             f"frontend_mode={self.config.frontend_mode}, cmd_topic_template={self.cmd_topic_template}, "
-            f"lidar={self.lidar_topic_template}"
+            f"lidar={self.lidar_topic_template}, log_file={self.log_file_path or 'disabled'}"
         )
 
     def destroy_node(self):
         if self.log_fp is not None:
             self.log_fp.close()
         super().destroy_node()
+
+    def _resolve_log_file(self, raw: str) -> str:
+        if not raw:
+            return ""
+        if raw.lower() == "auto":
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            return os.path.expanduser(f"~/ws_xtd2/log/ego_like_debug_{stamp}.jsonl")
+        return os.path.expanduser(raw)
 
     def _cmd_topic_for(self, drone_id):
         return self.cmd_topic_template.format(id=drone_id)
@@ -182,6 +198,7 @@ class EgoLikePlannerFrameworkNode(Node):
             perception.update_lidar_obstacles(lidar_obstacles, now)
             report = self.planners[drone_id].plan(state, self._target(drone_id), perception.build(state.position))
             report["lidar_obstacle_count"] = len(lidar_obstacles)
+            report["lidar_stats"] = dict(self.lidar_stats.get(int(drone_id), {}))
             reports.append(report)
             if self.log_fp is not None:
                 self.log_fp.write(json.dumps(report, ensure_ascii=False) + "\n")
@@ -221,10 +238,12 @@ class EgoLikePlannerFrameworkNode(Node):
             best = report.get("best") or {}
             frontend = ((report.get("frontend") or {}).get("local_astar") or {})
             goal_diag = report.get("goal_manager") or {}
+            lidar_stats = report.get("lidar_stats") or {}
             parts.append(
                 "x500_{id} mode={mode} traj={traj} v=({vx:.2f},{vy:.2f},{vz:.2f}) "
-                "safe={safe}/{cand} feasible={feasible} lidar={lidar} clear={clear:.2f} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
-                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) goal_mode={goal_mode} astar={astar} repl={repl} stuck={stuck:.1f}s "
+                "safe={safe}/{cand} feasible={feasible} lidar={lidar} lnear={lnear:.2f} clear={clear:.2f} local=({lx:.1f},{ly:.1f},{lz:.1f}) "
+                "goal=({gx:.1f},{gy:.1f},{gz:.1f}) goal_mode={goal_mode} corridor={corr:.0f}/{corr_left:.1f}s "
+                "astar={astar} repl={repl} stuck={stuck:.1f}s "
                 "cost(g={cg:.2f},p={cp:.2f},r={cr:.2f},l={cl:.2f}) reason={reason}".format(
                     id=int(report.get("drone_id", 0)),
                     mode=str(cmd.get("mode", "")),
@@ -236,6 +255,7 @@ class EgoLikePlannerFrameworkNode(Node):
                     cand=int(report.get("candidate_count", 0)),
                     feasible=int(report.get("feasible_count", 0)),
                     lidar=int(report.get("lidar_obstacle_count", 0)),
+                    lnear=float(lidar_stats.get("nearest_body_range", 999.0)),
                     clear=float(best.get("min_static_clearance", best.get("min_clearance", 999.0))),
                     lx=float(local_goal.get("x", 0.0)),
                     ly=float(local_goal.get("y", 0.0)),
@@ -244,6 +264,8 @@ class EgoLikePlannerFrameworkNode(Node):
                     gy=float(final_goal.get("y", 0.0)),
                     gz=float(final_goal.get("z", 0.0)),
                     goal_mode=str(goal_diag.get("goal_reason", "")),
+                    corr=float(goal_diag.get("corridor_side", 0.0)),
+                    corr_left=float(goal_diag.get("corridor_left_sec", 0.0)),
                     astar=str(frontend.get("status", "off")),
                     repl=str(frontend.get("replan_reason", frontend.get("label", ""))),
                     stuck=float(frontend.get("stalled_sec", 0.0)),
@@ -261,8 +283,20 @@ class EgoLikePlannerFrameworkNode(Node):
 
     def _lidar_obstacles(self, drone_id, state, now):
         cloud = self.lidar_clouds.get(int(drone_id))
+        stats = {
+            "stamp": now,
+            "raw_points": 0,
+            "kept_points": 0,
+            "nearest_body_range": 999.0,
+            "nearest_body_x": 999.0,
+            "nearest_body_y": 999.0,
+            "nearest_body_z": 999.0,
+            "cloud_age": 999.0,
+        }
         if cloud is None or now - float(cloud["stamp"]) > float(self.args.lidar_timeout):
+            self.lidar_stats[int(drone_id)] = stats
             return []
+        stats["cloud_age"] = now - float(cloud["stamp"])
         heading = self.headings.get(int(drone_id), 0.0)
         c = math.cos(heading)
         s = math.sin(heading)
@@ -275,6 +309,7 @@ class EgoLikePlannerFrameworkNode(Node):
         vertical_limit = float(self.args.lidar_vertical_limit)
         radius = float(self.args.lidar_obstacle_radius)
         for idx, point in enumerate(point_cloud2.read_points(cloud["msg"], field_names=("x", "y", "z"), skip_nans=True)):
+            stats["raw_points"] += 1
             if idx % stride != 0:
                 continue
             px = self._finite(point[0])
@@ -285,6 +320,11 @@ class EgoLikePlannerFrameworkNode(Node):
                 continue
             if pz < min_z or pz > vertical_limit:
                 continue
+            if horizontal < stats["nearest_body_range"]:
+                stats["nearest_body_range"] = horizontal
+                stats["nearest_body_x"] = px
+                stats["nearest_body_y"] = py
+                stats["nearest_body_z"] = pz
             wx = state.position.x + c * px - s * py
             wy = state.position.y + s * px + c * py
             wz = state.position.z + pz
@@ -298,6 +338,8 @@ class EgoLikePlannerFrameworkNode(Node):
             )
             if len(obstacles) >= max_points:
                 break
+        stats["kept_points"] = len(obstacles)
+        self.lidar_stats[int(drone_id)] = stats
         return obstacles
 
     @staticmethod
@@ -320,7 +362,7 @@ def build_arg_parser():
     parser.add_argument("--publish-cmd", default="0")
     parser.add_argument("--cmd-topic-template", default="/xtdrone2/x500_{id}/primitive_cmd_vel_ned")
     parser.add_argument("--waypoints", default="")
-    parser.add_argument("--frontend-mode", default="hybrid_astar", choices=("primitive", "hybrid_astar", "local_astar", "astar", "hybrid"))
+    parser.add_argument("--frontend-mode", default="local_astar", choices=("primitive", "hybrid_astar", "local_astar", "astar", "hybrid"))
     parser.add_argument("--period", type=float, default=0.1)
     parser.add_argument("--state-timeout", type=float, default=2.0)
     parser.add_argument("--target-x", type=float, default=30.0)
@@ -330,18 +372,25 @@ def build_arg_parser():
     parser.add_argument("--leader-id", type=int, default=3)
     parser.add_argument("--horizon", type=float, default=2.5)
     parser.add_argument("--dt", type=float, default=0.5)
-    parser.add_argument("--cruise-speed", type=float, default=0.7)
+    parser.add_argument("--cruise-speed", type=float, default=0.55)
     parser.add_argument("--lateral-speed", type=float, default=0.45)
     parser.add_argument("--vertical-speed", type=float, default=0.35)
-    parser.add_argument("--max-speed", type=float, default=1.0)
-    parser.add_argument("--max-accel", type=float, default=0.8)
+    parser.add_argument("--max-speed", type=float, default=0.75)
+    parser.add_argument("--max-accel", type=float, default=0.6)
     parser.add_argument("--drone-radius", type=float, default=0.35)
     parser.add_argument("--obstacle-margin", type=float, default=0.45)
     parser.add_argument("--hard-clearance", type=float, default=0.25)
-    parser.add_argument("--emergency-clearance", type=float, default=0.8)
-    parser.add_argument("--static-hard-clearance", type=float, default=0.6)
-    parser.add_argument("--static-emergency-clearance", type=float, default=1.2)
-    parser.add_argument("--local-goal-distance", type=float, default=3.0)
+    parser.add_argument("--emergency-clearance", type=float, default=0.75)
+    parser.add_argument("--static-hard-clearance", type=float, default=0.55)
+    parser.add_argument("--static-emergency-clearance", type=float, default=1.0)
+    parser.add_argument("--local-goal-distance", type=float, default=3.8)
+    parser.add_argument("--local-goal-nudge-enable", default="0")
+    parser.add_argument("--corridor-enable", default="1")
+    parser.add_argument("--corridor-lookahead", type=float, default=5.0)
+    parser.add_argument("--corridor-half-width", type=float, default=1.10)
+    parser.add_argument("--corridor-side-offset", type=float, default=2.2)
+    parser.add_argument("--corridor-forward-offset", type=float, default=2.8)
+    parser.add_argument("--corridor-latch-sec", type=float, default=4.0)
     parser.add_argument("--goal-weight", type=float, default=1.0)
     parser.add_argument("--clearance-weight", type=float, default=8.0)
     parser.add_argument("--ttc-weight", type=float, default=4.0)
@@ -349,35 +398,35 @@ def build_arg_parser():
     parser.add_argument("--progress-weight", type=float, default=6.0)
     parser.add_argument("--reverse-penalty", type=float, default=12.0)
     parser.add_argument("--lateral-penalty", type=float, default=1.5)
-    parser.add_argument("--output-alpha", type=float, default=0.55)
+    parser.add_argument("--output-alpha", type=float, default=0.45)
     parser.add_argument("--astar-grid-forward", type=float, default=7.0)
     parser.add_argument("--astar-grid-back", type=float, default=2.5)
     parser.add_argument("--astar-grid-left", type=float, default=5.0)
     parser.add_argument("--astar-grid-right", type=float, default=5.0)
     parser.add_argument("--astar-resolution", type=float, default=0.25)
-    parser.add_argument("--astar-inflation-radius", type=float, default=0.45)
-    parser.add_argument("--astar-local-goal-dist", type=float, default=4.5)
-    parser.add_argument("--astar-lookahead-dist", type=float, default=1.35)
-    parser.add_argument("--astar-min-range", type=float, default=0.35)
+    parser.add_argument("--astar-inflation-radius", type=float, default=0.22)
+    parser.add_argument("--astar-local-goal-dist", type=float, default=5.0)
+    parser.add_argument("--astar-lookahead-dist", type=float, default=1.10)
+    parser.add_argument("--astar-min-range", type=float, default=0.18)
     parser.add_argument("--astar-max-range", type=float, default=7.5)
     parser.add_argument("--astar-z-min", type=float, default=-1.4)
     parser.add_argument("--astar-z-max", type=float, default=1.6)
-    parser.add_argument("--astar-path-latch-sec", type=float, default=1.4)
-    parser.add_argument("--astar-replan-interval", type=float, default=0.8)
-    parser.add_argument("--astar-progress-stall-sec", type=float, default=3.0)
+    parser.add_argument("--astar-path-latch-sec", type=float, default=2.2)
+    parser.add_argument("--astar-replan-interval", type=float, default=1.0)
+    parser.add_argument("--astar-progress-stall-sec", type=float, default=2.0)
     parser.add_argument("--astar-progress-epsilon", type=float, default=0.20)
     parser.add_argument("--astar-progress-move-epsilon", type=float, default=0.22)
-    parser.add_argument("--astar-recovery-sec", type=float, default=1.6)
-    parser.add_argument("--astar-latch-clearance", type=float, default=0.60)
+    parser.add_argument("--astar-recovery-sec", type=float, default=1.8)
+    parser.add_argument("--astar-latch-clearance", type=float, default=0.35)
     parser.add_argument("--lidar-timeout", type=float, default=0.8)
-    parser.add_argument("--lidar-max-obstacles", type=int, default=260)
-    parser.add_argument("--lidar-stride", type=int, default=4)
-    parser.add_argument("--lidar-min-range", type=float, default=0.65)
-    parser.add_argument("--lidar-max-range", type=float, default=4.5)
+    parser.add_argument("--lidar-max-obstacles", type=int, default=320)
+    parser.add_argument("--lidar-stride", type=int, default=3)
+    parser.add_argument("--lidar-min-range", type=float, default=0.18)
+    parser.add_argument("--lidar-max-range", type=float, default=5.5)
     parser.add_argument("--lidar-min-z", type=float, default=-1.8)
     parser.add_argument("--lidar-vertical-limit", type=float, default=1.8)
-    parser.add_argument("--lidar-obstacle-radius", type=float, default=0.16)
-    parser.add_argument("--log-file", default="")
+    parser.add_argument("--lidar-obstacle-radius", type=float, default=0.18)
+    parser.add_argument("--log-file", default="auto")
     return parser
 
 
