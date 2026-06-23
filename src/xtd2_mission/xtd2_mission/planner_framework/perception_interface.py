@@ -18,10 +18,9 @@ class PerceptionInterface:
         self._dynamic_obstacles: List[Obstacle] = []
         self._swarm_obstacles: List[Obstacle] = []
         self._last_stamp = 0.0
-        self._min_lidar_range = 1.25
+        self._min_lidar_range = 0.75
 
     def update_static_tracks(self, tracks: Iterable[Dict], stamp: Optional[float] = None) -> None:
-        """Do not inject map/world-truth static tracks into the local planner."""
         self._static_obstacles = []
         self._last_stamp = float(stamp if stamp is not None else time.time())
 
@@ -58,9 +57,6 @@ class PerceptionInterface:
     def build(self, current_position: Optional[Vec3] = None) -> PerceptionData:
         lidar_obstacles = getattr(self, "_lidar_obstacles", [])
         if current_position is not None:
-            # Several logs showed a dense false ring at about 1.10 m even in open
-            # space.  Do this second-stage filter here as well, so launch files
-            # cannot reintroduce old --lidar-min-range values.
             lidar_obstacles = [obs for obs in lidar_obstacles if self._horizontal_distance(current_position, obs.position) >= self._min_lidar_range]
         obstacles = [*self._static_obstacles, *self._dynamic_obstacles, *self._swarm_obstacles, *lidar_obstacles]
         nearest = 999.0
