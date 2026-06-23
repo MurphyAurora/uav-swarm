@@ -24,10 +24,13 @@ class LocalAStarPlanner:
         self._last_progress_dist: Optional[float] = None
         self._last_progress_position: Optional[Vec3] = None
         self._last_progress_time = time.time()
-        self._recovery_until = 0.0
-        self._recovery_side = 1.0
         self._last_cmd_body: BodyPoint = (0.0, 0.0)
         self._current_position = Vec3()
+        self._side_latch = 0.0
+        self._side_latch_until = 0.0
+        self._last_candidate_count = 0
+        self._last_scored_count = 0
+        self._last_best_clearance = 999.0
         self.diagnostics: Dict[str, object] = {}
 
     def plan_candidate(self, state: PlannerState, local_goal: Vec3, obstacles) -> Optional[CandidateTrajectory]:
@@ -38,42 +41,26 @@ class LocalAStarPlanner:
         if start is None:
             self.diagnostics = {"status": "no_start_cell"}
             return None
+
         target_body = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
-        target_dist = state.position.distance_to(local_goal)
-        stalled_sec = self._update_progress(now, target_dist)
         nearest = min((math.hypot(x, y) for x, y in local_map.points), default=999.0)
         front_blocked = self._front_blocked(local_map.points)
-        recovery_allowed = front_blocked and nearest < max(2.2, self.config.astar_latch_clearance + 1.0)
-        if stalled_sec > self.config.astar_progress_stall_sec and not recovery_allowed:
-            self._last_progress_dist = target_dist
-            self._last_progress_position = state.position
-            self._last_progress_time = now
-            stalled_sec = 0.0
-        if stalled_sec > self.config.astar_progress_stall_sec and recovery_allowed and now > self._recovery_until:
-            self._recovery_side = self._pick_escape_side(local_map.points, target_body)
-            self._recovery_until = now + self.config.astar_recovery_sec
-            self._committed_world_path = []
+        corridor_blocked = not self._target_corridor_clear(local_map.points, target_body)
+        self._update_side_latch(local_map.points, target_body, now, front_blocked, corridor_blocked)
 
-        if now < self._recovery_until and not recovery_allowed:
-            self._recovery_until = 0.0
-        if now < self._recovery_until:
-            return self._recovery_candidate(state, target_body, local_map, now, stalled_sec)
+        target_dist = state.position.distance_to(local_goal)
+        stalled_sec = self._update_progress(now, target_dist)
 
-        replan_reason = self._replan_reason(now, state, local_goal, local_map)
+        replan_reason = self._replan_reason(now, state, local_goal, local_map, corridor_blocked)
         if replan_reason:
             selected = self._select_path(local_map, start, target_body)
             if selected is not None:
                 self._commit_path(state, selected, local_goal, now)
             elif not self._committed_world_path:
-                self.diagnostics = {
-                    "status": "no_astar_path",
-                    "replan_reason": replan_reason,
-                    "raw_points": local_map.raw_count,
-                    "stalled_sec": stalled_sec,
-                    "nearest": nearest,
-                    "front_blocked": front_blocked,
-                    "recovery_allowed": recovery_allowed,
-                }
+                self.diagnostics = self._diag(
+                    "no_astar_path", now, replan_reason, local_map, stalled_sec, nearest,
+                    front_blocked, corridor_blocked, None
+                )
                 return None
 
         body_path = self._committed_body_path(state)
@@ -81,15 +68,10 @@ class LocalAStarPlanner:
             selected = self._select_path(local_map, start, target_body)
             if selected is None:
                 self._committed_world_path = []
-                self.diagnostics = {
-                    "status": "committed_path_invalid",
-                    "replan_reason": "invalid_path_no_replacement",
-                    "raw_points": local_map.raw_count,
-                    "stalled_sec": stalled_sec,
-                    "nearest": nearest,
-                    "front_blocked": front_blocked,
-                    "recovery_allowed": recovery_allowed,
-                }
+                self.diagnostics = self._diag(
+                    "committed_path_invalid", now, "invalid_path_no_replacement", local_map,
+                    stalled_sec, nearest, front_blocked, corridor_blocked, None
+                )
                 return None
             self._commit_path(state, selected, local_goal, now)
             body_path = self._committed_body_path(state)
@@ -99,11 +81,18 @@ class LocalAStarPlanner:
         if look_x < 0.18:
             look_x = 0.18
             if abs(look_y) < 0.18:
-                look_y = 0.18 if target_body[1] >= 0.0 else -0.18
-        look_norm = max(math.hypot(look_x, look_y), 1.0e-6)
+                look_y = 0.18 if (self._side_latch or target_body[1]) >= 0.0 else -0.18
+
+        min_path_clearance = self._sampled_path_clearance(body_path, local_map.points)
         speed = min(self.config.max_speed, self.config.cruise_speed)
-        if nearest < 1.2:
-            speed = min(speed, max(0.16, 0.34 * self.config.max_speed))
+        if min_path_clearance < self._safe_required_clearance():
+            speed = min(speed, 0.22)
+        if nearest < 1.8:
+            speed = min(speed, 0.20)
+        if stalled_sec > self.config.astar_progress_stall_sec and min_path_clearance < self._safe_required_clearance():
+            speed = min(speed, 0.16)
+
+        look_norm = max(math.hypot(look_x, look_y), 1.0e-6)
         bx = speed * look_x / look_norm
         by = speed * look_y / look_norm
         bx, by = self._smooth_cmd_body(bx, by)
@@ -113,21 +102,19 @@ class LocalAStarPlanner:
         if abs(dz) < 0.25:
             vz = 0.0
         velocity = Vec3(vx, vy, vz).limit_norm(self.config.max_speed)
-        min_path_clearance = self._sampled_path_clearance(body_path, local_map.points)
-        self.diagnostics = {
-            "status": "tracking_committed_path",
-            "label": self._committed_label,
-            "replan_reason": replan_reason or "latched",
-            "committed_left_sec": max(0.0, self._committed_until - now),
-            "stalled_sec": stalled_sec,
-            "raw_points": local_map.raw_count,
-            "path_len": len(body_path),
-            "min_path_clearance": min_path_clearance,
-            "lookahead_body": {"x": look_x, "y": look_y},
-            "nearest": nearest,
-            "front_blocked": front_blocked,
-            "recovery_allowed": recovery_allowed,
-        }
+
+        self.diagnostics = self._diag(
+            "tracking_committed_path", now, replan_reason or "latched", local_map, stalled_sec,
+            nearest, front_blocked, corridor_blocked,
+            {
+                "label": self._committed_label,
+                "committed_left_sec": max(0.0, self._committed_until - now),
+                "path_len": len(body_path),
+                "min_path_clearance": float(min_path_clearance),
+                "lookahead_body": {"x": look_x, "y": look_y},
+                "speed": float(speed),
+            },
+        )
         return self._path_rollout(
             f"local_astar:{self._committed_label}",
             velocity,
@@ -146,9 +133,32 @@ class LocalAStarPlanner:
                 "stalled_sec": stalled_sec,
                 "nearest": nearest,
                 "front_blocked": front_blocked,
-                "recovery_allowed": recovery_allowed,
+                "corridor_blocked": corridor_blocked,
+                "side_latch": self._side_latch,
             },
         )
+
+    def _diag(self, status: str, now: float, reason: str, local_map: LocalOccupancyMap, stalled_sec: float,
+              nearest: float, front_blocked: bool, corridor_blocked: bool, extra: Optional[Dict]) -> Dict[str, object]:
+        out: Dict[str, object] = {
+            "status": status,
+            "replan_reason": reason,
+            "raw_points": local_map.raw_count,
+            "stalled_sec": stalled_sec,
+            "nearest": nearest,
+            "front_blocked": front_blocked,
+            "corridor_blocked": corridor_blocked,
+            "side_latch": self._side_latch,
+            "side_latch_left_sec": max(0.0, self._side_latch_until - now),
+            "candidate_goals": self._last_candidate_count,
+            "scored_paths": self._last_scored_count,
+            "best_path_clearance": self._last_best_clearance,
+            "hard_required_clearance": self._hard_required_clearance(),
+            "safe_required_clearance": self._safe_required_clearance(),
+        }
+        if extra:
+            out.update(extra)
+        return out
 
     def _update_progress(self, now: float, target_dist: float) -> float:
         moved = 0.0
@@ -164,7 +174,8 @@ class LocalAStarPlanner:
             self._last_progress_time = now
         return max(0.0, now - self._last_progress_time)
 
-    def _replan_reason(self, now: float, state: PlannerState, local_goal: Vec3, local_map: LocalOccupancyMap) -> str:
+    def _replan_reason(self, now: float, state: PlannerState, local_goal: Vec3,
+                       local_map: LocalOccupancyMap, corridor_blocked: bool) -> str:
         if not self._committed_world_path:
             return "no_committed_path"
         if now >= self._committed_until:
@@ -173,10 +184,14 @@ class LocalAStarPlanner:
             body_path = self._committed_body_path(state)
             if not self._path_is_valid(local_map, body_path):
                 return "committed_path_blocked"
+            if self._sampled_path_clearance(body_path, local_map.points) < self._hard_required_clearance():
+                return "committed_path_low_clearance"
         if state.position.distance_to(self._last_goal) < self.config.local_goal_reached_radius:
             return "local_goal_reached"
         if local_goal.distance_to(self._last_goal) > max(1.0, 0.5 * self.config.astar_local_goal_dist):
             return "local_goal_changed"
+        if corridor_blocked and now - self._last_replan_time >= 0.5 * self.config.astar_replan_interval:
+            return "corridor_blocked_refresh"
         return ""
 
     def _commit_path(self, state: PlannerState, selected: Dict[str, object], local_goal: Vec3, now: float) -> None:
@@ -186,6 +201,7 @@ class LocalAStarPlanner:
         self._committed_until = now + self.config.astar_path_latch_sec
         self._last_replan_time = now
         self._last_goal = local_goal
+        self._last_best_clearance = float(selected.get("min_path_clearance", 999.0))
 
     def _committed_body_path(self, state: PlannerState) -> List[BodyPoint]:
         return [self._world_point_to_body(state, point) for point in self._committed_world_path]
@@ -214,47 +230,28 @@ class LocalAStarPlanner:
                 return False
         if not self._line_free(local_map, local_map.body_to_grid(0.0, 0.0), cells[min(1, len(cells) - 1)]):
             return False
-        sample_clearance = self._sampled_path_clearance(body_path, local_map.points)
-        return sample_clearance >= max(self.config.astar_latch_clearance, self._hard_required_clearance())
+        return self._sampled_path_clearance(body_path, local_map.points) >= self._hard_required_clearance()
+
+    def _update_side_latch(self, points: Sequence[BodyPoint], target_body: BodyPoint, now: float,
+                           front_blocked: bool, corridor_blocked: bool) -> None:
+        if abs(self._side_latch) > 1.0e-6:
+            if now >= self._side_latch_until and not front_blocked and not corridor_blocked:
+                self._side_latch = 0.0
+                self._side_latch_until = 0.0
+            else:
+                self._side_latch_until = max(self._side_latch_until, now + 0.5)
+            return
+        if front_blocked or corridor_blocked:
+            self._side_latch = self._pick_escape_side(points, target_body)
+            self._side_latch_until = now + max(2.8, self.config.astar_path_latch_sec)
 
     def _pick_escape_side(self, points: Sequence[BodyPoint], target_body: BodyPoint) -> float:
-        left_clear = self._sector_clearance(points, 0.25, self.config.astar_grid_left)
-        right_clear = self._sector_clearance(points, -self.config.astar_grid_right, -0.25)
+        left_clear = self._sector_clearance(points, 0.25, self.config.astar_grid_left, x_min=-0.1, x_max=4.5)
+        right_clear = self._sector_clearance(points, -self.config.astar_grid_right, -0.25, x_min=-0.1, x_max=4.5)
         target_side = 1.0 if target_body[1] >= 0.0 else -1.0
-        if abs(left_clear - right_clear) < 0.25:
+        if abs(left_clear - right_clear) < 0.30:
             return target_side
         return 1.0 if left_clear > right_clear else -1.0
-
-    def _recovery_candidate(self, state: PlannerState, target_body: BodyPoint, local_map: LocalOccupancyMap, now: float, stalled_sec: float) -> CandidateTrajectory:
-        left_clear = self._sector_clearance(local_map.points, 0.25, self.config.astar_grid_left)
-        right_clear = self._sector_clearance(local_map.points, -self.config.astar_grid_right, -0.25)
-        back_clear = self._sector_clearance(local_map.points, -0.9, 0.9, x_min=-self.config.astar_grid_back, x_max=-0.2)
-        side = self._recovery_side or self._pick_escape_side(local_map.points, target_body)
-        lateral = 0.34 * side
-        forward = 0.18 if target_body[0] >= -0.2 else 0.0
-        if max(left_clear, right_clear) < 0.75:
-            lateral = 0.22 * side
-            forward = 0.12 if target_body[0] >= -0.2 else 0.0
-        bx, by = self._smooth_cmd_body(forward, lateral)
-        vx, vy = self._body_to_world(bx, by, state.heading)
-        velocity = Vec3(vx, vy, 0.0).limit_norm(self.config.max_speed)
-        label = "recovery_left" if side > 0.0 else "recovery_right"
-        self.diagnostics = {
-            "status": "recovery_escape",
-            "label": label,
-            "recovery_left_sec": max(0.0, self._recovery_until - now),
-            "stalled_sec": stalled_sec,
-            "left_clear": left_clear,
-            "right_clear": right_clear,
-            "back_clear": back_clear,
-            "raw_points": local_map.raw_count,
-        }
-        return self._rollout(
-            f"local_astar:{label}",
-            velocity,
-            state.position,
-            {"frontend": "local_astar", "recovery": True, "stalled_sec": stalled_sec, "raw_points": local_map.raw_count},
-        )
 
     @staticmethod
     def _world_to_body(dx: float, dy: float, heading: float) -> BodyPoint:
@@ -284,29 +281,39 @@ class LocalAStarPlanner:
         target_angle = math.atan2(ty, tx)
         candidates: List[Tuple[GridIndex, str]] = []
         seen = set()
-        if self._front_blocked(local_map.points):
-            angle_offsets_deg = [30, -30, 45, -45, 60, -60, 75, -75, 18, -18, 0]
+        front_blocked = self._front_blocked(local_map.points)
+        if abs(self._side_latch) > 1.0e-6:
+            base_angles = [35, 50, 65, 80, 95, 115, 25]
+            angle_offsets_deg = [int(self._side_latch * deg) for deg in base_angles]
+        elif front_blocked or not self._target_corridor_clear(local_map.points, target_body):
+            side = self._pick_escape_side(local_map.points, target_body)
+            primary = [35, 50, 65, 80, 95, 115, 25]
+            secondary = [45, 65]
+            angle_offsets_deg = [int(side * deg) for deg in primary] + [int(-side * deg) for deg in secondary]
         else:
-            angle_offsets_deg = [0, 18, -18, 30, -30, 45, -45, 60, -60, 75, -75]
-        radii = [self.config.astar_local_goal_dist, 3.6, 2.8, 2.1]
+            angle_offsets_deg = [0, 18, -18, 30, -30, 45, -45, 60, -60]
+        radii = [self.config.astar_local_goal_dist, 4.5, 3.6, 2.8, 2.1]
         for deg in angle_offsets_deg:
             for radius in radii:
                 ang = target_angle + math.radians(deg)
                 x = max(-self.config.astar_grid_back + 0.4, min(self.config.astar_grid_forward - 0.4, math.cos(ang) * radius))
                 y = max(-self.config.astar_grid_right + 0.4, min(self.config.astar_grid_left - 0.4, math.sin(ang) * radius))
+                if (front_blocked or abs(self._side_latch) > 1.0e-6) and abs(y) < 0.7 and x > 1.0:
+                    continue
+                if abs(self._side_latch) > 1.0e-6 and y * self._side_latch < 0.15 and x > 0.5:
+                    continue
                 cell = local_map.body_to_grid(x, y)
                 if cell is None:
                     continue
-                free = self._nearest_free(local_map, cell, max_r=8)
+                free = self._nearest_free(local_map, cell, max_r=10)
                 if free is None or free in seen:
                     continue
                 bx, by = local_map.grid_to_body(free)
-                if math.hypot(bx, by) < 1.0:
-                    continue
-                if bx < 0.15:
+                if math.hypot(bx, by) < 1.2 or bx < 0.15:
                     continue
                 seen.add(free)
                 candidates.append((free, f"{deg:+d}deg/{radius:.1f}m"))
+        self._last_candidate_count = len(candidates)
         return candidates
 
     def _nearest_free(self, local_map: LocalOccupancyMap, preferred: GridIndex, max_r: int = 12) -> Optional[GridIndex]:
@@ -314,21 +321,25 @@ class LocalAStarPlanner:
         px, py = preferred
         if 0 <= px < nx and 0 <= py < ny and not local_map.occupied[px][py]:
             return preferred
+        best = None
+        best_score = 1e9
         for r in range(1, max_r + 1):
-            best = None
-            best_score = 1e9
             for dx in range(-r, r + 1):
                 for dy in (-r, r):
                     ix, iy = px + dx, py + dy
                     if 0 <= ix < nx and 0 <= iy < ny and not local_map.occupied[ix][iy]:
-                        score = dx * dx + dy * dy
+                        bx, by = local_map.grid_to_body((ix, iy))
+                        clearance = self._clearance_to_points((bx, by), local_map.points)
+                        score = dx * dx + dy * dy - 0.4 * clearance
                         if score < best_score:
                             best, best_score = (ix, iy), score
             for dy in range(-r + 1, r):
                 for dx in (-r, r):
                     ix, iy = px + dx, py + dy
                     if 0 <= ix < nx and 0 <= iy < ny and not local_map.occupied[ix][iy]:
-                        score = dx * dx + dy * dy
+                        bx, by = local_map.grid_to_body((ix, iy))
+                        clearance = self._clearance_to_points((bx, by), local_map.points)
+                        score = dx * dx + dy * dy - 0.4 * clearance
                         if score < best_score:
                             best, best_score = (ix, iy), score
             if best is not None:
@@ -361,7 +372,18 @@ class LocalAStarPlanner:
                     continue
                 if local_map.occupied[nx_i][ny_i]:
                     continue
-                new_cost = cost_so_far[current] + step_cost
+                if dx != 0 and dy != 0:
+                    if local_map.occupied[cx + dx][cy] or local_map.occupied[cx][cy + dy]:
+                        continue
+                bx, by = local_map.grid_to_body(nxt)
+                clearance = self._clearance_to_points((bx, by), local_map.points)
+                clearance_penalty = 0.0
+                hard_required = self._hard_required_clearance()
+                if clearance < hard_required:
+                    clearance_penalty += (hard_required - clearance) * 12.0
+                elif clearance < self._safe_required_clearance():
+                    clearance_penalty += (self._safe_required_clearance() - clearance) * 2.0
+                new_cost = cost_so_far[current] + step_cost + clearance_penalty
                 if nxt not in cost_so_far or new_cost < cost_so_far[nxt]:
                     cost_so_far[nxt] = new_cost
                     priority = new_cost + math.hypot(nxt[0] - goal[0], nxt[1] - goal[1])
@@ -392,7 +414,9 @@ class LocalAStarPlanner:
             j = len(path) - 1
             while j > i + 1:
                 if self._line_free(local_map, path[i], path[j]):
-                    break
+                    body = [local_map.grid_to_body(path[i]), local_map.grid_to_body(path[j])]
+                    if self._sampled_path_clearance(body, local_map.points) >= self._hard_required_clearance():
+                        break
                 j -= 1
             out.append(path[j])
             i = j
@@ -407,19 +431,26 @@ class LocalAStarPlanner:
         angle_cost = abs(self._angle_diff(end_angle, target_angle))
         length = self._path_length(path)
         min_clearance = self._sampled_path_clearance(body_path, local_map.points)
-        clearance_cost = 0.0 if min_clearance >= 1.4 else (1.4 - min_clearance) * 3.0
-        score = length + 2.0 * angle_cost - 0.65 * progress + clearance_cost
+        hard_required = self._hard_required_clearance()
+        safe_required = self._safe_required_clearance()
+        clearance_cost = max(0.0, safe_required - min_clearance) * 7.0
+        score = length + 1.6 * angle_cost - 0.55 * progress + clearance_cost
         if self._front_blocked(local_map.points) and abs(end_y) < 1.0:
-            score += 8.0
-        required_clearance = self._hard_required_clearance()
-        if min_clearance < required_clearance:
-            score += (required_clearance - min_clearance) * 18.0
+            score += 10.0
+        if abs(self._side_latch) > 1.0e-6:
+            if end_y * self._side_latch < 0.2 and end_x > 0.4:
+                score += 30.0
+            elif end_y * self._side_latch > 0.7:
+                score -= 2.0
+        if min_clearance < hard_required:
+            score += (hard_required - min_clearance) * 100.0
         return {
             "score": score,
             "path": path,
             "body_path": body_path,
             "label": label,
             "min_path_clearance": min_clearance,
+            "safe_class": min_clearance >= safe_required,
         }
 
     def _select_path(self, local_map: LocalOccupancyMap, start: GridIndex, target_body: BodyPoint) -> Optional[Dict[str, object]]:
@@ -429,11 +460,16 @@ class LocalAStarPlanner:
             if path is None:
                 continue
             smooth = self._shortcut(local_map, path)
-            if len(smooth) >= 2:
-                scored.append(self._score_path(local_map, smooth, label, target_body))
+            if len(smooth) < 2:
+                continue
+            item = self._score_path(local_map, smooth, label, target_body)
+            if float(item["min_path_clearance"]) >= self._hard_required_clearance():
+                scored.append(item)
+        self._last_scored_count = len(scored)
         if not scored:
             return None
-        scored.sort(key=lambda item: float(item["score"]))
+        scored.sort(key=lambda item: (not bool(item["safe_class"]), -float(item["min_path_clearance"]), float(item["score"])))
+        self._last_best_clearance = float(scored[0]["min_path_clearance"])
         return scored[0]
 
     def _path_length(self, path: Sequence[GridIndex]) -> float:
@@ -457,7 +493,7 @@ class LocalAStarPlanner:
         if len(body_path) < 2:
             return self._clearance_to_points(body_path[0], points) if body_path else 999.0
         min_clearance = 999.0
-        sample_step = max(0.08, 0.5 * self.config.astar_resolution)
+        sample_step = max(0.06, 0.4 * self.config.astar_resolution)
         last = body_path[0]
         for point in body_path[1:]:
             seg = math.hypot(point[0] - last[0], point[1] - last[1])
@@ -470,8 +506,12 @@ class LocalAStarPlanner:
         return min_clearance
 
     def _hard_required_clearance(self) -> float:
-        lidar_point_radius = 0.16
+        lidar_point_radius = 0.18
         return self.config.drone_radius + self.config.obstacle_margin + self.config.hard_clearance + lidar_point_radius
+
+    def _safe_required_clearance(self) -> float:
+        lidar_point_radius = 0.18
+        return self.config.drone_radius + self.config.obstacle_margin + max(0.60, self.config.emergency_clearance) + lidar_point_radius
 
     def _lookahead(self, body_path: List[BodyPoint]) -> BodyPoint:
         last = body_path[0]
@@ -491,8 +531,26 @@ class LocalAStarPlanner:
 
     def _front_blocked(self, points: Sequence[BodyPoint]) -> bool:
         front_width = max(0.75, self.config.drone_radius + self.config.obstacle_margin + 0.20)
-        front_depth = min(3.0, max(1.6, self.config.astar_lookahead_dist + 1.0))
+        front_depth = min(3.2, max(1.8, self.config.astar_lookahead_dist + 1.2))
         return any(0.25 <= x <= front_depth and abs(y) <= front_width for x, y in points)
+
+    def _target_corridor_clear(self, points: Sequence[BodyPoint], target_body: BodyPoint) -> bool:
+        tx, ty = target_body
+        dist = math.hypot(tx, ty)
+        if dist < 1.0e-6:
+            return True
+        ux = tx / dist
+        uy = ty / dist
+        length = min(3.8, max(1.8, dist))
+        half_width = max(0.85, self.config.drone_radius + self.config.obstacle_margin + 0.20)
+        for x, y in points:
+            along = x * ux + y * uy
+            if along < 0.25 or along > length:
+                continue
+            lateral = abs(-uy * x + ux * y)
+            if lateral <= half_width:
+                return False
+        return True
 
     def _smooth_cmd_body(self, bx: float, by: float) -> BodyPoint:
         old_x, old_y = self._last_cmd_body
