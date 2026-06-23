@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 from .common import CandidateTrajectory, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
 from .local_map_builder import BodyPoint
@@ -16,6 +16,7 @@ class PathTracker:
     def __init__(self, config: PlannerConfig):
         self.config = config
         self._last_body_velocity: BodyPoint = (0.0, 0.0)
+        self._last_heading: Optional[float] = None
 
     def track(
         self,
@@ -30,6 +31,7 @@ class PathTracker:
         if len(body_path) < 2:
             return CandidateTrajectory(name=name, velocity=Vec3(), points=[TrajectoryPoint(0.0, state.position)], metadata=metadata)
 
+        frame_reset = self._maybe_reset_for_heading_change(state.heading)
         look_x, look_y = self._lookahead(body_path)
         if look_x < 0.30:
             look_x = 0.30
@@ -55,17 +57,32 @@ class PathTracker:
                 "path_clearance": float(path_clearance),
                 "nearest_obstacle": float(nearest_obstacle),
                 "body_velocity": {"x": float(bx), "y": float(by)},
+                "planning_frame_heading": float(state.heading),
+                "frame_reset": bool(frame_reset),
             }
         )
         return CandidateTrajectory(name=name, velocity=velocity, points=points, metadata=meta)
 
     def reset(self) -> None:
         self._last_body_velocity = (0.0, 0.0)
+        self._last_heading = None
+
+    def _maybe_reset_for_heading_change(self, heading: float) -> bool:
+        if self._last_heading is None:
+            self._last_heading = heading
+            return True
+        delta = abs(math.atan2(math.sin(heading - self._last_heading), math.cos(heading - self._last_heading)))
+        self._last_heading = heading
+        if delta > 0.18:
+            # Body-frame velocity memory belongs to the previous planning frame.
+            # Reusing it after a goal-aligned frame rotation creates the small
+            # loops seen in RViz, because old lateral velocity is smoothed into a
+            # new coordinate system.
+            self._last_body_velocity = (0.0, 0.0)
+            return True
+        return False
 
     def _speed_limit(self, nearest: float, clearance: float) -> float:
-        # Use path clearance as the primary limiter.  In dense pillar maps the
-        # nearest LiDAR point often stays around 1.1 m even when the selected path
-        # is clear, so limiting by nearest alone made the UAV crawl forever.
         hard = self._hard_required_clearance()
         safe = self._safe_required_clearance()
         speed = min(self.config.cruise_speed, self.config.max_speed, 0.42)
@@ -96,7 +113,7 @@ class PathTracker:
 
     def _smooth_body_velocity(self, bx: float, by: float) -> BodyPoint:
         old_x, old_y = self._last_body_velocity
-        alpha = max(0.35, min(1.0, self.config.output_alpha))
+        alpha = max(0.55, min(1.0, self.config.output_alpha))
         sx = alpha * bx + (1.0 - alpha) * old_x
         sy = alpha * by + (1.0 - alpha) * old_y
         mag = math.hypot(sx, sy)
