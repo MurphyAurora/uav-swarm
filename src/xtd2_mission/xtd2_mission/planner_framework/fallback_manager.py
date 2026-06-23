@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fallback commands used when no candidate is safely executable."""
 
-import time
 import math
+import time
 from typing import Optional, Sequence
 
 from .common import CandidateEvaluation, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
@@ -25,23 +25,44 @@ class FallbackManager:
         return not any(item.safety.safe for item in evaluations)
 
     def command(self, state: PlannerState, perception: PerceptionData, evaluations: Sequence[CandidateEvaluation]) -> PlannerCommand:
+        """Stop-first fallback.
+
+        The debug log showed many frames like
+        ``mode=fallback_escape traj=local_astar:* reason=emergency_margin_violation``.
+        That means the A* candidate was not safe, but fallback still reused its
+        velocity. This feeds the drone around the obstacle in alternating
+        directions and creates the observed circular motion. From now on,
+        local_astar candidates are never executed by fallback unless they were
+        already safe enough to be selected by the normal planner path.
+        """
         near_escape = self._nearest_obstacle_escape(state, perception)
         if near_escape is not None:
             return near_escape
-        escape_eval = self._best_escape(evaluations)
-        if escape_eval is not None:
-            clearance = min(escape_eval.safety.min_clearance, escape_eval.safety.min_static_clearance)
-            soft_escape_ok = clearance >= self.config.hard_clearance and escape_eval.trajectory.velocity.norm() > 0.05
-            if escape_eval.safety.feasible or soft_escape_ok:
-                return PlannerCommand(escape_eval.trajectory.velocity, "fallback_escape", escape_eval.trajectory.name, escape_eval.safety.reason)
+
+        best = self._best_escape(evaluations)
+        if best is not None and best.trajectory.name.startswith("local_astar:"):
+            return PlannerCommand(
+                Vec3(),
+                "fallback_hover",
+                "hover",
+                f"stop_first_blocked_astar:{best.safety.reason}",
+            )
+
         if perception.near_field_danger:
-            return PlannerCommand(Vec3(0.0, 0.0, -self.config.vertical_speed), "fallback_climb", "near_field_climb", "near_field_lidar_danger")
+            return PlannerCommand(Vec3(), "fallback_hover", "hover", "near_field_lidar_danger_stop_first")
         return PlannerCommand(Vec3(), "fallback_hover", "hover", "no_safe_candidate")
 
     def _nearest_obstacle_escape(self, state: PlannerState, perception: PerceptionData) -> Optional[PlannerCommand]:
+        """Only use moving escape for true near-contact LiDAR danger.
+
+        Soft emergency-margin violations should stop instead of drifting around
+        the obstacle. Moving escape is reserved for very close points where a
+        pure hover may keep the vehicle inside the hard safety shell.
+        """
         if not perception.near_field_danger:
             self._latched_escape_until = 0.0
             return None
+
         now = time.time()
         if now < self._latched_escape_until and self._latched_escape_velocity.norm() > 0.05:
             return PlannerCommand(
@@ -64,7 +85,7 @@ class FallbackManager:
             rel_y = obs.position.y - state.position.y
             body_x = c * rel_x + s * rel_y
             body_y = -s * rel_x + c * rel_y
-            hard_contact = clearance <= self.config.hard_clearance + 0.05
+            hard_contact = clearance <= max(0.05, 0.5 * self.config.hard_clearance)
             if not hard_contact:
                 continue
             away = Vec3(
@@ -80,18 +101,19 @@ class FallbackManager:
                 nearest_clearance = clearance
         if close_count <= 0:
             return None
+
         fallback_dir = self._latched_escape_velocity.normalized(Vec3(-1.0, 0.0, 0.0))
         away = pressure.normalized(fallback_dir)
         if self._latched_escape_velocity.norm() > 0.05:
             prev = self._latched_escape_velocity.normalized()
             if away.x * prev.x + away.y * prev.y < 0.25:
                 away = prev
-        speed = min(self.config.max_speed, max(self.config.lateral_speed, 0.45 * self.config.max_speed))
+        speed = min(0.25, self.config.max_speed)
         velocity = away * speed
-        reason = f"near_field_lidar_clearance={nearest_clearance:.2f}, close_points={close_count}"
+        reason = f"hard_contact_escape_clearance={nearest_clearance:.2f}, close_points={close_count}"
         self._latched_escape_velocity = velocity
         self._latched_escape_reason = reason
-        self._latched_escape_until = now + 1.0
+        self._latched_escape_until = now + 0.8
         return PlannerCommand(
             velocity,
             "fallback_escape",
@@ -100,31 +122,14 @@ class FallbackManager:
         )
 
     def _best_escape(self, evaluations: Sequence[CandidateEvaluation]) -> Optional[CandidateEvaluation]:
-        escape_names = {
-            "wait",
-            "back",
-            "strafe_left",
-            "strafe_right",
-            "wide_left",
-            "wide_right",
-            "hard_left",
-            "hard_right",
-            "climb",
-            "descend",
-            "back_climb",
-            "left_climb",
-            "right_climb",
-        }
-        escape = [
-            item for item in evaluations
-            if item.trajectory.name in escape_names or item.trajectory.name.startswith("local_astar:")
-        ]
-        if not escape:
+        if not evaluations:
             return None
-        moving_escape = [item for item in escape if item.trajectory.velocity.norm() > 0.05]
-        if moving_escape:
-            escape = moving_escape
-        astar_escape = [item for item in escape if item.trajectory.name.startswith("local_astar:")]
-        if astar_escape:
-            return max(astar_escape, key=lambda item: (item.safety.feasible, item.safety.min_clearance, -item.score))
-        return max(escape, key=lambda item: (item.safety.min_clearance, -item.score))
+        return max(
+            evaluations,
+            key=lambda item: (
+                item.safety.safe,
+                item.safety.feasible,
+                item.safety.min_clearance,
+                -item.score,
+            ),
+        )
