@@ -11,12 +11,7 @@ from .local_map_builder import BodyPoint
 
 
 class PathTracker:
-    """Pure-pursuit style path tracker used after frontend search.
-
-    The frontend owns path search.  This class owns path-to-trajectory conversion:
-    it limits speed from clearance/nearest obstacle, prevents reverse commands,
-    and generates horizon points along the path for the SafetyChecker.
-    """
+    """Pure-pursuit style path tracker used after frontend search."""
 
     def __init__(self, config: PlannerConfig):
         self.config = config
@@ -36,8 +31,6 @@ class PathTracker:
             return CandidateTrajectory(name=name, velocity=Vec3(), points=[TrajectoryPoint(0.0, state.position)], metadata=metadata)
 
         look_x, look_y = self._lookahead(body_path)
-        # Do not allow path tracking to command reverse motion during normal
-        # obstacle bypass.  Braking/replanning handles impossible paths.
         if look_x < 0.30:
             look_x = 0.30
         speed = self._speed_limit(nearest_obstacle, path_clearance)
@@ -45,7 +38,6 @@ class PathTracker:
         bx = speed * look_x / norm
         by = speed * look_y / norm
         bx, by = self._smooth_body_velocity(bx, by)
-        # A final local check: smoothing must not turn the command backwards.
         if bx < 0.02:
             bx = 0.0
             by = 0.0
@@ -71,17 +63,28 @@ class PathTracker:
         self._last_body_velocity = (0.0, 0.0)
 
     def _speed_limit(self, nearest: float, clearance: float) -> float:
-        speed = min(self.config.cruise_speed, self.config.max_speed, 0.38)
-        if nearest < 2.2 or clearance < self._safe_required_clearance():
-            speed = min(speed, 0.16)
-        if nearest < 1.55 or clearance < self._hard_required_clearance() + 0.15:
+        # Use path clearance as the primary limiter.  In dense pillar maps the
+        # nearest LiDAR point often stays around 1.1 m even when the selected path
+        # is clear, so limiting by nearest alone made the UAV crawl forever.
+        hard = self._hard_required_clearance()
+        safe = self._safe_required_clearance()
+        speed = min(self.config.cruise_speed, self.config.max_speed, 0.42)
+        if clearance < hard + 0.10:
             speed = min(speed, 0.10)
+        elif clearance < safe:
+            speed = min(speed, 0.18)
+        elif nearest < 1.05:
+            speed = min(speed, 0.14)
+        elif nearest < 1.35:
+            speed = min(speed, 0.24)
+        else:
+            speed = min(speed, 0.34)
         return max(0.0, speed)
 
     def _lookahead(self, body_path: Sequence[BodyPoint]) -> BodyPoint:
         last = body_path[0]
         acc = 0.0
-        distance = max(0.75, min(self.config.astar_lookahead_dist, 1.10))
+        distance = max(0.90, min(self.config.astar_lookahead_dist, 1.35))
         for point in body_path[1:]:
             seg = math.hypot(point[0] - last[0], point[1] - last[1])
             if acc + seg >= distance:
@@ -93,7 +96,7 @@ class PathTracker:
 
     def _smooth_body_velocity(self, bx: float, by: float) -> BodyPoint:
         old_x, old_y = self._last_body_velocity
-        alpha = max(0.25, min(1.0, self.config.output_alpha))
+        alpha = max(0.35, min(1.0, self.config.output_alpha))
         sx = alpha * bx + (1.0 - alpha) * old_x
         sy = alpha * by + (1.0 - alpha) * old_y
         mag = math.hypot(sx, sy)
@@ -150,7 +153,7 @@ class PathTracker:
         return c * bx - s * by, s * bx + c * by
 
     def _hard_required_clearance(self) -> float:
-        return max(1.22, self.config.drone_radius + self.config.obstacle_margin + self.config.hard_clearance + 0.18)
+        return max(0.72, self.config.drone_radius + 0.18 + 0.18)
 
     def _safe_required_clearance(self) -> float:
-        return max(1.55, self.config.drone_radius + self.config.obstacle_margin + max(0.60, self.config.emergency_clearance) + 0.18)
+        return max(1.02, self._hard_required_clearance() + 0.28)
