@@ -195,25 +195,28 @@ class PlannerConfig:
     frontend_mode: str = "local_astar"
     horizon: float = 2.5
     dt: float = 0.5
-    cruise_speed: float = 0.7
+    cruise_speed: float = 0.55
     lateral_speed: float = 0.45
     vertical_speed: float = 0.35
-    max_speed: float = 1.0
-    max_accel: float = 0.8
+    max_speed: float = 0.75
+    max_accel: float = 0.6
     drone_radius: float = 0.35
     obstacle_margin: float = 0.45
     hard_clearance: float = 0.25
-    emergency_clearance: float = 0.8
-    static_hard_clearance: float = 0.6
-    static_emergency_clearance: float = 1.2
-    local_goal_distance: float = 3.0
+    emergency_clearance: float = 0.75
+    static_hard_clearance: float = 0.55
+    static_emergency_clearance: float = 1.0
+    local_goal_distance: float = 3.8
     local_goal_reached_radius: float = 0.8
     local_goal_nudge_enable: bool = False
-    corridor_enable: bool = False
-    corridor_lookahead: float = 4.5
-    corridor_half_width: float = 1.15
-    corridor_side_offset: float = 1.8
-    corridor_forward_offset: float = 2.0
+    # Enable the lightweight corridor goal selector. This is still a single-A*
+    # chain: it only changes the short-horizon local goal before A* runs, so it
+    # does not touch takeoff, launch, PX4, or multi_waypoint control nodes.
+    corridor_enable: bool = True
+    corridor_lookahead: float = 5.0
+    corridor_half_width: float = 1.10
+    corridor_side_offset: float = 2.2
+    corridor_forward_offset: float = 2.8
     corridor_latch_sec: float = 4.0
     goal_weight: float = 1.0
     clearance_weight: float = 8.0
@@ -223,25 +226,25 @@ class PlannerConfig:
     reverse_penalty: float = 12.0
     lateral_penalty: float = 1.5
     risk_radius: float = 5.0
-    output_alpha: float = 0.55
+    output_alpha: float = 0.45
     astar_grid_forward: float = 7.0
     astar_grid_back: float = 2.5
     astar_grid_left: float = 5.0
     astar_grid_right: float = 5.0
     astar_resolution: float = 0.25
     astar_inflation_radius: float = 0.22
-    astar_local_goal_dist: float = 4.5
-    astar_lookahead_dist: float = 1.35
+    astar_local_goal_dist: float = 5.0
+    astar_lookahead_dist: float = 1.10
     astar_min_range: float = 0.35
     astar_max_range: float = 7.5
     astar_z_min: float = -1.4
     astar_z_max: float = 1.6
-    astar_path_latch_sec: float = 1.4
-    astar_replan_interval: float = 0.8
-    astar_progress_stall_sec: float = 3.0
+    astar_path_latch_sec: float = 2.2
+    astar_replan_interval: float = 1.0
+    astar_progress_stall_sec: float = 2.0
     astar_progress_epsilon: float = 0.20
     astar_progress_move_epsilon: float = 0.22
-    astar_recovery_sec: float = 1.6
+    astar_recovery_sec: float = 1.8
     astar_latch_clearance: float = 0.35
 
 
