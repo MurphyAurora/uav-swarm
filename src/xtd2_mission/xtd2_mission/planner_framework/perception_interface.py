@@ -57,7 +57,10 @@ class PerceptionInterface:
     def build(self, current_position: Optional[Vec3] = None) -> PerceptionData:
         lidar_obstacles = getattr(self, "_lidar_obstacles", [])
         if current_position is not None:
-            lidar_obstacles = [obs for obs in lidar_obstacles if self._horizontal_distance(current_position, obs.position) >= self._min_lidar_range]
+            lidar_obstacles = [
+                obs for obs in lidar_obstacles
+                if self._keep_lidar_obstacle(current_position, obs.position)
+            ]
         obstacles = [*self._static_obstacles, *self._dynamic_obstacles, *self._swarm_obstacles, *lidar_obstacles]
         nearest = 999.0
         nearest_lidar_clearance = 999.0
@@ -76,9 +79,17 @@ class PerceptionInterface:
             stamp=self._last_stamp,
         )
 
-    @staticmethod
-    def _horizontal_distance(a: Vec3, b: Vec3) -> float:
-        return math.hypot(a.x - b.x, a.y - b.y)
+    def _keep_lidar_obstacle(self, current: Vec3, point: Vec3) -> bool:
+        horizontal = math.hypot(point.x - current.x, point.y - current.y)
+        if horizontal < self._min_lidar_range:
+            return False
+        rel_z = point.z - current.z
+        # The logs show a dense sensor/model ring at about 1.10 m with rel_z
+        # near -0.40 m.  Remove that narrow artifact, but keep other near points
+        # because they are needed for braking and collision checking.
+        if 0.95 <= horizontal <= 1.20 and -0.55 <= rel_z <= -0.34:
+            return False
+        return True
 
     def _obstacle_from_track(self, track: Dict, source: str) -> Obstacle:
         predictions = []
