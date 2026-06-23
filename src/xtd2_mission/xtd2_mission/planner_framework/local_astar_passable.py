@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 from .common import CandidateTrajectory, PlannerConfig, PlannerState, Vec3
 from .local_astar_tracker import LocalAStarPlanner as TrackerLocalAStarPlanner
-from .local_map_builder import BodyPoint, LocalMapBuilder, LocalOccupancyMap
+from .local_map_builder import BodyPoint, GridIndex, LocalMapBuilder, LocalOccupancyMap
+from .local_subgoal_selector import LocalSubgoalSelector
 
 
 class PassableLocalMapBuilder(LocalMapBuilder):
@@ -53,13 +54,9 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
     def __init__(self, config: PlannerConfig | None = None):
         super().__init__(config)
         self.map_builder = PassableLocalMapBuilder(self.config)
+        self.subgoal_selector = LocalSubgoalSelector(self.config)
 
     def plan_candidate(self, state: PlannerState, local_goal: Vec3, obstacles) -> CandidateTrajectory | None:
-        # Keep straight tracking straight.  The inherited candidate sorter used
-        # maximum-clearance as the first key, so even when the goal corridor was
-        # clear it could pick +30/+60 degree side paths and create the early drift
-        # seen in the 20:09 log.  If the direct corridor is clear, bypass A* side
-        # candidates and track a direct short path to the local goal.
         local_map = self.map_builder.build(state, obstacles)
         target_body = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
         front_blocked = self._front_blocked(local_map.points)
@@ -94,6 +91,7 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
                     "bypass_side": 0.0,
                     "bypass_mode": "normal",
                     "bypass_target_body": {"x": float(target_body[0]), "y": float(target_body[1])},
+                    "subgoal_debug": {"mode": "direct_corridor_clear"},
                 },
             )
             self.diagnostics = {
@@ -121,9 +119,43 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
                 "speed": float(candidate.metadata.get("tracker_speed", 0.0)),
                 "tracker": candidate.metadata.get("tracker", ""),
                 "body_velocity": dict(candidate.metadata.get("body_velocity", {})),
+                "subgoal_debug": {"mode": "direct_corridor_clear"},
             }
             return candidate
         return super().plan_candidate(state, local_goal, obstacles)
+
+    def _select_path(self, local_map: LocalOccupancyMap, start: GridIndex, target_body: BodyPoint) -> Optional[Dict[str, object]]:
+        # Mature local planning pattern: sample many free-space subgoals, run A*
+        # to each, and pick the best reachable short path.  This replaces the old
+        # fixed bypass target as the primary behavior.
+        side_hint = self._side_latch if abs(self._side_latch) > 0.5 else 0.0
+        selected = self.subgoal_selector.select(
+            local_map=local_map,
+            start=start,
+            target_body=target_body,
+            astar_fn=self._astar,
+            shortcut_fn=self._shortcut,
+            path_clearance_fn=self._sampled_path_clearance,
+            path_length_fn=self._path_length,
+            nearest_free_fn=self._nearest_free,
+            hard_clearance=self._hard_required_clearance(),
+            safe_clearance=self._safe_required_clearance(),
+            side_hint=side_hint,
+        )
+        debug = dict(self.subgoal_selector.last_debug)
+        self._last_candidate_count = int(debug.get("subgoal_candidates", 0))
+        self._last_scored_count = int(debug.get("subgoal_reachable", 0))
+        if selected is not None:
+            self._last_best_clearance = float(selected.get("min_path_clearance", 999.0))
+            self._last_subgoal_debug = debug
+            return selected
+        self._last_subgoal_debug = debug
+        return None
+
+    def _diag(self, *args, **kwargs):
+        out = super()._diag(*args, **kwargs)
+        out["subgoal_debug"] = dict(getattr(self, "_last_subgoal_debug", {}))
+        return out
 
     def _direct_body_path(self, target_body: BodyPoint):
         tx, ty = target_body
