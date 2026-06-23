@@ -35,6 +35,8 @@ class BackendSelector:
             score += 10000.0
         elif not safety.safe:
             score += 1000.0
+        if reverse_cost > 0.05:
+            score += 5000.0
         return CandidateEvaluation(
             candidate,
             safety,
@@ -54,7 +56,9 @@ class BackendSelector:
         prefer_motion = False
         if state is not None and local_goal is not None:
             prefer_motion = state.position.distance_to(local_goal) > self.config.local_goal_reached_radius
-        safe = [item for item in evaluations if item.safety.safe]
+        normal = [item for item in evaluations if item.costs.get("reverse", 0.0) <= 0.05]
+        pool = normal if normal else list(evaluations)
+        safe = [item for item in pool if item.safety.safe]
         if safe:
             moving_safe = [item for item in safe if item.trajectory.velocity.norm() > 0.05]
             if prefer_motion and moving_safe:
@@ -75,7 +79,7 @@ class BackendSelector:
                     return min(progress_safe, key=lambda item: item.score)
                 return min(moving_safe, key=lambda item: (item.costs.get("reverse", 999.0), item.score))
             return min(safe, key=lambda item: item.score)
-        feasible = [item for item in evaluations if item.safety.feasible]
+        feasible = [item for item in pool if item.safety.feasible]
         if feasible:
             moving_feasible = [item for item in feasible if item.trajectory.velocity.norm() > 0.05]
             if prefer_motion and moving_feasible:
@@ -98,7 +102,7 @@ class BackendSelector:
                     )
                 return min(moving_feasible, key=lambda item: (item.costs.get("reverse", 999.0), -item.safety.min_clearance, item.score))
             return min(feasible, key=lambda item: (-item.safety.min_clearance, item.score))
-        return min(evaluations, key=lambda item: (-item.safety.min_clearance, item.score)) if evaluations else None
+        return min(pool, key=lambda item: (-item.safety.min_clearance, item.score)) if pool else None
 
     @staticmethod
     def _local_astar_items(evaluations: Sequence[CandidateEvaluation]) -> List[CandidateEvaluation]:
