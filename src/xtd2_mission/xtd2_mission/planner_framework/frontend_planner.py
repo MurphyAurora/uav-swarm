@@ -4,7 +4,7 @@
 from typing import Iterable, List, Optional, Tuple
 
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
-from .local_astar_stable import LocalAStarPlanner
+from .local_astar_tracker import LocalAStarPlanner
 
 
 class FrontendPlanner:
@@ -14,26 +14,8 @@ class FrontendPlanner:
         self.diagnostics = {}
 
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
-        desired = self._desired_velocity_towards_goal(state, local_goal)
-        primitives = [
-            ("track_goal", desired),
-            ("slow_goal", desired * 0.55),
-            ("wait", Vec3()),
-            ("back", self._body_relative(desired, -0.55, 0.0, 0.0)),
-            ("strafe_left", self._body_relative(desired, 0.25, 1.0, 0.0)),
-            ("strafe_right", self._body_relative(desired, 0.25, -1.0, 0.0)),
-            ("wide_left", self._body_relative(desired, 0.45, 2.2, 0.0)),
-            ("wide_right", self._body_relative(desired, 0.45, -2.2, 0.0)),
-            ("hard_left", self._body_relative(desired, 0.0, 2.8, 0.0)),
-            ("hard_right", self._body_relative(desired, 0.0, -2.8, 0.0)),
-            ("climb", Vec3(0.0, 0.0, -self.config.vertical_speed)),
-            ("descend", Vec3(0.0, 0.0, self.config.vertical_speed)),
-            ("back_climb", self._body_relative(desired, -0.45, 0.0, -self.config.vertical_speed)),
-            ("left_climb", self._body_relative(desired, 0.1, 0.8, -self.config.vertical_speed)),
-            ("right_climb", self._body_relative(desired, 0.1, -0.8, -self.config.vertical_speed)),
-        ]
         candidates: List[CandidateTrajectory] = []
-        mode = str(self.config.frontend_mode or "primitive").lower()
+        mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             astar_candidate = self.local_astar.plan_candidate(state, local_goal, perception.obstacles)
             self.diagnostics = {"mode": mode, "local_astar": dict(self.local_astar.diagnostics)}
@@ -41,8 +23,7 @@ class FrontendPlanner:
                 candidates.append(astar_candidate)
         else:
             self.diagnostics = {"mode": mode}
-        if mode not in ("local_astar", "astar"):
-            candidates.extend(self._rollout(name, velocity.limit_norm(self.config.max_speed), state.position) for name, velocity in primitives)
+            candidates.append(self._rollout("track_goal", self._desired_velocity_towards_goal(state, local_goal), state.position))
         return candidates
 
     def generate_from_velocity_set(self, state: PlannerState, velocity_set: Iterable[Tuple[str, Vec3]]) -> List[CandidateTrajectory]:
@@ -56,15 +37,8 @@ class FrontendPlanner:
         speed = min(self.config.cruise_speed, distance / max(self.config.horizon, 1.0e-6))
         return to_goal.normalized() * speed
 
-    def _body_relative(self, desired: Vec3, forward_scale: float, lateral_scale: float, vertical: float) -> Vec3:
-        forward = Vec3(desired.x, desired.y, 0.0).normalized(Vec3(1.0, 0.0, 0.0))
-        lateral = Vec3(-forward.y, forward.x, 0.0)
-        lateral_speed = max(self.config.lateral_speed, 0.45 * self.config.max_speed)
-        vy = forward.y * self.config.cruise_speed * forward_scale + lateral.y * lateral_speed * lateral_scale
-        vx = forward.x * self.config.cruise_speed * forward_scale + lateral.x * lateral_speed * lateral_scale
-        return Vec3(vx, vy, vertical)
-
     def _rollout(self, name: str, velocity: Vec3, start: Vec3) -> CandidateTrajectory:
+        velocity = velocity.limit_norm(self.config.max_speed)
         points = [TrajectoryPoint(t=0.0, position=start)]
         steps = max(1, int(round(self.config.horizon / max(self.config.dt, 1.0e-6))))
         for idx in range(1, steps + 1):
