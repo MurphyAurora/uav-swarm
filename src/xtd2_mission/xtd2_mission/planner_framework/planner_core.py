@@ -46,12 +46,22 @@ class EgoLikePlannerCore:
         elif best.safety.safe:
             command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
         else:
-            command = PlannerCommand(
-                best.trajectory.velocity.limit_norm(min(0.16, self.config.max_speed)),
-                "planner_cautious",
-                best.trajectory.name,
-                best.safety.reason,
-            )
+            # Soft-margin motion is allowed only when there is still a real
+            # buffer.  The previous version allowed planner_cautious even at
+            # min_clearance around 0.20 m; that was too close and let the vehicle
+            # slide into the wall.  Below this threshold, stop and wait for a
+            # better local A* path instead of trying to crawl out blindly.
+            min_clearance = float(best.safety.min_clearance)
+            min_ttc = float(best.safety.min_ttc)
+            if min_clearance < 0.38 or min_ttc < 1.2:
+                command = PlannerCommand(Vec3(), "fallback_hover", "hover", f"soft_margin_too_close:{best.safety.reason}")
+            else:
+                command = PlannerCommand(
+                    best.trajectory.velocity.limit_norm(min(0.12, self.config.max_speed)),
+                    "planner_cautious",
+                    best.trajectory.name,
+                    best.safety.reason,
+                )
 
         command = self._lidar_velocity_shield(command, state, perception)
         command = self.output.process(command, dt=dt)
@@ -76,77 +86,101 @@ class EgoLikePlannerCore:
         }
 
     def _lidar_velocity_shield(self, command: PlannerCommand, state: PlannerState, perception: PerceptionData) -> PlannerCommand:
-        """Project velocity away from close LiDAR obstacles before publishing.
+        """Final CBF-like velocity filter.
 
-        The local A* path can look clear in the grid while the executed velocity
-        still points into a freshly observed near-field point because of latency,
-        point-cloud sparsity, or body/world-frame mismatch.  Mature planners use
-        a final safety filter/CBF-like layer for this reason.  This shield does
-        not plan; it only removes the velocity component that closes distance to
-        the nearest LiDAR obstacle and adds a small tangential/away component.
+        Important: this layer must never invent a reverse/away velocity.  The
+        previous hard_away branch used the closest LiDAR point even when it was
+        on the side/behind the vehicle, so it could command motion backwards into
+        a wall.  The shield now only removes velocity components that close on
+        obstacles; if the situation is too close, it brakes.
         """
         self._last_shield_info = {"active": False}
         if command.velocity.norm() <= 1.0e-6:
             return command
-        nearest = self._nearest_lidar_obstacle(state, perception)
-        if nearest is None:
-            return command
-        obs, dist, clearance, rel = nearest
-        protect_dist = max(1.35, self.config.drone_radius + self.config.obstacle_margin + 0.80)
-        hard_dist = max(1.05, self.config.drone_radius + self.config.obstacle_margin + 0.55)
-        if dist >= protect_dist:
+        lidar_obs = [obs for obs in perception.obstacles if obs.source == "lidar_near_field"]
+        if not lidar_obs:
             return command
 
-        away = Vec3(state.position.x - obs.position.x, state.position.y - obs.position.y, 0.0).normalized(Vec3())
-        if away.norm() <= 1.0e-6:
+        original = Vec3(command.velocity.x, command.velocity.y, 0.0)
+        new_v = Vec3(original.x, original.y, 0.0)
+        protect_dist = max(1.55, self.config.drone_radius + self.config.obstacle_margin + 0.95)
+        hard_stop_dist = max(1.18, self.config.drone_radius + self.config.obstacle_margin + 0.65)
+        min_dist = 999.0
+        min_clearance = 999.0
+        max_closing = 0.0
+        projected = 0
+
+        for obs in lidar_obs:
+            rel = obs.position - state.position
+            rel_xy = Vec3(rel.x, rel.y, 0.0)
+            dist = rel_xy.norm()
+            if dist <= 1.0e-6:
+                continue
+            clearance = dist - (self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin)
+            if dist < min_dist:
+                min_dist = dist
+                min_clearance = clearance
+            if dist > protect_dist:
+                continue
+            unit = rel_xy * (1.0 / dist)
+            closing = new_v.x * unit.x + new_v.y * unit.y
+            max_closing = max(max_closing, closing)
+            if dist <= hard_stop_dist and closing > 0.01:
+                self._last_shield_info = {
+                    "active": True,
+                    "action": "brake",
+                    "dist": float(dist),
+                    "clearance": float(clearance),
+                    "closing": float(closing),
+                    "old_velocity": command.velocity.to_dict(),
+                    "new_velocity": Vec3().to_dict(),
+                }
+                return PlannerCommand(Vec3(0.0, 0.0, 0.0), "fallback_hover", "hover", f"{command.reason}|shield:brake")
+            if closing > 0.0:
+                new_v = new_v - unit * closing
+                projected += 1
+
+        if projected <= 0:
             return command
-        v = Vec3(command.velocity.x, command.velocity.y, 0.0)
-        closing = -(v.x * away.x + v.y * away.y)
-        new_v = Vec3(v.x, v.y, 0.0)
-        action = "limit"
-        if closing > 0.0:
-            # Remove the component moving into the obstacle.
-            new_v = new_v + away * closing
-            action = "project"
-        tangent = Vec3(-away.y, away.x, 0.0)
-        goal_dir = Vec3(command.velocity.x, command.velocity.y, 0.0).normalized(tangent)
-        if tangent.x * goal_dir.x + tangent.y * goal_dir.y < 0.0:
-            tangent = tangent * -1.0
-        if dist < hard_dist:
-            # Near contact: stop forward closing and bias outward.  Keep the
-            # speed tiny to avoid oscillation while still preventing a slide-in.
-            new_v = away * 0.12 + tangent * 0.05
-            action = "hard_away"
-        elif new_v.norm() < 0.05:
-            new_v = tangent * 0.10 + away * 0.04
-            action = "tangent"
-        new_v = new_v.limit_norm(min(command.velocity.norm(), 0.18))
+        if new_v.norm() < 0.035:
+            self._last_shield_info = {
+                "active": True,
+                "action": "project_stop",
+                "dist": float(min_dist),
+                "clearance": float(min_clearance),
+                "closing": float(max_closing),
+                "old_velocity": command.velocity.to_dict(),
+                "new_velocity": Vec3().to_dict(),
+            }
+            return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:project_stop")
+
+        # Do not let the filter reverse the command.  If projection leaves only a
+        # velocity pointing opposite to the original command, braking is safer.
+        if new_v.x * original.x + new_v.y * original.y < 0.0:
+            self._last_shield_info = {
+                "active": True,
+                "action": "reverse_blocked",
+                "dist": float(min_dist),
+                "clearance": float(min_clearance),
+                "closing": float(max_closing),
+                "old_velocity": command.velocity.to_dict(),
+                "new_velocity": Vec3().to_dict(),
+            }
+            return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:reverse_blocked")
+
+        new_v = new_v.limit_norm(min(command.velocity.norm(), 0.14))
         out = Vec3(new_v.x, new_v.y, command.velocity.z)
         self._last_shield_info = {
             "active": True,
-            "action": action,
-            "dist": float(dist),
-            "clearance": float(clearance),
-            "closing": float(closing),
-            "source": obs.source,
+            "action": "project",
+            "dist": float(min_dist),
+            "clearance": float(min_clearance),
+            "closing": float(max_closing),
+            "projected_points": int(projected),
             "old_velocity": command.velocity.to_dict(),
             "new_velocity": out.to_dict(),
         }
-        return PlannerCommand(out, command.mode, command.source_trajectory, f"{command.reason}|shield:{action}")
-
-    def _nearest_lidar_obstacle(self, state: PlannerState, perception: PerceptionData) -> Optional[Tuple[Obstacle, float, float, Vec3]]:
-        nearest = None
-        best_dist = 999.0
-        for obs in perception.obstacles:
-            if obs.source != "lidar_near_field":
-                continue
-            rel = obs.position - state.position
-            dist = (rel.x * rel.x + rel.y * rel.y + rel.z * rel.z) ** 0.5
-            if dist < best_dist:
-                clearance = dist - (self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin)
-                nearest = (obs, dist, clearance, rel)
-                best_dist = dist
-        return nearest
+        return PlannerCommand(out, command.mode, command.source_trajectory, f"{command.reason}|shield:project")
 
     def reset_output_filter(self) -> None:
         self.output.reset()
