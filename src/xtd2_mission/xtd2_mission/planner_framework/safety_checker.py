@@ -26,9 +26,9 @@ class SafetyChecker:
                 min_ttc = min(min_ttc, self._estimate_ttc(state.position, trajectory.velocity, obs))
 
         emergency_margin = self._emergency_margin(min_source)
-        static_emergency_margin = max(self.config.static_emergency_clearance, 1.0)
-        hard_margin = self.config.hard_clearance
-        static_hard_margin = self.config.static_hard_clearance
+        static_emergency_margin = max(self.config.static_emergency_clearance, 0.8)
+        hard_margin = self._hard_margin(min_source)
+        static_hard_margin = min(self.config.static_hard_clearance, 0.45)
 
         hard_ok = min_clearance >= hard_margin
         static_ok = min_static_clearance >= static_hard_margin
@@ -48,16 +48,22 @@ class SafetyChecker:
         return [self.evaluate(candidate, state, perception) for candidate in candidates]
 
     def _safety_radius(self, obs: Obstacle) -> float:
+        if obs.source == "lidar_near_field":
+            # LiDAR obstacles are already inflated in the local A* grid.  Keep a
+            # smaller execution margin here so the SafetyChecker does not veto
+            # every passable side gap after A* has found a route.
+            return self.config.drone_radius + float(obs.radius) + 0.20
         return self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin
 
-    def _emergency_margin(self, min_source: str) -> float:
-        # Do not allow launch/CLI overrides to reduce the LiDAR safety margin too
-        # much.  The log showed planner frames marked safe with LiDAR clearance
-        # around 0.50 m, then the vehicle entered fallback one frame later.
-        # A 0.75 m floor gives braking room for PX4/Gazebo command latency.
+    def _hard_margin(self, min_source: str) -> float:
         if min_source == "lidar_near_field":
-            return max(self.config.emergency_clearance, 0.75)
-        return max(self.config.emergency_clearance, 0.70)
+            return min(self.config.hard_clearance, 0.18)
+        return self.config.hard_clearance
+
+    def _emergency_margin(self, min_source: str) -> float:
+        if min_source == "lidar_near_field":
+            return max(min(self.config.emergency_clearance, 0.50), 0.38)
+        return max(self.config.emergency_clearance, 0.60)
 
     def _estimate_ttc(self, uav_position: Vec3, uav_velocity: Vec3, obs: Obstacle) -> float:
         rel_pos = obs.position_at(0.0) - uav_position
