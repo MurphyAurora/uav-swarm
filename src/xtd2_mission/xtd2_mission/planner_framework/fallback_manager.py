@@ -25,15 +25,14 @@ class FallbackManager:
         return not any(item.safety.safe for item in evaluations)
 
     def command(self, state: PlannerState, perception: PerceptionData, evaluations: Sequence[CandidateEvaluation]) -> PlannerCommand:
-        """Stop-first fallback.
+        """Fallback policy with a cautious-progress band.
 
-        The debug log showed many frames like
-        ``mode=fallback_escape traj=local_astar:* reason=emergency_margin_violation``.
-        That means the A* candidate was not safe, but fallback still reused its
-        velocity. This feeds the drone around the obstacle in alternating
-        directions and creates the observed circular motion. From now on,
-        local_astar candidates are never executed by fallback unless they were
-        already safe enough to be selected by the normal planner path.
+        Hard violations still stop immediately.  However, the latest log showed
+        a different failure mode: local_astar was feasible and kept about
+        0.53--0.56 m clearance, but it was below the conservative emergency
+        margin, so the stop-first fallback hovered forever.  In that band we
+        allow a very slow local_astar command so the vehicle can crawl around
+        the obstacle and replan continuously instead of freezing.
         """
         near_escape = self._nearest_obstacle_escape(state, perception)
         if near_escape is not None:
@@ -41,6 +40,14 @@ class FallbackManager:
 
         best = self._best_escape(evaluations)
         if best is not None and best.trajectory.name.startswith("local_astar:"):
+            if self._cautious_astar_ok(best, perception):
+                velocity = best.trajectory.velocity.limit_norm(min(0.18, self.config.max_speed))
+                return PlannerCommand(
+                    velocity,
+                    "fallback_cautious",
+                    best.trajectory.name,
+                    f"cautious_astar:{best.safety.reason}",
+                )
             return PlannerCommand(
                 Vec3(),
                 "fallback_hover",
@@ -52,13 +59,19 @@ class FallbackManager:
             return PlannerCommand(Vec3(), "fallback_hover", "hover", "near_field_lidar_danger_stop_first")
         return PlannerCommand(Vec3(), "fallback_hover", "hover", "no_safe_candidate")
 
-    def _nearest_obstacle_escape(self, state: PlannerState, perception: PerceptionData) -> Optional[PlannerCommand]:
-        """Only use moving escape for true near-contact LiDAR danger.
+    def _cautious_astar_ok(self, best: CandidateEvaluation, perception: PerceptionData) -> bool:
+        if best.safety.reason != "emergency_margin_violation":
+            return False
+        if not best.safety.feasible:
+            return False
+        if perception.near_field_danger:
+            return False
+        clearance = min(best.safety.min_clearance, best.safety.min_static_clearance)
+        # Keep this below the normal emergency margin but above the hard shell.
+        return clearance >= max(0.45, self.config.hard_clearance + 0.20)
 
-        Soft emergency-margin violations should stop instead of drifting around
-        the obstacle. Moving escape is reserved for very close points where a
-        pure hover may keep the vehicle inside the hard safety shell.
-        """
+    def _nearest_obstacle_escape(self, state: PlannerState, perception: PerceptionData) -> Optional[PlannerCommand]:
+        """Only use moving escape for true near-contact LiDAR danger."""
         if not perception.near_field_danger:
             self._latched_escape_until = 0.0
             return None
