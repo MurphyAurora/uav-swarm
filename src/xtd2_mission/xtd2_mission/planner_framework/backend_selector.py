@@ -66,7 +66,15 @@ class BackendSelector:
             if prefer_motion and moving_safe:
                 local_astar_safe = self._local_astar_items(moving_safe)
                 if local_astar_safe:
-                    return min(local_astar_safe, key=lambda item: item.score)
+                    return min(
+                        local_astar_safe,
+                        key=lambda item: (
+                            item.costs.get("goal", 999.0),
+                            item.costs.get("progress", 999.0),
+                            item.costs.get("lateral", 999.0),
+                            item.score,
+                        ),
+                    )
                 goal_tracking = [
                     item for item in moving_safe
                     if item.trajectory.name in ("track_goal", "slow_goal")
@@ -78,8 +86,16 @@ class BackendSelector:
                     if item.costs.get("reverse", 0.0) <= 1.0e-6
                 ]
                 if progress_safe:
-                    return min(progress_safe, key=lambda item: item.score)
-                return min(moving_safe, key=lambda item: (item.costs.get("reverse", 999.0), item.score))
+                    return min(
+                        progress_safe,
+                        key=lambda item: (
+                            item.costs.get("goal", 999.0),
+                            item.costs.get("progress", 999.0),
+                            item.costs.get("lateral", 999.0),
+                            item.score,
+                        ),
+                    )
+                return min(moving_safe, key=lambda item: (item.costs.get("reverse", 999.0), item.costs.get("goal", 999.0), item.score))
             return min(safe, key=lambda item: item.score)
         feasible = [item for item in pool if item.safety.feasible]
         if not feasible and pool is not evaluations:
@@ -89,7 +105,16 @@ class BackendSelector:
             if prefer_motion and moving_feasible:
                 local_astar_feasible = self._local_astar_items(moving_feasible)
                 if local_astar_feasible:
-                    return min(local_astar_feasible, key=lambda item: (-item.safety.min_clearance, item.score))
+                    return min(
+                        local_astar_feasible,
+                        key=lambda item: (
+                            item.costs.get("goal", 999.0),
+                            item.costs.get("progress", 999.0),
+                            item.costs.get("lateral", 999.0),
+                            -item.safety.min_clearance,
+                            item.score,
+                        ),
+                    )
                 progress_feasible = [
                     item for item in moving_feasible
                     if item.costs.get("reverse", 0.0) <= 1.0e-6
@@ -98,13 +123,14 @@ class BackendSelector:
                     return min(
                         progress_feasible,
                         key=lambda item: (
+                            item.costs.get("goal", 999.0),
                             item.costs.get("progress", 999.0),
                             item.costs.get("lateral", 999.0),
                             -item.safety.min_clearance,
                             item.score,
                         ),
                     )
-                return min(moving_feasible, key=lambda item: (item.costs.get("reverse", 999.0), -item.safety.min_clearance, item.score))
+                return min(moving_feasible, key=lambda item: (item.costs.get("reverse", 999.0), item.costs.get("goal", 999.0), -item.safety.min_clearance, item.score))
             return min(feasible, key=lambda item: (-item.safety.min_clearance, item.score))
         return min(pool, key=lambda item: (-item.safety.min_clearance, item.score)) if pool else None
 
