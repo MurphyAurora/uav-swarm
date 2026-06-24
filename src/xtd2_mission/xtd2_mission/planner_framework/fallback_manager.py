@@ -25,9 +25,9 @@ class FallbackManager:
         Pure hover is safe, but it creates a deadlock in the offline single-pillar
         smoke test: the vehicle stops before the obstacle, sees the same invalid
         forward candidate forever, and never gives local A* a new viewpoint.  This
-        fallback therefore allows a very low-speed lateral/back-lateral step when
-        there is still clear physical margin.  When clearance is already small, it
-        remains a hard stop.
+        fallback therefore allows a low-speed lateral step when there is still
+        enough physical margin.  Backward motion is only added when the obstacle is
+        closer; when clearance is small, hover remains the hard stop.
         """
         best = self._best_escape(evaluations)
         if perception.near_field_danger:
@@ -56,10 +56,10 @@ class FallbackManager:
         obs_x, obs_y, clearance = nearest
 
         # Only unstick when the obstacle is in front and there is still enough
-        # physical room.  If the checker says we are near contact, hover wins.
+        # physical room.  If we are near contact, hover wins.
         if not (0.25 <= obs_x <= 4.5 and abs(obs_y) <= 1.8):
             return None
-        if clearance < 0.55:
+        if clearance < 0.50:
             return None
         if best is not None and best.safety.min_clearance < -0.05:
             return None
@@ -78,11 +78,16 @@ class FallbackManager:
         left = Vec3(-sh, ch, 0.0)
         lateral = left * self._escape_side
 
-        # A small backward component increases clearance without reintroducing a
-        # dangerous forward component.  Keep this slow: it is a deadlock breaker,
-        # not the main planner.
-        lateral_speed = min(0.16, max(0.10, self.config.max_speed * 0.22))
-        back_speed = min(0.05, max(0.03, self.config.max_speed * 0.07))
+        # Distance-based unstick:
+        # - far from the obstacle: pure lateral motion to change the viewpoint;
+        # - medium distance: lateral plus a tiny backward component;
+        # - close: no command, handled by the hover branch above.
+        if clearance > 0.90:
+            lateral_speed = min(0.20, max(0.14, self.config.max_speed * 0.28))
+            back_speed = 0.0
+        else:
+            lateral_speed = min(0.18, max(0.12, self.config.max_speed * 0.24))
+            back_speed = min(0.025, max(0.0, self.config.max_speed * 0.035))
         return lateral * lateral_speed - forward * back_speed
 
     def _nearest_obstacle_body(self, state: PlannerState, perception: PerceptionData) -> Optional[Tuple[float, float, float]]:
