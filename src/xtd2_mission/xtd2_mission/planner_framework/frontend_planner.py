@@ -22,7 +22,7 @@ class FrontendPlanner:
             self.diagnostics = {"mode": mode, "local_astar": dict(self.local_astar.diagnostics)}
             if astar_candidate is not None:
                 candidates.append(astar_candidate)
-            escape_candidates = self._hard_zone_escape_candidates(state, perception)
+            escape_candidates = self._hard_zone_escape_candidates(state, local_goal, perception)
             if escape_candidates:
                 candidates.extend(escape_candidates)
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
@@ -51,34 +51,57 @@ class FrontendPlanner:
             points.append(TrajectoryPoint(t=t, position=start + velocity * t))
         return CandidateTrajectory(name=name, velocity=velocity, points=points)
 
-    def _hard_zone_escape_candidates(self, state: PlannerState, perception: PerceptionData) -> List[CandidateTrajectory]:
-        nearest = None
+    def _hard_zone_escape_candidates(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData) -> List[CandidateTrajectory]:
+        nearest_obs = None
         nearest_clearance = 999.0
+        nearest_rel = None
         for obs in perception.obstacles:
-            rel = state.position - obs.position_at(0.0)
-            dist_xy = math.hypot(rel.x, rel.y)
+            obs_pos = obs.position_at(0.0)
+            rel_from_obs = state.position - obs_pos
+            dist_xy = math.hypot(rel_from_obs.x, rel_from_obs.y)
             if dist_xy <= 1.0e-6:
                 continue
             clearance = dist_xy - self._execution_radius(obs)
             if clearance < nearest_clearance:
                 nearest_clearance = clearance
-                nearest = (rel.x / dist_xy, rel.y / dist_xy)
+                nearest_obs = obs
+                nearest_rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
 
-        if nearest is None:
-            return []
-        trigger = max(min(self.config.static_hard_clearance, 0.35), 0.28) + 0.08
-        if nearest_clearance > trigger:
+        if nearest_obs is None or nearest_rel is None:
             return []
 
-        ax, ay = nearest
-        px, py = -ay, ax
-        speed = min(0.18, max(0.12, self.config.max_speed * 0.25))
+        to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
+        goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
+        lateral_left = Vec3(-goal_dir.y, goal_dir.x, 0.0)
+        lateral_right = Vec3(goal_dir.y, -goal_dir.x, 0.0)
+
+        obs_forward = nearest_rel.x * goal_dir.x + nearest_rel.y * goal_dir.y
+        obs_lateral = nearest_rel.x * lateral_left.x + nearest_rel.y * lateral_left.y
+        front_obstacle = 0.2 <= obs_forward <= 4.5 and abs(obs_lateral) <= 1.8
+        trigger = max(self.config.static_emergency_clearance, 0.85)
+        if nearest_clearance > trigger and not front_obstacle:
+            return []
+
+        # Pick the side with more immediate clearance.  For a centered obstacle,
+        # try both sides, but make both candidates mostly lateral.  Do not allow a
+        # forward component here; the old escape candidates still had vx>0 and
+        # simply drove into the pillar while being labeled as escaping.
+        preferred = lateral_left if obs_lateral <= 0.0 else lateral_right
+        secondary = lateral_right if obs_lateral <= 0.0 else lateral_left
+        back = goal_dir * -1.0
+        speed = min(0.28, max(0.20, self.config.max_speed * 0.38))
+        back_speed = min(0.18, max(0.10, self.config.max_speed * 0.22))
+
         directions = [
-            ("local_escape:away", (ax, ay)),
-            ("local_escape:away_left", self._norm2(ax + 0.45 * px, ay + 0.45 * py)),
-            ("local_escape:away_right", self._norm2(ax - 0.45 * px, ay - 0.45 * py)),
+            ("local_escape:lateral_preferred", preferred, speed),
+            ("local_escape:lateral_secondary", secondary, speed * 0.85),
+            ("local_escape:back", back, back_speed),
+            ("local_escape:back_preferred", self._norm_vec(back * 0.45 + preferred), speed * 0.75),
         ]
-        return [self._rollout(name, Vec3(dx * speed, dy * speed, 0.0), state.position) for name, (dx, dy) in directions]
+        return [
+            self._rollout(name, direction * cmd_speed, state.position)
+            for name, direction, cmd_speed in directions
+        ]
 
     def _execution_radius(self, obs) -> float:
         if obs.source == "lidar_near_field":
@@ -93,3 +116,7 @@ class FrontendPlanner:
         if mag <= 1.0e-6:
             return 1.0, 0.0
         return x / mag, y / mag
+
+    @staticmethod
+    def _norm_vec(v: Vec3) -> Vec3:
+        return Vec3(v.x, v.y, 0.0).normalized(Vec3(0.0, 1.0, 0.0))
