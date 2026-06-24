@@ -36,6 +36,16 @@ class FrontendPlanner:
                     pass
 
             astar_candidate = self.local_astar.plan_candidate(state, local_goal, perception.obstacles)
+            astar_direct = bool(astar_candidate is not None and astar_candidate.name == "local_astar:direct")
+            if astar_direct:
+                # Direct tracking means LocalAStar has found a clear/rejoining
+                # corridor.  At this point escape should not compete with the
+                # main planner; otherwise rejoin_shell oscillates around the shell
+                # instead of returning to the goal line.
+                self._avoid_active = False
+                self._avoid_side = 0.0
+                self._escape_side = 0.0
+                self._avoid_until = 0.0
             self.diagnostics = {
                 "mode": mode,
                 "local_astar": dict(self.local_astar.diagnostics),
@@ -43,6 +53,7 @@ class FrontendPlanner:
                 "avoid_active": bool(self._avoid_active),
                 "avoid_side": float(self._avoid_side),
                 "avoid_until": float(self._avoid_until),
+                "astar_direct": bool(astar_direct),
             }
             if astar_candidate is not None:
                 astar_candidate.metadata["avoid_active"] = bool(self._avoid_active)
@@ -51,14 +62,15 @@ class FrontendPlanner:
                 candidates.append(astar_candidate)
 
             # Escape is a safety fallback, not the default way to pass a visible
-            # obstacle. It is only allowed when risk is already high or when A*
-            # produced no candidate. The side is latched by risk memory.
-            escape_candidates = self._hard_zone_escape_candidates(
-                state,
-                local_goal,
-                perception,
-                allow_early_escape=astar_candidate is None or self._last_risk > 0.75,
-            )
+            # obstacle. It is not allowed to override direct/rejoin tracking.
+            escape_candidates: List[CandidateTrajectory] = []
+            if not astar_direct:
+                escape_candidates = self._hard_zone_escape_candidates(
+                    state,
+                    local_goal,
+                    perception,
+                    allow_early_escape=astar_candidate is None or self._last_risk > 0.75,
+                )
             if escape_candidates:
                 candidates.extend(escape_candidates)
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
@@ -114,13 +126,9 @@ class FrontendPlanner:
                 if abs(obs_lateral) < 0.10:
                     self._avoid_side = 1.0
                 else:
-                    # If the obstacle lies below/right of the current goal line,
-                    # pass above/left; if it lies above/left, pass below/right.
                     self._avoid_side = 1.0 if obs_lateral <= 0.0 else -1.0
             self._avoid_active = True
             self._escape_side = self._avoid_side
-            # Hysteresis: keep the side latch a little after the instantaneous
-            # risk drops. This prevents left/right flipping and centerline pullback.
             self._avoid_until = max(self._avoid_until, state.stamp + 1.6)
         elif release and state.stamp > self._avoid_until:
             self._avoid_active = False
@@ -191,9 +199,6 @@ class FrontendPlanner:
                 self._escape_side = 0.0
             return []
 
-        # Use the path-memory side. Do not offer the opposite lateral candidate:
-        # when the vehicle has already moved above the obstacle, the opposite
-        # candidate pulls it back toward the centerline and creates oscillation.
         if abs(self._escape_side) < 0.5:
             if abs(self._avoid_side) > 0.5:
                 self._escape_side = self._avoid_side
