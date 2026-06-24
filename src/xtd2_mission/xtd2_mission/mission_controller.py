@@ -305,7 +305,7 @@ class MissionController(Node):
                 self._arm_timer = self.create_timer(self.offboard_retry_sleep, self._arming_step)
             else:
                 self.get_logger().warn(
-                    f'[OFFBOARD] x500_{drone_id} failed after {self.max_retries} retries, moving on, '
+                    f'[OFFBOARD] x500_{drone_id} OFFBOARD failed after {self.max_retries} retries, moving on, '
                     f'{self._status_summary(px4_ns)}'
                 )
                 self._arm_drone_idx = drone_idx + 1
@@ -314,6 +314,8 @@ class MissionController(Node):
                     self.arm_to_offboard_delay + self.inter_drone_gap,
                     self._arming_step
                 )
+
+    # ---- Helpers ----
 
     def _check_arming_state(self, px4_ns):
         """Check cached vehicle_status for arming_state == 2 (ARMED)."""
@@ -334,39 +336,83 @@ class MissionController(Node):
     # ---- Mission ----
 
     def _start_mission(self):
-        """Start the multi_waypoint2 mission logic as an independent ROS process."""
-        self.get_logger().info('Starting mission via multi_waypoint2')
+        """Start the selected mission logic as an independent ROS process."""
+        use_static_planner = os.environ.get('STATIC_LOCAL_PLANNER', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+        if use_static_planner:
+            planner_drone_id = int(os.environ.get('STATIC_PLANNER_DRONE_ID', '1'))
+            planner_drone_id = max(1, planner_drone_id)
+            if planner_drone_id > self.num_drones:
+                self.get_logger().warn(
+                    f'STATIC_PLANNER_DRONE_ID={planner_drone_id} is larger than num_drones={self.num_drones}; clamping to x500_{self.num_drones}'
+                )
+                planner_drone_id = int(self.num_drones)
 
-        mission_cmd = [
-            'ros2',
-            'run',
-            'xtd2_mission',
-            'multi_waypoint2',
-            str(self.num_drones),
-            str(self.duration),
-            str(self.leader_id),
-            str(self.wall_x),
-            str(self.wall_y),
-            str(self.wall_length),
-            str(self.target_x),
-            self.eval_mode,
-            self.mission_mode,
-            str(self.y_spacing),
-            str(self.takeoff_z),
-            str(self.mission_z),
-            str(self.formation_kp),
-            str(self.leader_track_kp),
-            str(self.max_follower_speed),
-            str(self.max_leader_speed),
-            '1' if self.use_heading_offsets else '0',
-            str(self.lf_state_timeout),
-            '1' if self.use_virtual_leader else '0',
-            self.metrics_csv_path,
-            str(self.mission_start_x),
-            '1' if self.use_spawned_formation else '0',
-            str(self.target_y),
-            str(self.virtual_lag_limit),
-        ]
+            # By default each spawned UAV keeps the same target_x/target_z, while
+            # target_y follows the SANDO per-UAV target convention:
+            # target_y_base + (id-1)*y_spacing.  Override explicitly with
+            # STATIC_PLANNER_TARGET_X/Y/Z when testing custom target points.
+            target_x = float(os.environ.get('STATIC_PLANNER_TARGET_X', str(self.target_x)))
+            default_target_y = self.target_y + (planner_drone_id - 1) * self.y_spacing
+            target_y = float(os.environ.get('STATIC_PLANNER_TARGET_Y', str(default_target_y)))
+            target_z = float(os.environ.get('STATIC_PLANNER_TARGET_Z', str(self.mission_z)))
+
+            if self.num_drones != 1:
+                self.get_logger().warn(
+                    f'STATIC_LOCAL_PLANNER controls only x500_{planner_drone_id}; other spawned UAVs are armed/offboard but not assigned this planner'
+                )
+            self.get_logger().info(
+                f'Starting mission via local_static_planner for x500_{planner_drone_id}: '
+                f'target=({target_x:.2f},{target_y:.2f},{target_z:.2f})'
+            )
+            mission_cmd = [
+                'ros2',
+                'run',
+                'xtd2_mission',
+                'local_static_planner',
+                '--drone-id', str(planner_drone_id),
+                '--state-topic', '/xtdrone2/swarm/state_exchange',
+                '--lidar-topic', f'/x500_{planner_drone_id}/lidar/points_local',
+                '--cmd-topic', f'/xtdrone2/x500_{planner_drone_id}/cmd_vel_ned',
+                '--target-x', str(target_x),
+                '--target-y', str(target_y),
+                '--target-z', str(target_z),
+                '--duration', str(self.duration),
+                '--max-speed', os.environ.get('STATIC_PLANNER_MAX_SPEED', '0.55'),
+                '--inflation-radius', os.environ.get('STATIC_PLANNER_INFLATION', '0.60'),
+                '--resolution', os.environ.get('STATIC_PLANNER_RESOLUTION', '0.25'),
+            ]
+        else:
+            self.get_logger().info('Starting mission via multi_waypoint2')
+            mission_cmd = [
+                'ros2',
+                'run',
+                'xtd2_mission',
+                'multi_waypoint2',
+                str(self.num_drones),
+                str(self.duration),
+                str(self.leader_id),
+                str(self.wall_x),
+                str(self.wall_y),
+                str(self.wall_length),
+                str(self.target_x),
+                self.eval_mode,
+                self.mission_mode,
+                str(self.y_spacing),
+                str(self.takeoff_z),
+                str(self.mission_z),
+                str(self.formation_kp),
+                str(self.leader_track_kp),
+                str(self.max_follower_speed),
+                str(self.max_leader_speed),
+                '1' if self.use_heading_offsets else '0',
+                str(self.lf_state_timeout),
+                '1' if self.use_virtual_leader else '0',
+                self.metrics_csv_path,
+                str(self.mission_start_x),
+                '1' if self.use_spawned_formation else '0',
+                str(self.target_y),
+                str(self.virtual_lag_limit),
+            ]
 
         try:
             self._mission_process = subprocess.Popen(mission_cmd, env=os.environ.copy())
@@ -403,7 +449,3 @@ def main():
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
-
-
-if __name__ == '__main__':
-    main()

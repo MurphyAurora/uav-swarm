@@ -38,6 +38,7 @@ setup(
             'collision_risk_monitor = xtd2_mission.collision_risk_monitor:main',
             'motion_primitive_selector = xtd2_mission.motion_primitive_selector:main',
             'lidar_ttc_safety_filter = xtd2_mission.lidar_ttc_safety_filter:main',
+            'local_static_planner = xtd2_mission.local_static_planner:main',
             'multi_waypoint2 = xtd2_mission.multi_waypoint2:main',
             'mission_controller = xtd2_mission.mission_controller:main',
             'obstacle_config = xtd2_mission.obstacle_config:main',
