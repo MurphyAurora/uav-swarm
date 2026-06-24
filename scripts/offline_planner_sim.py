@@ -82,6 +82,31 @@ def build_cases() -> Dict[str, SimCase]:
             ),
             steps=450,
         ),
+        "narrow_corridor": SimCase(
+            name="narrow_corridor",
+            start=Vec3(0.0, 0.0, -3.0),
+            goal=Vec3(13.0, 0.0, -3.0),
+            obstacles=(
+                # Two staggered obstacle rows create a real corridor-like test.
+                # The free space outside the rows exists in the plot, but reaching
+                # it requires a clear detour; the intended local optimum is to keep
+                # the path inside the channel and avoid mode switching.
+                CircleObstacle(2.6, 1.35, 0.45, obstacle_id="top_1"),
+                CircleObstacle(4.4, 1.35, 0.45, obstacle_id="top_2"),
+                CircleObstacle(6.2, 1.35, 0.45, obstacle_id="top_3"),
+                CircleObstacle(8.0, 1.35, 0.45, obstacle_id="top_4"),
+                CircleObstacle(9.8, 1.35, 0.45, obstacle_id="top_5"),
+                CircleObstacle(3.5, -1.35, 0.45, obstacle_id="bottom_1"),
+                CircleObstacle(5.3, -1.35, 0.45, obstacle_id="bottom_2"),
+                CircleObstacle(7.1, -1.35, 0.45, obstacle_id="bottom_3"),
+                CircleObstacle(8.9, -1.35, 0.45, obstacle_id="bottom_4"),
+                CircleObstacle(10.7, -1.35, 0.45, obstacle_id="bottom_5"),
+                # A slight center disturbance forces local steering without making
+                # the corridor geometrically impossible.
+                CircleObstacle(6.4, 0.35, 0.28, obstacle_id="center_bias"),
+            ),
+            steps=650,
+        ),
     }
 
 
