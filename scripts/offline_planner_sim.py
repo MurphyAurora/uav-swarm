@@ -82,30 +82,68 @@ def build_cases() -> Dict[str, SimCase]:
             ),
             steps=450,
         ),
+        "narrow_corridor_easy": SimCase(
+            name="narrow_corridor_easy",
+            start=Vec3(0.0, 0.0, -3.0),
+            goal=Vec3(13.0, 0.0, -3.0),
+            obstacles=(
+                # Wide corridor without a center obstacle.  This is the first
+                # corridor-lock smoke test: the expected behavior is stable direct
+                # traversal inside the channel, not a detour outside the rows.
+                CircleObstacle(2.8, 1.75, 0.40, obstacle_id="top_1"),
+                CircleObstacle(4.8, 1.75, 0.40, obstacle_id="top_2"),
+                CircleObstacle(6.8, 1.75, 0.40, obstacle_id="top_3"),
+                CircleObstacle(8.8, 1.75, 0.40, obstacle_id="top_4"),
+                CircleObstacle(10.8, 1.75, 0.40, obstacle_id="top_5"),
+                CircleObstacle(2.8, -1.75, 0.40, obstacle_id="bottom_1"),
+                CircleObstacle(4.8, -1.75, 0.40, obstacle_id="bottom_2"),
+                CircleObstacle(6.8, -1.75, 0.40, obstacle_id="bottom_3"),
+                CircleObstacle(8.8, -1.75, 0.40, obstacle_id="bottom_4"),
+                CircleObstacle(10.8, -1.75, 0.40, obstacle_id="bottom_5"),
+            ),
+            steps=650,
+        ),
         "narrow_corridor": SimCase(
             name="narrow_corridor",
             start=Vec3(0.0, 0.0, -3.0),
             goal=Vec3(13.0, 0.0, -3.0),
             obstacles=(
-                # Two staggered obstacle rows create a real corridor-like test.
-                # The free space outside the rows exists in the plot, but reaching
-                # it requires a clear detour; the intended local optimum is to keep
-                # the path inside the channel and avoid mode switching.
-                CircleObstacle(2.6, 1.35, 0.45, obstacle_id="top_1"),
-                CircleObstacle(4.4, 1.35, 0.45, obstacle_id="top_2"),
-                CircleObstacle(6.2, 1.35, 0.45, obstacle_id="top_3"),
-                CircleObstacle(8.0, 1.35, 0.45, obstacle_id="top_4"),
-                CircleObstacle(9.8, 1.35, 0.45, obstacle_id="top_5"),
-                CircleObstacle(3.5, -1.35, 0.45, obstacle_id="bottom_1"),
-                CircleObstacle(5.3, -1.35, 0.45, obstacle_id="bottom_2"),
-                CircleObstacle(7.1, -1.35, 0.45, obstacle_id="bottom_3"),
-                CircleObstacle(8.9, -1.35, 0.45, obstacle_id="bottom_4"),
-                CircleObstacle(10.7, -1.35, 0.45, obstacle_id="bottom_5"),
-                # A slight center disturbance forces local steering without making
-                # the corridor geometrically impossible.
-                CircleObstacle(6.4, 0.35, 0.28, obstacle_id="center_bias"),
+                # Medium corridor with staggered rows.  Use this after the easy
+                # corridor passes; it tests whether same-side memory and corridor
+                # lock remain stable when the center line has mild local pressure.
+                CircleObstacle(2.8, 1.60, 0.42, obstacle_id="top_1"),
+                CircleObstacle(4.7, 1.55, 0.42, obstacle_id="top_2"),
+                CircleObstacle(6.6, 1.60, 0.42, obstacle_id="top_3"),
+                CircleObstacle(8.5, 1.55, 0.42, obstacle_id="top_4"),
+                CircleObstacle(10.4, 1.60, 0.42, obstacle_id="top_5"),
+                CircleObstacle(3.7, -1.60, 0.42, obstacle_id="bottom_1"),
+                CircleObstacle(5.6, -1.55, 0.42, obstacle_id="bottom_2"),
+                CircleObstacle(7.5, -1.60, 0.42, obstacle_id="bottom_3"),
+                CircleObstacle(9.4, -1.55, 0.42, obstacle_id="bottom_4"),
+                CircleObstacle(11.3, -1.60, 0.42, obstacle_id="bottom_5"),
             ),
             steps=650,
+        ),
+        "narrow_corridor_bias": SimCase(
+            name="narrow_corridor_bias",
+            start=Vec3(0.0, 0.0, -3.0),
+            goal=Vec3(13.0, 0.0, -3.0),
+            obstacles=(
+                # Harder corridor with a small center perturbation.  This should
+                # be tested only after narrow_corridor_easy and narrow_corridor pass.
+                CircleObstacle(2.8, 1.55, 0.42, obstacle_id="top_1"),
+                CircleObstacle(4.7, 1.55, 0.42, obstacle_id="top_2"),
+                CircleObstacle(6.6, 1.55, 0.42, obstacle_id="top_3"),
+                CircleObstacle(8.5, 1.55, 0.42, obstacle_id="top_4"),
+                CircleObstacle(10.4, 1.55, 0.42, obstacle_id="top_5"),
+                CircleObstacle(3.7, -1.55, 0.42, obstacle_id="bottom_1"),
+                CircleObstacle(5.6, -1.55, 0.42, obstacle_id="bottom_2"),
+                CircleObstacle(7.5, -1.55, 0.42, obstacle_id="bottom_3"),
+                CircleObstacle(9.4, -1.55, 0.42, obstacle_id="bottom_4"),
+                CircleObstacle(11.3, -1.55, 0.42, obstacle_id="bottom_5"),
+                CircleObstacle(6.4, 0.45, 0.20, obstacle_id="center_bias"),
+            ),
+            steps=700,
         ),
     }
 
