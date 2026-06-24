@@ -67,11 +67,26 @@ class SafetyChecker:
         if escape_ok or rejoin_ok:
             hard_ok = True
             static_ok = True
+
+        # TTC constraint: if the commanded velocity is closing on an obstacle and
+        # predicted contact is imminent, the trajectory is not feasible even if
+        # point-sampled clearance has not crossed the hard margin yet.  This is
+        # intentionally conservative and only activates in the near shell, so it
+        # does not veto wide tangential bypasses.
+        ttc_violation = self._ttc_hard_violation(trajectory, min_ttc, min_clearance, min_static_clearance)
+        if ttc_violation:
+            hard_ok = False
+            static_ok = False
+            escape_ok = False
+            rejoin_ok = False
+
         feasible = bool(hard_ok and static_ok)
         safe = bool(feasible and min_clearance >= emergency_margin and min_static_clearance >= static_emergency_margin)
 
         reason = "ok"
-        if rejoin_ok and not safe:
+        if ttc_violation:
+            reason = "ttc_violation"
+        elif rejoin_ok and not safe:
             reason = "rejoining_corridor"
         elif escape_ok and not safe:
             reason = "escaping_hard_zone"
@@ -88,14 +103,8 @@ class SafetyChecker:
 
     def _safety_radius(self, obs: Obstacle) -> float:
         if obs.source == "lidar_near_field":
-            # LiDAR obstacles are already inflated in the local A* grid.  Keep a
-            # smaller execution margin here so the SafetyChecker does not veto
-            # every passable side gap after A* has found a route.
             return self.config.drone_radius + float(obs.radius) + 0.20
         if obs.source == "static":
-            # Known-map obstacles are already represented in the local A* grid.
-            # Keep this hard gate aligned with the grid/path clearance and let
-            # the final LiDAR TTC shield handle last-centimeter contact risk.
             return self.config.drone_radius + float(obs.radius) + min(self.config.obstacle_margin, 0.10)
         return self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin
 
@@ -135,11 +144,6 @@ class SafetyChecker:
         if current >= 998.0 or future_min >= 998.0 or final >= 998.0:
             return False
 
-        # Escape is only allowed when the candidate does not dig deeper into the
-        # hard shell and ends with a clear improvement.  Static safety radius has
-        # a small extra execution margin, so -0.05 is still outside physical
-        # contact; anything lower is treated as contact-level risk and must be
-        # rejected instead of being labeled as escaping_hard_zone.
         contact_floor = -0.05
         if future_min < contact_floor or final < contact_floor:
             return False
@@ -160,9 +164,16 @@ class SafetyChecker:
         body_x = float(body_velocity.get("x", 0.0) or 0.0)
         if body_x < 0.04:
             return False
-        # This is a narrow bridge out of the hard shell for rejoining the clear
-        # corridor.  Do not allow it if any checker sees contact-level clearance.
         return min_clearance >= 0.05 and min_static_clearance >= 0.05
+
+    @staticmethod
+    def _ttc_hard_violation(trajectory: CandidateTrajectory, min_ttc: float, min_clearance: float, min_static_clearance: float) -> bool:
+        if trajectory.velocity.norm() <= 1.0e-6:
+            return False
+        if min_ttc >= 0.80:
+            return False
+        near_clearance = min(min_clearance, min_static_clearance)
+        return near_clearance < 0.45
 
     def _estimate_ttc(self, uav_position: Vec3, uav_velocity: Vec3, obs: Obstacle) -> float:
         rel_pos = obs.position_at(0.0) - uav_position
