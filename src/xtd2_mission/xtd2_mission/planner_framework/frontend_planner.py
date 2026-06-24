@@ -37,11 +37,12 @@ class FrontendPlanner:
 
             astar_candidate = self.local_astar.plan_candidate(state, local_goal, perception.obstacles)
             astar_direct = bool(astar_candidate is not None and astar_candidate.name == "local_astar:direct")
-            if astar_direct:
-                # Direct tracking means LocalAStar has found a clear/rejoining
-                # corridor.  At this point escape should not compete with the
-                # main planner; otherwise rejoin_shell oscillates around the shell
-                # instead of returning to the goal line.
+            low_risk_direct = bool(astar_direct and risk.get("risk", 1.0) < 0.25 and not risk.get("front_obstacle", False))
+            if low_risk_direct:
+                # Direct tracking only releases the avoidance memory when the risk
+                # field is low.  A direct candidate with high risk is a narrow/early
+                # rejoin, not a real clearance event, and escape must still be able
+                # to keep the vehicle off the obstacle shell.
                 self._avoid_active = False
                 self._avoid_side = 0.0
                 self._escape_side = 0.0
@@ -54,6 +55,7 @@ class FrontendPlanner:
                 "avoid_side": float(self._avoid_side),
                 "avoid_until": float(self._avoid_until),
                 "astar_direct": bool(astar_direct),
+                "low_risk_direct": bool(low_risk_direct),
             }
             if astar_candidate is not None:
                 astar_candidate.metadata["avoid_active"] = bool(self._avoid_active)
@@ -62,14 +64,15 @@ class FrontendPlanner:
                 candidates.append(astar_candidate)
 
             # Escape is a safety fallback, not the default way to pass a visible
-            # obstacle. It is not allowed to override direct/rejoin tracking.
+            # obstacle. It is not allowed to override a low-risk direct rejoin, but
+            # it remains available for high-risk direct candidates.
             escape_candidates: List[CandidateTrajectory] = []
-            if not astar_direct:
+            if not low_risk_direct:
                 escape_candidates = self._hard_zone_escape_candidates(
                     state,
                     local_goal,
                     perception,
-                    allow_early_escape=astar_candidate is None or self._last_risk > 0.75,
+                    allow_early_escape=astar_candidate is None or self._last_risk > 0.55,
                 )
             if escape_candidates:
                 candidates.extend(escape_candidates)
