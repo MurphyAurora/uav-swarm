@@ -135,10 +135,17 @@ class SafetyChecker:
         if current >= 998.0 or future_min >= 998.0 or final >= 998.0:
             return False
 
-        # Once inside the hard shell, the start point itself is necessarily
-        # invalid.  Allow only trajectories that do not dig deeper and that end
-        # with a meaningful clearance increase.
-        return future_min >= current - 0.03 and final >= current + 0.025
+        # Escape is only allowed when the candidate does not dig deeper into the
+        # hard shell and ends with a clear improvement.  Static safety radius has
+        # a small extra execution margin, so -0.05 is still outside physical
+        # contact; anything lower is treated as contact-level risk and must be
+        # rejected instead of being labeled as escaping_hard_zone.
+        contact_floor = -0.05
+        if future_min < contact_floor or final < contact_floor:
+            return False
+        if future_min < current - 0.005:
+            return False
+        return final >= current + 0.08
 
     def _forward_rejoin_ok(self, trajectory: CandidateTrajectory, min_clearance: float, min_static_clearance: float) -> bool:
         if not trajectory.name.startswith("local_astar:"):
@@ -147,16 +154,15 @@ class SafetyChecker:
         if bool(meta.get("front_blocked", False)) or bool(meta.get("corridor_blocked", False)):
             return False
         path_clearance = float(meta.get("path_clearance", meta.get("min_path_clearance", 0.0)) or 0.0)
-        if path_clearance < max(1.02, self.config.drone_radius + 0.18 + 0.18 + 0.28):
+        if path_clearance < max(0.70, self.config.drone_radius + 0.20):
             return False
         body_velocity = meta.get("body_velocity") or {}
         body_x = float(body_velocity.get("x", 0.0) or 0.0)
         if body_x < 0.04:
             return False
         # This is a narrow bridge out of the hard shell for rejoining the clear
-        # corridor.  Do not allow it if any checker sees actual contact-level
-        # clearance.
-        return min_clearance >= 0.10 and min_static_clearance >= 0.10
+        # corridor.  Do not allow it if any checker sees contact-level clearance.
+        return min_clearance >= 0.05 and min_static_clearance >= 0.05
 
     def _estimate_ttc(self, uav_position: Vec3, uav_velocity: Vec3, obs: Obstacle) -> float:
         rel_pos = obs.position_at(0.0) - uav_position
