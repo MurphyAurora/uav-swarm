@@ -22,7 +22,18 @@ class FrontendPlanner:
             self.diagnostics = {"mode": mode, "local_astar": dict(self.local_astar.diagnostics)}
             if astar_candidate is not None:
                 candidates.append(astar_candidate)
-            escape_candidates = self._hard_zone_escape_candidates(state, local_goal, perception)
+
+            # Escape is a safety fallback, not the default way to pass a visible
+            # obstacle.  If local A* produced a candidate, only add escape when
+            # the current clearance is already close to the emergency shell.
+            # Otherwise the lateral-only escape candidates can dominate the
+            # backend and cause side-to-side oscillation far before the obstacle.
+            escape_candidates = self._hard_zone_escape_candidates(
+                state,
+                local_goal,
+                perception,
+                allow_early_escape=astar_candidate is None,
+            )
             if escape_candidates:
                 candidates.extend(escape_candidates)
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
@@ -51,7 +62,8 @@ class FrontendPlanner:
             points.append(TrajectoryPoint(t=t, position=start + velocity * t))
         return CandidateTrajectory(name=name, velocity=velocity, points=points)
 
-    def _hard_zone_escape_candidates(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData) -> List[CandidateTrajectory]:
+    def _hard_zone_escape_candidates(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData,
+                                     allow_early_escape: bool = False) -> List[CandidateTrajectory]:
         nearest_obs = None
         nearest_clearance = 999.0
         nearest_rel = None
@@ -77,26 +89,25 @@ class FrontendPlanner:
 
         obs_forward = nearest_rel.x * goal_dir.x + nearest_rel.y * goal_dir.y
         obs_lateral = nearest_rel.x * lateral_left.x + nearest_rel.y * lateral_left.y
-        front_obstacle = 0.2 <= obs_forward <= 4.5 and abs(obs_lateral) <= 1.8
-        trigger = max(self.config.static_emergency_clearance, 0.85)
-        if nearest_clearance > trigger and not front_obstacle:
+        front_obstacle = 0.2 <= obs_forward <= 3.8 and abs(obs_lateral) <= 1.5
+        close_trigger = max(self.config.static_emergency_clearance, 0.65)
+        if nearest_clearance > close_trigger and not (allow_early_escape and front_obstacle):
             return []
 
         # Pick the side with more immediate clearance.  For a centered obstacle,
-        # try both sides, but make both candidates mostly lateral.  Do not allow a
-        # forward component here; the old escape candidates still had vx>0 and
-        # simply drove into the pillar while being labeled as escaping.
+        # try both sides, but keep both candidates mostly lateral.  Escape is only
+        # used close to the obstacle or when local A* failed to produce a path.
         preferred = lateral_left if obs_lateral <= 0.0 else lateral_right
         secondary = lateral_right if obs_lateral <= 0.0 else lateral_left
         back = goal_dir * -1.0
-        speed = min(0.28, max(0.20, self.config.max_speed * 0.38))
-        back_speed = min(0.18, max(0.10, self.config.max_speed * 0.22))
+        speed = min(0.24, max(0.18, self.config.max_speed * 0.32))
+        back_speed = min(0.16, max(0.10, self.config.max_speed * 0.20))
 
         directions = [
             ("local_escape:lateral_preferred", preferred, speed),
-            ("local_escape:lateral_secondary", secondary, speed * 0.85),
+            ("local_escape:lateral_secondary", secondary, speed * 0.80),
             ("local_escape:back", back, back_speed),
-            ("local_escape:back_preferred", self._norm_vec(back * 0.45 + preferred), speed * 0.75),
+            ("local_escape:back_preferred", self._norm_vec(back * 0.45 + preferred), speed * 0.70),
         ]
         return [
             self._rollout(name, direction * cmd_speed, state.position)
