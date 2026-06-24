@@ -20,6 +20,15 @@ class CommandOutput:
             self._has_last = True
             return PlannerCommand(Vec3(), command.mode, command.source_trajectory, command.reason)
 
+        # Safety escape commands must be allowed to change direction immediately.
+        # In offline smoke tests the previous goal-tracking velocity can otherwise
+        # be smoothed into the escape command, leaving a dangerous forward component
+        # that keeps driving toward the obstacle.
+        if command.source_trajectory.startswith("local_escape:"):
+            self._last_velocity = raw
+            self._has_last = True
+            return PlannerCommand(raw, command.mode, command.source_trajectory, command.reason)
+
         if not self._has_last:
             self._last_velocity = raw
             self._has_last = True
