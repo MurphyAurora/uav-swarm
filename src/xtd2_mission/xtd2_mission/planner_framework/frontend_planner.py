@@ -13,6 +13,7 @@ class FrontendPlanner:
         self.config = config or PlannerConfig()
         self.local_astar = LocalAStarPlanner(self.config)
         self.diagnostics = {}
+        self._escape_side = 0.0
 
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         candidates: List[CandidateTrajectory] = []
@@ -39,6 +40,7 @@ class FrontendPlanner:
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
         else:
             self.diagnostics = {"mode": mode}
+            self._escape_side = 0.0
             candidates.append(self._rollout("track_goal", self._desired_velocity_towards_goal(state, local_goal), state.position))
         return candidates
 
@@ -80,6 +82,7 @@ class FrontendPlanner:
                 nearest_rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
 
         if nearest_obs is None or nearest_rel is None:
+            self._escape_side = 0.0
             return []
 
         to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
@@ -92,22 +95,28 @@ class FrontendPlanner:
         front_obstacle = 0.2 <= obs_forward <= 3.8 and abs(obs_lateral) <= 1.5
         close_trigger = max(self.config.static_emergency_clearance, 0.65)
         if nearest_clearance > close_trigger and not (allow_early_escape and front_obstacle):
+            if nearest_clearance > close_trigger + 0.20:
+                self._escape_side = 0.0
             return []
 
-        # Pick the side with more immediate clearance.  For a centered obstacle,
-        # try both sides, but keep both candidates mostly lateral.  Escape is only
-        # used close to the obstacle or when local A* failed to produce a path.
-        preferred = lateral_left if obs_lateral <= 0.0 else lateral_right
-        secondary = lateral_right if obs_lateral <= 0.0 else lateral_left
+        # Latch the escape side.  Do not offer the opposite lateral candidate here:
+        # when the vehicle has already moved above the obstacle, the opposite
+        # candidate pulls it back toward the centerline and creates the saw-tooth
+        # reversal seen in the offline plot.
+        if abs(self._escape_side) < 0.5:
+            if abs(obs_lateral) < 0.10:
+                self._escape_side = 1.0
+            else:
+                self._escape_side = 1.0 if obs_lateral <= 0.0 else -1.0
+        preferred = lateral_left if self._escape_side > 0.0 else lateral_right
         back = goal_dir * -1.0
         speed = min(0.24, max(0.18, self.config.max_speed * 0.32))
-        back_speed = min(0.16, max(0.10, self.config.max_speed * 0.20))
+        back_speed = min(0.14, max(0.08, self.config.max_speed * 0.18))
 
         directions = [
-            ("local_escape:lateral_preferred", preferred, speed),
-            ("local_escape:lateral_secondary", secondary, speed * 0.80),
+            ("local_escape:lateral_latched", preferred, speed),
+            ("local_escape:back_latched", self._norm_vec(back * 0.35 + preferred), speed * 0.65),
             ("local_escape:back", back, back_speed),
-            ("local_escape:back_preferred", self._norm_vec(back * 0.45 + preferred), speed * 0.70),
         ]
         return [
             self._rollout(name, direction * cmd_speed, state.position)
