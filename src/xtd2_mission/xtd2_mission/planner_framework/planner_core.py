@@ -28,6 +28,13 @@ class EgoLikePlannerCore:
         self._planning_heading: Optional[float] = None
         self._planning_heading_desired: Optional[float] = None
 
+    @staticmethod
+    def _planner_now(state: PlannerState) -> float:
+        try:
+            return float(state.stamp)
+        except (TypeError, ValueError):
+            return time.time()
+
     def set_waypoints(self, waypoints: Sequence[Vec3], reset: bool = True) -> None:
         self.goal_manager.set_waypoints(waypoints, reset=reset)
         if reset:
@@ -37,7 +44,7 @@ class EgoLikePlannerCore:
 
     def plan(self, state: PlannerState, final_goal: Vec3, perception: Optional[PerceptionData] = None) -> Dict:
         perception = perception or PerceptionData()
-        now = time.time()
+        now = self._planner_now(state)
         dt = None if self._last_plan_time is None else max(0.0, now - self._last_plan_time)
         self._last_plan_time = now
 
@@ -259,7 +266,7 @@ class EgoLikePlannerCore:
     def _goal_progress_guard(self, command: PlannerCommand, state: PlannerState, local_goal: Vec3) -> PlannerCommand:
         if command.velocity.norm() <= 1.0e-6:
             return command
-        if command.source_trajectory.startswith("local_escape:"):
+        if command.source_trajectory.startswith("local_escape:") or command.mode == "fallback_escape":
             return command
         to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
         dist = to_goal.norm()
