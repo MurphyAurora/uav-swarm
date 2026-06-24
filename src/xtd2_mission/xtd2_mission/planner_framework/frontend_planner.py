@@ -14,26 +14,50 @@ class FrontendPlanner:
         self.local_astar = LocalAStarPlanner(self.config)
         self.diagnostics = {}
         self._escape_side = 0.0
+        self._avoid_active = False
+        self._avoid_side = 0.0
+        self._avoid_until = 0.0
+        self._last_risk = 0.0
 
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         candidates: List[CandidateTrajectory] = []
         mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
+            risk = self._update_risk_memory(state, local_goal, perception)
+            if self._avoid_active and abs(self._avoid_side) > 0.5:
+                # Feed the same-side memory into LocalAStarPlanner/LocalSubgoalSelector.
+                # This is the path-memory buffer: once the vehicle chooses a side,
+                # subgoal sampling keeps using that side until the obstacle is
+                # actually cleared instead of oscillating back toward the centerline.
+                try:
+                    self.local_astar._side_latch = self._avoid_side
+                    self.local_astar._side_latch_until = max(getattr(self.local_astar, "_side_latch_until", 0.0), state.stamp + 1.2)
+                except Exception:
+                    pass
+
             astar_candidate = self.local_astar.plan_candidate(state, local_goal, perception.obstacles)
-            self.diagnostics = {"mode": mode, "local_astar": dict(self.local_astar.diagnostics)}
+            self.diagnostics = {
+                "mode": mode,
+                "local_astar": dict(self.local_astar.diagnostics),
+                "risk_field": dict(risk),
+                "avoid_active": bool(self._avoid_active),
+                "avoid_side": float(self._avoid_side),
+                "avoid_until": float(self._avoid_until),
+            }
             if astar_candidate is not None:
+                astar_candidate.metadata["avoid_active"] = bool(self._avoid_active)
+                astar_candidate.metadata["avoid_side"] = float(self._avoid_side)
+                astar_candidate.metadata["risk"] = float(self._last_risk)
                 candidates.append(astar_candidate)
 
             # Escape is a safety fallback, not the default way to pass a visible
-            # obstacle.  If local A* produced a candidate, only add escape when
-            # the current clearance is already close to the emergency shell.
-            # Otherwise the lateral-only escape candidates can dominate the
-            # backend and cause side-to-side oscillation far before the obstacle.
+            # obstacle. It is only allowed when risk is already high or when A*
+            # produced no candidate. The side is latched by risk memory.
             escape_candidates = self._hard_zone_escape_candidates(
                 state,
                 local_goal,
                 perception,
-                allow_early_escape=astar_candidate is None,
+                allow_early_escape=astar_candidate is None or self._last_risk > 0.75,
             )
             if escape_candidates:
                 candidates.extend(escape_candidates)
@@ -41,6 +65,8 @@ class FrontendPlanner:
         else:
             self.diagnostics = {"mode": mode}
             self._escape_side = 0.0
+            self._avoid_active = False
+            self._avoid_side = 0.0
             candidates.append(self._rollout("track_goal", self._desired_velocity_towards_goal(state, local_goal), state.position))
         return candidates
 
@@ -63,6 +89,72 @@ class FrontendPlanner:
             t = idx * self.config.dt
             points.append(TrajectoryPoint(t=t, position=start + velocity * t))
         return CandidateTrajectory(name=name, velocity=velocity, points=points)
+
+    def _update_risk_memory(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData) -> dict:
+        nearest = self._nearest_context(state, local_goal, perception)
+        if nearest is None:
+            self._last_risk = 0.0
+            if state.stamp > self._avoid_until:
+                self._avoid_active = False
+                self._avoid_side = 0.0
+                self._escape_side = 0.0
+            return {"risk": 0.0, "nearest": None}
+
+        obs_forward, obs_lateral, clearance, dist = nearest
+        front_obstacle = 0.2 <= obs_forward <= 4.5 and abs(obs_lateral) <= 1.8
+        clearance_risk = max(0.0, min(1.0, (1.45 - clearance) / 1.10))
+        alignment_risk = max(0.0, min(1.0, 1.0 - abs(obs_lateral) / 1.8)) if front_obstacle else 0.0
+        risk = max(clearance_risk, alignment_risk * 0.85)
+        self._last_risk = float(risk)
+
+        enter = front_obstacle and risk >= 0.35
+        release = (not front_obstacle) or clearance >= 1.45 or obs_forward < -0.25 or (obs_forward > 3.2 and abs(obs_lateral) >= 1.65)
+        if enter:
+            if not self._avoid_active or abs(self._avoid_side) < 0.5:
+                if abs(obs_lateral) < 0.10:
+                    self._avoid_side = 1.0
+                else:
+                    # If the obstacle lies below/right of the current goal line,
+                    # pass above/left; if it lies above/left, pass below/right.
+                    self._avoid_side = 1.0 if obs_lateral <= 0.0 else -1.0
+            self._avoid_active = True
+            self._escape_side = self._avoid_side
+            # Hysteresis: keep the side latch a little after the instantaneous
+            # risk drops. This prevents left/right flipping and centerline pullback.
+            self._avoid_until = max(self._avoid_until, state.stamp + 1.6)
+        elif release and state.stamp > self._avoid_until:
+            self._avoid_active = False
+            self._avoid_side = 0.0
+            self._escape_side = 0.0
+
+        return {
+            "risk": float(risk),
+            "front_obstacle": bool(front_obstacle),
+            "obs_forward": float(obs_forward),
+            "obs_lateral": float(obs_lateral),
+            "clearance": float(clearance),
+            "dist": float(dist),
+            "release": bool(release),
+        }
+
+    def _nearest_context(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData):
+        to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
+        goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
+        lateral_left = Vec3(-goal_dir.y, goal_dir.x, 0.0)
+        best = None
+        best_dist = 999.0
+        for obs in perception.obstacles:
+            obs_pos = obs.position_at(0.0)
+            rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
+            dist = rel.norm()
+            if dist <= 1.0e-6 or dist >= best_dist:
+                continue
+            clearance = dist - self._execution_radius(obs)
+            obs_forward = rel.x * goal_dir.x + rel.y * goal_dir.y
+            obs_lateral = rel.x * lateral_left.x + rel.y * lateral_left.y
+            best = (obs_forward, obs_lateral, clearance, dist)
+            best_dist = dist
+        return best
 
     def _hard_zone_escape_candidates(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData,
                                      allow_early_escape: bool = False) -> List[CandidateTrajectory]:
@@ -95,16 +187,17 @@ class FrontendPlanner:
         front_obstacle = 0.2 <= obs_forward <= 3.8 and abs(obs_lateral) <= 1.5
         close_trigger = max(self.config.static_emergency_clearance, 0.65)
         if nearest_clearance > close_trigger and not (allow_early_escape and front_obstacle):
-            if nearest_clearance > close_trigger + 0.20:
+            if nearest_clearance > close_trigger + 0.20 and not self._avoid_active:
                 self._escape_side = 0.0
             return []
 
-        # Latch the escape side.  Do not offer the opposite lateral candidate here:
+        # Use the path-memory side. Do not offer the opposite lateral candidate:
         # when the vehicle has already moved above the obstacle, the opposite
-        # candidate pulls it back toward the centerline and creates the saw-tooth
-        # reversal seen in the offline plot.
+        # candidate pulls it back toward the centerline and creates oscillation.
         if abs(self._escape_side) < 0.5:
-            if abs(obs_lateral) < 0.10:
+            if abs(self._avoid_side) > 0.5:
+                self._escape_side = self._avoid_side
+            elif abs(obs_lateral) < 0.10:
                 self._escape_side = 1.0
             else:
                 self._escape_side = 1.0 if obs_lateral <= 0.0 else -1.0
