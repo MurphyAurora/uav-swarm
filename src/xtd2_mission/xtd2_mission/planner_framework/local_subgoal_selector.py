@@ -40,6 +40,7 @@ class LocalSubgoalSelector:
         target_angle = math.atan2(target_body[1], target_body[0])
         target_norm = max(math.hypot(target_body[0], target_body[1]), 1.0e-6)
         target_unit = (target_body[0] / target_norm, target_body[1] / target_norm)
+        corridor_blocked = self._target_corridor_blocked(local_map.points, target_unit)
 
         for cell, label in raw_candidates:
             path = astar_fn(local_map, start, cell)
@@ -62,30 +63,48 @@ class LocalSubgoalSelector:
                 continue
             end_angle = math.atan2(end_y, end_x)
             angle_error = abs(self._angle_diff(end_angle, target_angle))
-            lateral = abs(-target_unit[1] * end_x + target_unit[0] * end_y)
+            lateral_signed = -target_unit[1] * end_x + target_unit[0] * end_y
+            lateral = abs(lateral_signed)
             if abs(side_hint) > 0.5 and lateral < 0.45:
                 continue
             length = path_length_fn(path)
             safe_deficit = max(0.0, safe_clearance - clear)
             side_penalty = 0.0
             if abs(side_hint) > 0.5:
-                if end_y * side_hint < 0.15:
+                if lateral_signed * side_hint < 0.15:
                     side_penalty += 25.0
                 else:
-                    side_penalty -= 1.5
-            # Score resembles mature local planners: prefer reachable progress,
-            # adequate clearance, short/smooth path, and avoid unnecessary lateral
-            # detours when there is a good forward option.
+                    side_penalty -= 2.0
+
+            # When the direct mission corridor is blocked, a shallow 35deg/1.4m
+            # subgoal often only grazes the obstacle shell and later triggers
+            # fallback/escape.  Mature local planners deliberately commit to a
+            # deeper same-side bypass first, then rejoin after the obstacle is
+            # cleared.  Encourage that behavior here by rewarding adequate lateral
+            # offset and penalizing very shallow subgoals while the corridor is
+            # blocked.
+            bypass_bonus = 0.0
+            if corridor_blocked:
+                if lateral < 0.85:
+                    bypass_bonus += 6.0
+                elif lateral < 1.15:
+                    bypass_bonus += 1.5
+                else:
+                    bypass_bonus -= 1.5
+                if progress < 1.8:
+                    bypass_bonus += 3.0
+
             score = (
                 1.00 * length
-                + 1.40 * angle_error
-                + 0.35 * lateral
-                + 0.45 * turn_cost
-                + 7.50 * safe_deficit
+                + 1.15 * angle_error
+                + 0.18 * lateral
+                + 0.40 * turn_cost
+                + 6.50 * safe_deficit
                 - 0.55 * progress
                 - 0.35 * forward_score
-                - 0.10 * min(clear, 3.0)
+                - 0.12 * min(clear, 3.0)
                 + side_penalty
+                + bypass_bonus
             )
             scored.append(
                 {
@@ -109,6 +128,7 @@ class LocalSubgoalSelector:
             "subgoal_reachable": len(scored),
             "subgoal_best": self._short_item(scored[0]) if scored else None,
             "side_hint": float(side_hint),
+            "corridor_blocked": bool(corridor_blocked),
         }
         return scored[0] if scored else None
 
@@ -120,11 +140,16 @@ class LocalSubgoalSelector:
         side_hint: float,
     ) -> List[Tuple[GridIndex, str]]:
         target_angle = math.atan2(target_body[1], target_body[0])
-        radii = [1.4, 2.0, 2.8, 3.6, min(4.5, max(3.2, self.config.astar_local_goal_dist))]
+        # Skip the very short 1.4m radius unless a side hint is active.  In the
+        # single-pillar smoke test it repeatedly chooses a shallow bypass that
+        # cannot clear the inflated obstacle shell.  Deeper 2.0/2.8/3.6m subgoals
+        # better approximate a real local path around the obstacle.
         if abs(side_hint) > 0.5:
-            offsets = [int(side_hint * deg) for deg in (35, 50, 70, 90)]
+            radii = [2.0, 2.8, 3.6, min(4.5, max(3.2, self.config.astar_local_goal_dist))]
+            offsets = [int(side_hint * deg) for deg in (45, 60, 75, 90)]
         else:
-            offsets = [0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90]
+            radii = [2.0, 2.8, 3.6, min(4.5, max(3.2, self.config.astar_local_goal_dist))]
+            offsets = [0, 25, -25, 40, -40, 55, -55, 70, -70, 85, -85, 100, -100]
         seen = set()
         out: List[Tuple[GridIndex, str]] = []
         for radius in radii:
@@ -203,3 +228,13 @@ class LocalSubgoalSelector:
                 last_heading = heading
             last = point
         return cost
+
+    @staticmethod
+    def _target_corridor_blocked(points: Sequence[BodyPoint], target_unit: BodyPoint) -> bool:
+        half_width = 0.75
+        for x, y in points:
+            along = x * target_unit[0] + y * target_unit[1]
+            lateral = abs(-target_unit[1] * x + target_unit[0] * y)
+            if 0.25 <= along <= 3.5 and lateral <= half_width:
+                return True
+        return False
