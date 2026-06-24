@@ -167,7 +167,6 @@ def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[
         if pos.distance_to(case.goal) <= config.local_goal_reached_radius:
             status = "reached"
             break
-
     return history, status
 
 
@@ -231,7 +230,18 @@ def main() -> int:
             dt=args.dt if args.dt is not None else case.dt,
         )
 
-    config = PlannerConfig(local_goal_distance=3.0, horizon=2.5, dt=0.5)
+    config = PlannerConfig(
+        local_goal_distance=2.2,
+        horizon=3.0,
+        dt=0.5,
+        obstacle_margin=0.20,
+        static_hard_clearance=0.25,
+        static_emergency_clearance=0.45,
+        goal_weight=3.0,
+        progress_weight=4.0,
+        lateral_penalty=3.0,
+        reverse_penalty=8.0,
+    )
     history, status = simulate(case, config, args.verbose_every)
     final = history[-1] if history else {}
     print(
