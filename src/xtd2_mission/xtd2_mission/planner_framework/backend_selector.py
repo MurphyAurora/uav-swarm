@@ -59,6 +59,8 @@ class BackendSelector:
         normal = [item for item in evaluations if item.costs.get("reverse", 0.0) <= 0.05]
         pool = normal if normal else list(evaluations)
         safe = [item for item in pool if item.safety.safe]
+        if not safe and pool is not evaluations:
+            safe = [item for item in evaluations if item.safety.safe]
         if safe:
             moving_safe = [item for item in safe if item.trajectory.velocity.norm() > 0.05]
             if prefer_motion and moving_safe:
@@ -80,6 +82,8 @@ class BackendSelector:
                 return min(moving_safe, key=lambda item: (item.costs.get("reverse", 999.0), item.score))
             return min(safe, key=lambda item: item.score)
         feasible = [item for item in pool if item.safety.feasible]
+        if not feasible and pool is not evaluations:
+            feasible = [item for item in evaluations if item.safety.feasible]
         if feasible:
             moving_feasible = [item for item in feasible if item.trajectory.velocity.norm() > 0.05]
             if prefer_motion and moving_feasible:

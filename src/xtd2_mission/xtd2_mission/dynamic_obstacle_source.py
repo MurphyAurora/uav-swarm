@@ -1067,6 +1067,33 @@ class DynamicObstacleSource(Node):
             obstacles.extend(points)
             obs_id += len(points)
 
+        for item in self._sdf_static_marker_items(scene):
+            name = str(item.get('name', f'sdf_static_{obs_id}'))
+            radius = max(0.05, _finite_float(item.get('radius'), 0.5))
+            # Static SDF markers are useful as known-map obstacles for pillars.
+            # Do not feed long boundary/box structures as circular obstacles:
+            # their fitted radius can be tens of meters and falsely places the
+            # UAV inside a collision at spawn.
+            if name.startswith('outer_boundary') or radius > 3.0:
+                continue
+            obstacles.append(
+                {
+                    'obs_id': obs_id,
+                    'name': name,
+                    'x': float(item.get('x', 0.0)),
+                    'y': float(item.get('y', 0.0)),
+                    'z': float(item.get('z', 0.0)),
+                    'vx': 0.0,
+                    'vy': 0.0,
+                    'vz': 0.0,
+                    'radius': radius,
+                    'shape': item.get('shape', 'obstacle'),
+                    'size': item.get('size', []),
+                    'sdf_static': True,
+                }
+            )
+            obs_id += 1
+
         for obs in scene.get('dynamic_obstacles') or []:
             if not isinstance(obs, dict):
                 continue

@@ -21,7 +21,7 @@ class PerceptionInterface:
         self._min_lidar_range = 0.75
 
     def update_static_tracks(self, tracks: Iterable[Dict], stamp: Optional[float] = None) -> None:
-        self._static_obstacles = []
+        self._static_obstacles = [self._obstacle_from_track(track, "static") for track in tracks]
         self._last_stamp = float(stamp if stamp is not None else time.time())
 
     def update_dynamic_tracks(self, tracks: Iterable[Dict], stamp: Optional[float] = None) -> None:

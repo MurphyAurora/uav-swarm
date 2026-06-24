@@ -311,6 +311,8 @@ class LocalAStarPlanner:
     def _path_is_valid(self, local_map: LocalOccupancyMap, body_path: Sequence[BodyPoint]) -> bool:
         if len(body_path) < 2:
             return False
+        if not self._path_keeps_forward_progress(body_path):
+            return False
         cells = [local_map.body_to_grid(x, y) for x, y in body_path]
         if any(cell is None for cell in cells):
             return False
@@ -419,12 +421,37 @@ class LocalAStarPlanner:
     def _trim_passed_points(self, body_path: List[BodyPoint]) -> List[BodyPoint]:
         if len(body_path) <= 2:
             return body_path
-        idx = min(range(len(body_path)), key=lambda i: math.hypot(body_path[i][0], body_path[i][1]))
-        idx = min(idx, len(body_path) - 2)
-        if idx > 0:
-            self._committed_world_path = self._committed_world_path[idx:]
-            return body_path[idx:]
-        return body_path
+        best_i = 0
+        best_t = 0.0
+        best_d = 1.0e9
+        for i in range(len(body_path) - 1):
+            ax, ay = body_path[i]
+            bx, by = body_path[i + 1]
+            sx = bx - ax
+            sy = by - ay
+            seg2 = sx * sx + sy * sy
+            if seg2 <= 1.0e-9:
+                continue
+            # Closest point on this body-frame segment to the vehicle origin.
+            t = max(0.0, min(1.0, -(ax * sx + ay * sy) / seg2))
+            px = ax + t * sx
+            py = ay + t * sy
+            d = px * px + py * py
+            if d < best_d:
+                best_i, best_t, best_d = i, t, d
+        drop = best_i + (1 if best_t > 0.65 else 0)
+        drop = min(drop, len(body_path) - 2)
+        if drop > 0:
+            self._committed_world_path = self._committed_world_path[drop:]
+            body_path = body_path[drop:]
+        out: List[BodyPoint] = [(0.0, 0.0)]
+        for x, y in body_path:
+            if x < -0.25:
+                continue
+            if math.hypot(x - out[-1][0], y - out[-1][1]) < 0.18:
+                continue
+            out.append((x, y))
+        return out if len(out) >= 2 else body_path
 
     def _lookahead(self, body_path: List[BodyPoint]) -> BodyPoint:
         last = body_path[0]
@@ -495,3 +522,25 @@ class LocalAStarPlanner:
             remaining -= seg
             last = point
         return body_path[-1]
+
+    @staticmethod
+    def _path_keeps_forward_progress(body_path: Sequence[BodyPoint]) -> bool:
+        if len(body_path) < 2:
+            return False
+        if body_path[-1][0] < 0.35:
+            return False
+        last = body_path[0]
+        reverse_len = 0.0
+        total_len = 0.0
+        max_forward = max(p[0] for p in body_path)
+        for point in body_path[1:]:
+            dx = point[0] - last[0]
+            dy = point[1] - last[1]
+            seg = math.hypot(dx, dy)
+            total_len += seg
+            if dx < -0.05:
+                reverse_len += seg
+            last = point
+        if total_len <= 1.0e-6:
+            return False
+        return reverse_len <= 0.35 * total_len and max_forward >= 0.75

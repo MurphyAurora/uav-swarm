@@ -68,6 +68,7 @@ class EgoLikePlannerCore:
             )
 
         command = self._lidar_velocity_shield(command, state, perception)
+        command = self._goal_progress_guard(command, state, local_goal)
         command = self.output.process(command, dt=dt)
 
         return {
@@ -254,6 +255,31 @@ class EgoLikePlannerCore:
             "new_velocity": out.to_dict(),
         }
         return PlannerCommand(out, command.mode, command.source_trajectory, f"{command.reason}|shield:project")
+
+    def _goal_progress_guard(self, command: PlannerCommand, state: PlannerState, local_goal: Vec3) -> PlannerCommand:
+        if command.velocity.norm() <= 1.0e-6:
+            return command
+        if command.source_trajectory.startswith("local_escape:"):
+            return command
+        to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
+        dist = to_goal.norm()
+        if dist < 0.25:
+            return command
+        unit = to_goal * (1.0 / dist)
+        vxy = Vec3(command.velocity.x, command.velocity.y, 0.0)
+        progress = vxy.x * unit.x + vxy.y * unit.y
+        if progress >= -0.005:
+            return command
+        corrected = vxy - unit * progress
+        if corrected.norm() < 0.02:
+            corrected = Vec3()
+        out = Vec3(corrected.x, corrected.y, command.velocity.z).limit_norm(command.velocity.norm())
+        return PlannerCommand(
+            out,
+            command.mode,
+            command.source_trajectory,
+            f"{command.reason}|goal_progress_guard",
+        )
 
     def reset_output_filter(self) -> None:
         self.output.reset()

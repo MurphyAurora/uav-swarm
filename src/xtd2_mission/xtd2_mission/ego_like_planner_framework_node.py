@@ -421,7 +421,7 @@ def build_arg_parser():
     parser.add_argument("--lidar-timeout", type=float, default=0.8)
     parser.add_argument("--lidar-max-obstacles", type=int, default=320)
     parser.add_argument("--lidar-stride", type=int, default=3)
-    parser.add_argument("--lidar-min-range", type=float, default=1.25)
+    parser.add_argument("--lidar-min-range", type=float, default=0.75)
     parser.add_argument("--lidar-max-range", type=float, default=5.5)
     parser.add_argument("--lidar-min-z", type=float, default=-1.8)
     parser.add_argument("--lidar-vertical-limit", type=float, default=1.8)

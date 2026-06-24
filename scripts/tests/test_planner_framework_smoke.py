@@ -19,11 +19,12 @@ from xtd2_mission.planner_framework import EgoLikePlannerCore, Obstacle, Percept
 
 def main():
     config = PlannerConfig(local_goal_distance=3.0, horizon=2.5, dt=0.5)
-    planner = EgoLikePlannerCore(config)
     state = PlannerState(drone_id=1, position=Vec3(0.0, 0.0, -3.0), velocity=Vec3(), stamp=0.0)
     goal = Vec3(10.0, 0.0, -3.0)
 
-    # Obstacle in front should trigger a non-forward or fallback-like response.
+    # Very near obstacle should trigger a recovery primitive instead of getting
+    # permanently locked into fallback hover.
+    planner = EgoLikePlannerCore(config)
     perception = PerceptionData(
         obstacles=[Obstacle(position=Vec3(1.2, 0.0, -3.0), radius=0.35, source="static")],
         nearest_distance=1.2,
@@ -33,7 +34,21 @@ def main():
     cmd = report["command"]
     assert report["candidate_count"] > 0
     assert "velocity" in cmd
-    assert cmd["mode"] in {"planner", "fallback_escape", "fallback_hover", "fallback_climb"}
+    assert cmd["mode"] in {"planner", "planner_cautious", "fallback_escape", "fallback_hover", "fallback_climb"}
+    assert cmd["source_trajectory"].startswith("local_escape:")
+
+    # Farther obstacle should still use the local A* planner rather than always
+    # escaping away from the goal.
+    planner = EgoLikePlannerCore(config)
+    perception = PerceptionData(
+        obstacles=[Obstacle(position=Vec3(2.2, 0.0, -3.0), radius=0.5, source="static")],
+        nearest_distance=2.2,
+        near_field_danger=False,
+    )
+    report = planner.plan(state, goal, perception)
+    cmd = report["command"]
+    assert cmd["mode"] in {"planner", "planner_cautious"}
+    assert cmd["source_trajectory"].startswith("local_astar:")
     print("planner_framework smoke test passed")
     print(report["command"])
 

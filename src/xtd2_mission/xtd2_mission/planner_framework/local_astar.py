@@ -468,7 +468,7 @@ class LocalAStarPlanner:
         self._last_scored_count = len(scored)
         if not scored:
             return None
-        scored.sort(key=lambda item: (not bool(item["safe_class"]), -float(item["min_path_clearance"]), float(item["score"])))
+        scored.sort(key=lambda item: (not bool(item["safe_class"]), float(item["score"]), -float(item["min_path_clearance"])))
         self._last_best_clearance = float(scored[0]["min_path_clearance"])
         return scored[0]
 
@@ -507,11 +507,20 @@ class LocalAStarPlanner:
 
     def _hard_required_clearance(self) -> float:
         lidar_point_radius = 0.18
-        return self.config.drone_radius + self.config.obstacle_margin + self.config.hard_clearance + lidar_point_radius
+        # Keep the A* acceptance threshold consistent with the occupancy grid.
+        # If this is much larger than astar_inflation_radius, narrow forest
+        # gaps are planned as free cells and then rejected after search.
+        return max(
+            self.config.astar_inflation_radius + 0.25,
+            self.config.drone_radius + self.config.hard_clearance + lidar_point_radius,
+        )
 
     def _safe_required_clearance(self) -> float:
         lidar_point_radius = 0.18
-        return self.config.drone_radius + self.config.obstacle_margin + max(0.60, self.config.emergency_clearance) + lidar_point_radius
+        return max(
+            self._hard_required_clearance() + 0.25,
+            self.config.drone_radius + min(self.config.emergency_clearance, 0.55) + lidar_point_radius,
+        )
 
     def _lookahead(self, body_path: List[BodyPoint]) -> BodyPoint:
         last = body_path[0]

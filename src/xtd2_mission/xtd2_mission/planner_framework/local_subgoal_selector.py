@@ -52,6 +52,10 @@ class LocalSubgoalSelector:
             clear = path_clearance_fn(body, local_map.points)
             if clear < hard_clearance:
                 continue
+            forward_score = self._path_forward_score(body, target_unit)
+            if forward_score < 0.20:
+                continue
+            turn_cost = self._turn_cost(body)
             end_x, end_y = body[-1]
             progress = end_x * target_unit[0] + end_y * target_unit[1]
             if progress < 0.25:
@@ -59,6 +63,8 @@ class LocalSubgoalSelector:
             end_angle = math.atan2(end_y, end_x)
             angle_error = abs(self._angle_diff(end_angle, target_angle))
             lateral = abs(-target_unit[1] * end_x + target_unit[0] * end_y)
+            if abs(side_hint) > 0.5 and lateral < 0.45:
+                continue
             length = path_length_fn(path)
             safe_deficit = max(0.0, safe_clearance - clear)
             side_penalty = 0.0
@@ -74,8 +80,10 @@ class LocalSubgoalSelector:
                 1.00 * length
                 + 1.40 * angle_error
                 + 0.35 * lateral
+                + 0.45 * turn_cost
                 + 7.50 * safe_deficit
                 - 0.55 * progress
+                - 0.35 * forward_score
                 - 0.10 * min(clear, 3.0)
                 + side_penalty
             )
@@ -88,6 +96,8 @@ class LocalSubgoalSelector:
                     "min_path_clearance": float(clear),
                     "safe_class": bool(clear >= safe_clearance),
                     "progress": float(progress),
+                    "forward_score": float(forward_score),
+                    "turn_cost": float(turn_cost),
                     "lateral": float(lateral),
                     "length": float(length),
                 }
@@ -112,7 +122,7 @@ class LocalSubgoalSelector:
         target_angle = math.atan2(target_body[1], target_body[0])
         radii = [1.4, 2.0, 2.8, 3.6, min(4.5, max(3.2, self.config.astar_local_goal_dist))]
         if abs(side_hint) > 0.5:
-            offsets = [0, int(side_hint * 20), int(side_hint * 35), int(side_hint * 50), int(side_hint * 70), int(side_hint * 90), int(-side_hint * 35)]
+            offsets = [int(side_hint * deg) for deg in (35, 50, 70, 90)]
         else:
             offsets = [0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90]
         seen = set()
@@ -152,7 +162,44 @@ class LocalSubgoalSelector:
             "score": float(item.get("score", 0.0)),
             "clearance": float(item.get("min_path_clearance", 0.0)),
             "progress": float(item.get("progress", 0.0)),
+            "forward_score": float(item.get("forward_score", 0.0)),
+            "turn_cost": float(item.get("turn_cost", 0.0)),
             "lateral": float(item.get("lateral", 0.0)),
             "length": float(item.get("length", 0.0)),
             "safe_class": bool(item.get("safe_class", False)),
         }
+
+    @staticmethod
+    def _path_forward_score(body_path: Sequence[BodyPoint], target_unit: BodyPoint) -> float:
+        if len(body_path) < 2:
+            return 0.0
+        score = 0.0
+        length = 0.0
+        last = body_path[0]
+        for point in body_path[1:]:
+            dx = point[0] - last[0]
+            dy = point[1] - last[1]
+            seg = math.hypot(dx, dy)
+            if seg > 1.0e-6:
+                score += max(-0.5, min(1.0, (dx * target_unit[0] + dy * target_unit[1]) / seg)) * seg
+                length += seg
+            last = point
+        return score / max(length, 1.0e-6)
+
+    @staticmethod
+    def _turn_cost(body_path: Sequence[BodyPoint]) -> float:
+        if len(body_path) < 3:
+            return 0.0
+        cost = 0.0
+        last_heading = None
+        last = body_path[0]
+        for point in body_path[1:]:
+            dx = point[0] - last[0]
+            dy = point[1] - last[1]
+            if math.hypot(dx, dy) > 1.0e-6:
+                heading = math.atan2(dy, dx)
+                if last_heading is not None:
+                    cost += abs(math.atan2(math.sin(heading - last_heading), math.cos(heading - last_heading)))
+                last_heading = heading
+            last = point
+        return cost

@@ -61,11 +61,23 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
         target_body = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
         front_blocked = self._front_blocked(local_map.points)
         corridor_clear = self._target_corridor_clear(local_map.points, target_body)
-        if not self._bypass_active and not front_blocked and corridor_clear:
+        direct_body_path = self._direct_body_path(target_body)
+        direct_clear = self._sampled_path_clearance(direct_body_path, local_map.points)
+        direct_clear_enough = direct_clear >= self._safe_required_clearance()
+        rejoin_ready = (not front_blocked and corridor_clear and direct_clear >= self._hard_required_clearance())
+        if rejoin_ready:
+            # The obstacle is no longer in the mission corridor.  Drop the old
+            # side latch so the next path is allowed to rejoin instead of
+            # continuing to arc around the same side.
             self._side_latch = 0.0
             self._side_latch_until = 0.0
-            body_path = self._direct_body_path(target_body)
-            clear = self._sampled_path_clearance(body_path, local_map.points)
+            if self._bypass_active:
+                self._clear_bypass(getattr(state, "stamp", 0.0), force_rejoin=True)
+        if not self._bypass_active and not front_blocked and corridor_clear and direct_clear_enough:
+            self._side_latch = 0.0
+            self._side_latch_until = 0.0
+            body_path = direct_body_path
+            clear = direct_clear
             nearest = min((math.hypot(x, y) for x, y in local_map.points), default=999.0)
             candidate = self.tracker.track(
                 "local_astar:direct",
@@ -151,6 +163,17 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
             return selected
         self._last_subgoal_debug = debug
         return None
+
+    def _bypass_target(self, points, mission_target_body: Tuple[float, float], now: float,
+                       front_blocked: bool, mission_corridor_blocked: bool):
+        # The passable planner uses LocalSubgoalSelector as the single owner of
+        # bypass choice.  The older fixed bypass target state machine can fight
+        # the selector and flip between left/right subgoals, which shows up in
+        # RViz as small loops.  Keep the side latch from local_astar_stable, but
+        # always plan toward the mission-aligned local target.
+        if self._bypass_active:
+            self._clear_bypass(now, force_rejoin=False)
+        return None, "subgoal_search"
 
     def _diag(self, *args, **kwargs):
         out = super()._diag(*args, **kwargs)

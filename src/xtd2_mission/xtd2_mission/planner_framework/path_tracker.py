@@ -28,6 +28,7 @@ class PathTracker:
         path_clearance: float,
         metadata: Dict,
     ) -> CandidateTrajectory:
+        body_path = self._prepare_body_path(body_path)
         if len(body_path) < 2:
             return CandidateTrajectory(name=name, velocity=Vec3(), points=[TrajectoryPoint(0.0, state.position)], metadata=metadata)
 
@@ -35,11 +36,13 @@ class PathTracker:
         look_x, look_y = self._lookahead(body_path)
         if look_x < 0.30:
             look_x = 0.30
+        look_x, look_y, lateral_limited = self._limit_lateral_lookahead(look_x, look_y, path_clearance)
         speed = self._speed_limit(nearest_obstacle, path_clearance)
         norm = max(math.hypot(look_x, look_y), 1.0e-6)
         bx = speed * look_x / norm
         by = speed * look_y / norm
         bx, by = self._smooth_body_velocity(bx, by)
+        bx, by, progress_guard = self._guard_goal_progress(bx, by, state, local_goal, path_clearance)
         if bx < 0.02:
             bx = 0.0
             by = 0.0
@@ -59,6 +62,8 @@ class PathTracker:
                 "body_velocity": {"x": float(bx), "y": float(by)},
                 "planning_frame_heading": float(state.heading),
                 "frame_reset": bool(frame_reset),
+                "progress_guard": progress_guard,
+                "lateral_lookahead_limited": bool(lateral_limited),
             }
         )
         return CandidateTrajectory(name=name, velocity=velocity, points=points, metadata=meta)
@@ -111,6 +116,36 @@ class PathTracker:
             last = point
         return body_path[-1]
 
+    @staticmethod
+    def _prepare_body_path(body_path: Sequence[BodyPoint]) -> list[BodyPoint]:
+        """Anchor path tracking at the current vehicle position.
+
+        Committed A* paths are stored in world frame, so after the vehicle moves
+        their first waypoint is often behind the vehicle.  Tracking that stale
+        point is a common source of backwards commands and small loops.
+        """
+        cleaned: list[BodyPoint] = [(0.0, 0.0)]
+        for x, y in body_path:
+            if math.hypot(x, y) < 0.12:
+                continue
+            if x < -0.25:
+                continue
+            if cleaned and math.hypot(x - cleaned[-1][0], y - cleaned[-1][1]) < 0.18:
+                continue
+            cleaned.append((float(x), float(y)))
+        if len(cleaned) >= 2:
+            return cleaned
+        return list(body_path)
+
+    def _limit_lateral_lookahead(self, look_x: float, look_y: float, path_clearance: float) -> tuple[float, float, bool]:
+        # Allow lateral motion for bypassing, but keep pure pursuit from chasing
+        # a far side waypoint so aggressively that forward progress disappears.
+        ratio = 1.65 if path_clearance < self._safe_required_clearance() else 1.25
+        max_abs_y = max(0.45, ratio * max(look_x, 0.35))
+        if abs(look_y) <= max_abs_y:
+            return look_x, look_y, False
+        return look_x, math.copysign(max_abs_y, look_y), True
+
     def _smooth_body_velocity(self, bx: float, by: float) -> BodyPoint:
         old_x, old_y = self._last_body_velocity
         alpha = max(0.55, min(1.0, self.config.output_alpha))
@@ -122,6 +157,49 @@ class PathTracker:
             sy *= self.config.max_speed / mag
         self._last_body_velocity = (sx, sy)
         return sx, sy
+
+    def _guard_goal_progress(
+        self,
+        bx: float,
+        by: float,
+        state: PlannerState,
+        local_goal: Vec3,
+        path_clearance: float,
+    ) -> Tuple[float, float, Dict[str, float | bool]]:
+        gx, gy = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
+        gnorm = math.hypot(gx, gy)
+        speed = math.hypot(bx, by)
+        if gnorm < 0.25 or speed < 1.0e-6:
+            return bx, by, {"active": False, "progress": 0.0}
+        ux = gx / gnorm
+        uy = gy / gnorm
+        progress = bx * ux + by * uy
+        min_progress = min(0.10, max(0.04, 0.35 * speed))
+        if progress >= min_progress or path_clearance < self._hard_required_clearance():
+            return bx, by, {"active": False, "progress": float(progress)}
+
+        lx = bx - progress * ux
+        ly = by - progress * uy
+        lateral = math.hypot(lx, ly)
+        max_lateral = max(0.04, 0.75 * max(speed, min_progress))
+        if lateral > max_lateral:
+            lx *= max_lateral / lateral
+            ly *= max_lateral / lateral
+        nbx = min_progress * ux + lx
+        nby = min_progress * uy + ly
+        mag = math.hypot(nbx, nby)
+        limit = max(speed, min_progress)
+        if mag > limit:
+            nbx *= limit / mag
+            nby *= limit / mag
+        self._last_body_velocity = (nbx, nby)
+        return nbx, nby, {
+            "active": True,
+            "progress": float(progress),
+            "min_progress": float(min_progress),
+            "goal_body_x": float(gx),
+            "goal_body_y": float(gy),
+        }
 
     def _rollout_points(self, state: PlannerState, body_path: Sequence[BodyPoint], speed: float, vz: float):
         points = [TrajectoryPoint(t=0.0, position=state.position)]
@@ -168,6 +246,12 @@ class PathTracker:
         c = math.cos(heading)
         s = math.sin(heading)
         return c * bx - s * by, s * bx + c * by
+
+    @staticmethod
+    def _world_to_body(wx: float, wy: float, heading: float) -> Tuple[float, float]:
+        c = math.cos(heading)
+        s = math.sin(heading)
+        return c * wx + s * wy, -s * wx + c * wy
 
     def _hard_required_clearance(self) -> float:
         return max(0.72, self.config.drone_radius + 0.18 + 0.18)

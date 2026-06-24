@@ -15,6 +15,12 @@ class SafetyChecker:
         min_static_clearance = 999.0
         min_source = "none"
         min_ttc = 999.0
+        current_clearance = 999.0
+        current_static_clearance = 999.0
+        future_min_clearance = 999.0
+        future_min_static_clearance = 999.0
+        final_clearance = 999.0
+        final_static_clearance = 999.0
         for point in trajectory.points:
             for obs in perception.obstacles:
                 clearance = point.position.distance_to(obs.position_at(point.t)) - self._safety_radius(obs)
@@ -23,20 +29,53 @@ class SafetyChecker:
                     min_source = obs.source
                 if obs.source == "static":
                     min_static_clearance = min(min_static_clearance, clearance)
+                if point.t <= 1.0e-6:
+                    current_clearance = min(current_clearance, clearance)
+                    if obs.source == "static":
+                        current_static_clearance = min(current_static_clearance, clearance)
+                else:
+                    future_min_clearance = min(future_min_clearance, clearance)
+                    if obs.source == "static":
+                        future_min_static_clearance = min(future_min_static_clearance, clearance)
                 min_ttc = min(min_ttc, self._estimate_ttc(state.position, trajectory.velocity, obs))
+        if trajectory.points:
+            final_point = trajectory.points[-1]
+            for obs in perception.obstacles:
+                clearance = final_point.position.distance_to(obs.position_at(final_point.t)) - self._safety_radius(obs)
+                final_clearance = min(final_clearance, clearance)
+                if obs.source == "static":
+                    final_static_clearance = min(final_static_clearance, clearance)
 
         emergency_margin = self._emergency_margin(min_source)
-        static_emergency_margin = max(self.config.static_emergency_clearance, 0.8)
+        static_emergency_margin = max(min(self.config.static_emergency_clearance, 0.55), 0.35)
         hard_margin = self._hard_margin(min_source)
-        static_hard_margin = min(self.config.static_hard_clearance, 0.45)
+        static_hard_margin = max(min(self.config.static_hard_clearance, 0.35), 0.28)
 
         hard_ok = min_clearance >= hard_margin
         static_ok = min_static_clearance >= static_hard_margin
+        escape_ok = self._escaping_from_hard_zone(
+            current_clearance,
+            current_static_clearance,
+            future_min_clearance,
+            future_min_static_clearance,
+            final_clearance,
+            final_static_clearance,
+            hard_margin,
+            static_hard_margin,
+        )
+        rejoin_ok = self._forward_rejoin_ok(trajectory, min_clearance, min_static_clearance)
+        if escape_ok or rejoin_ok:
+            hard_ok = True
+            static_ok = True
         feasible = bool(hard_ok and static_ok)
         safe = bool(feasible and min_clearance >= emergency_margin and min_static_clearance >= static_emergency_margin)
 
         reason = "ok"
-        if not hard_ok:
+        if rejoin_ok and not safe:
+            reason = "rejoining_corridor"
+        elif escape_ok and not safe:
+            reason = "escaping_hard_zone"
+        elif not hard_ok:
             reason = "hard_clearance_violation"
         elif not static_ok:
             reason = "static_clearance_violation"
@@ -53,17 +92,71 @@ class SafetyChecker:
             # smaller execution margin here so the SafetyChecker does not veto
             # every passable side gap after A* has found a route.
             return self.config.drone_radius + float(obs.radius) + 0.20
+        if obs.source == "static":
+            # Known-map obstacles are already represented in the local A* grid.
+            # Keep this hard gate aligned with the grid/path clearance and let
+            # the final LiDAR TTC shield handle last-centimeter contact risk.
+            return self.config.drone_radius + float(obs.radius) + min(self.config.obstacle_margin, 0.10)
         return self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin
 
     def _hard_margin(self, min_source: str) -> float:
         if min_source == "lidar_near_field":
             return min(self.config.hard_clearance, 0.18)
+        if min_source == "static":
+            return max(min(self.config.static_hard_clearance, 0.35), 0.28)
         return self.config.hard_clearance
 
     def _emergency_margin(self, min_source: str) -> float:
         if min_source == "lidar_near_field":
             return max(min(self.config.emergency_clearance, 0.50), 0.38)
+        if min_source == "static":
+            return max(min(self.config.static_emergency_clearance, 0.55), 0.35)
         return max(self.config.emergency_clearance, 0.60)
+
+    @staticmethod
+    def _escaping_from_hard_zone(
+        current_clearance: float,
+        current_static_clearance: float,
+        future_min_clearance: float,
+        future_min_static_clearance: float,
+        final_clearance: float,
+        final_static_clearance: float,
+        hard_margin: float,
+        static_hard_margin: float,
+    ) -> bool:
+        in_dynamic_hard_zone = current_clearance < hard_margin
+        in_static_hard_zone = current_static_clearance < static_hard_margin
+        if not in_dynamic_hard_zone and not in_static_hard_zone:
+            return False
+
+        current = min(current_clearance, current_static_clearance)
+        future_min = min(future_min_clearance, future_min_static_clearance)
+        final = min(final_clearance, final_static_clearance)
+        if current >= 998.0 or future_min >= 998.0 or final >= 998.0:
+            return False
+
+        # Once inside the hard shell, the start point itself is necessarily
+        # invalid.  Allow only trajectories that do not dig deeper and that end
+        # with a meaningful clearance increase.
+        return future_min >= current - 0.03 and final >= current + 0.025
+
+    def _forward_rejoin_ok(self, trajectory: CandidateTrajectory, min_clearance: float, min_static_clearance: float) -> bool:
+        if not trajectory.name.startswith("local_astar:"):
+            return False
+        meta = trajectory.metadata or {}
+        if bool(meta.get("front_blocked", False)) or bool(meta.get("corridor_blocked", False)):
+            return False
+        path_clearance = float(meta.get("path_clearance", meta.get("min_path_clearance", 0.0)) or 0.0)
+        if path_clearance < max(1.02, self.config.drone_radius + 0.18 + 0.18 + 0.28):
+            return False
+        body_velocity = meta.get("body_velocity") or {}
+        body_x = float(body_velocity.get("x", 0.0) or 0.0)
+        if body_x < 0.04:
+            return False
+        # This is a narrow bridge out of the hard shell for rejoining the clear
+        # corridor.  Do not allow it if any checker sees actual contact-level
+        # clearance.
+        return min_clearance >= 0.10 and min_static_clearance >= 0.10
 
     def _estimate_ttc(self, uav_position: Vec3, uav_velocity: Vec3, obs: Obstacle) -> float:
         rel_pos = obs.position_at(0.0) - uav_position

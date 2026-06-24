@@ -153,7 +153,11 @@ class LidarTtcSafetyFilter(Node):
         reports = []
         for drone_id in range(1, self.num_drones + 1):
             cmd = self.cmds.get(drone_id)
-            if cmd is None or now - float(cmd['stamp']) > self.cmd_timeout:
+            if cmd is None:
+                continue
+            if now - float(cmd['stamp']) > self.cmd_timeout:
+                self._publish(drone_id, 0.0, 0.0, 0.0)
+                reports.append(self._result(drone_id, 'stale_cmd_hold', 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0))
                 continue
             cloud = self.clouds.get(drone_id)
             if cloud is None or now - float(cloud['stamp']) > self.point_timeout:
@@ -246,10 +250,14 @@ class LidarTtcSafetyFilter(Node):
             alignment = ux * dir_x + uy * dir_y
             toward = bvx * ux + bvy * uy if speed_xy >= self.min_speed else 0.0
             hard_contact = horizontal <= max(self.min_range, self.self_filter_radius)
+            # In strong-filter mode, near lateral obstacles must also become hard
+            # blockers. Pure TTC can miss side-skimming contacts because closing
+            # speed is small until the vehicle is already too close.
+            near_alignment_floor = -0.10 if self.strong_filter else 0.35
             hard_distance = (
                 horizontal <= self.hard_stop_distance
                 and speed_xy >= self.min_speed
-                and (toward > self.min_speed or alignment >= 0.35 or hard_contact)
+                and (toward > self.min_speed or alignment >= near_alignment_floor or hard_contact)
             )
             if hard_distance:
                 closing = max(0.0, toward)
