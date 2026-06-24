@@ -18,17 +18,16 @@ class FrontendPlanner:
         self._avoid_side = 0.0
         self._avoid_until = 0.0
         self._last_risk = 0.0
+        self._corridor_lock_until = 0.0
+        self._corridor_lock_active = False
 
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         candidates: List[CandidateTrajectory] = []
         mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
-            if self._avoid_active and abs(self._avoid_side) > 0.5:
+            if self._avoid_active and abs(self._avoid_side) > 0.5 and not self._corridor_lock_active:
                 # Feed the same-side memory into LocalAStarPlanner/LocalSubgoalSelector.
-                # This is the path-memory buffer: once the vehicle chooses a side,
-                # subgoal sampling keeps using that side until the obstacle is
-                # actually cleared instead of oscillating back toward the centerline.
                 try:
                     self.local_astar._side_latch = self._avoid_side
                     self.local_astar._side_latch_until = max(getattr(self.local_astar, "_side_latch_until", 0.0), state.stamp + 1.2)
@@ -37,16 +36,24 @@ class FrontendPlanner:
 
             astar_candidate = self.local_astar.plan_candidate(state, local_goal, perception.obstacles)
             astar_direct = bool(astar_candidate is not None and astar_candidate.name == "local_astar:direct")
+            candidate_reason = ""
+            candidate_margin = 999.0
+            if astar_candidate is not None:
+                candidate_reason = str(astar_candidate.metadata.get("safety_reason", astar_candidate.metadata.get("reason", "")) or "")
+                candidate_margin = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
+            if astar_direct:
+                self._update_corridor_lock(state, astar_candidate, risk)
+            else:
+                self._release_corridor_lock_if_expired(state, risk)
+
+            corridor_locked = self._corridor_lock_active and state.stamp <= self._corridor_lock_until
             low_risk_direct = bool(astar_direct and risk.get("risk", 1.0) < 0.25 and not risk.get("front_obstacle", False))
             if low_risk_direct:
-                # Direct tracking only releases the avoidance memory when the risk
-                # field is low.  A direct candidate with high risk is a narrow/early
-                # rejoin, not a real clearance event, and escape must still be able
-                # to keep the vehicle off the obstacle shell.
                 self._avoid_active = False
                 self._avoid_side = 0.0
                 self._escape_side = 0.0
                 self._avoid_until = 0.0
+
             self.diagnostics = {
                 "mode": mode,
                 "local_astar": dict(self.local_astar.diagnostics),
@@ -56,18 +63,24 @@ class FrontendPlanner:
                 "avoid_until": float(self._avoid_until),
                 "astar_direct": bool(astar_direct),
                 "low_risk_direct": bool(low_risk_direct),
+                "corridor_locked": bool(corridor_locked),
+                "corridor_lock_until": float(self._corridor_lock_until),
+                "candidate_margin": float(candidate_margin),
+                "candidate_reason": candidate_reason,
             }
             if astar_candidate is not None:
                 astar_candidate.metadata["avoid_active"] = bool(self._avoid_active)
                 astar_candidate.metadata["avoid_side"] = float(self._avoid_side)
                 astar_candidate.metadata["risk"] = float(self._last_risk)
+                astar_candidate.metadata["corridor_locked"] = bool(corridor_locked)
                 candidates.append(astar_candidate)
 
-            # Escape is a safety fallback, not the default way to pass a visible
-            # obstacle. It is not allowed to override a low-risk direct rejoin, but
-            # it remains available for high-risk direct candidates.
+            # Corridor lock: once direct rejoin has started with an acceptable
+            # margin, do not let escape/back/lateral modes compete for a short
+            # window. This is the temporal consistency buffer that lets the vehicle
+            # pass through the channel instead of oscillating around the shell.
             escape_candidates: List[CandidateTrajectory] = []
-            if not low_risk_direct:
+            if not corridor_locked and not low_risk_direct:
                 escape_candidates = self._hard_zone_escape_candidates(
                     state,
                     local_goal,
@@ -82,6 +95,8 @@ class FrontendPlanner:
             self._escape_side = 0.0
             self._avoid_active = False
             self._avoid_side = 0.0
+            self._corridor_lock_active = False
+            self._corridor_lock_until = 0.0
             candidates.append(self._rollout("track_goal", self._desired_velocity_towards_goal(state, local_goal), state.position))
         return candidates
 
@@ -105,6 +120,33 @@ class FrontendPlanner:
             points.append(TrajectoryPoint(t=t, position=start + velocity * t))
         return CandidateTrajectory(name=name, velocity=velocity, points=points)
 
+    def _update_corridor_lock(self, state: PlannerState, astar_candidate: CandidateTrajectory, risk: dict) -> None:
+        if astar_candidate is None:
+            return
+        # The frontend does not yet know SafetyReport, so use the local A* path
+        # clearance plus the risk field.  Lock only when the direct candidate is
+        # a rejoining/direct path with a non-contact path clearance.
+        path_clearance = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
+        reason = str(astar_candidate.metadata.get("reason", astar_candidate.metadata.get("tracker", "")) or "")
+        risk_value = float(risk.get("risk", 1.0) or 1.0)
+        front_obstacle = bool(risk.get("front_obstacle", False))
+        enter_lock = path_clearance >= 0.55 and (risk_value <= 0.75 or not front_obstacle)
+        if enter_lock:
+            self._corridor_lock_active = True
+            self._corridor_lock_until = max(self._corridor_lock_until, state.stamp + 2.2)
+            # While locked, stop carrying the side escape state. Direct tracking is
+            # now trusted unless the lock expires or a later safety gate rejects it.
+            self._escape_side = 0.0
+
+    def _release_corridor_lock_if_expired(self, state: PlannerState, risk: dict) -> None:
+        if not self._corridor_lock_active:
+            return
+        if state.stamp > self._corridor_lock_until:
+            self._corridor_lock_active = False
+            return
+        if float(risk.get("risk", 1.0) or 1.0) > 0.92:
+            self._corridor_lock_active = False
+
     def _update_risk_memory(self, state: PlannerState, local_goal: Vec3, perception: PerceptionData) -> dict:
         nearest = self._nearest_context(state, local_goal, perception)
         if nearest is None:
@@ -124,7 +166,7 @@ class FrontendPlanner:
 
         enter = front_obstacle and risk >= 0.35
         release = (not front_obstacle) or clearance >= 1.45 or obs_forward < -0.25 or (obs_forward > 3.2 and abs(obs_lateral) >= 1.65)
-        if enter:
+        if enter and not self._corridor_lock_active:
             if not self._avoid_active or abs(self._avoid_side) < 0.5:
                 if abs(obs_lateral) < 0.10:
                     self._avoid_side = 1.0
