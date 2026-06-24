@@ -19,7 +19,7 @@ class PassableLocalMapBuilder(LocalMapBuilder):
         nx, ny = self._grid_shape()
         occupied = [[False for _ in range(ny)] for _ in range(nx)]
         raw_count = 0
-        effective_inflation = max(float(self.config.astar_inflation_radius), 0.50)
+        effective_inflation = max(float(self.config.astar_inflation_radius), 0.42)
         inflate_cells = int(math.ceil(effective_inflation / self.config.astar_resolution))
         probe = LocalOccupancyMap(occupied, [], 0, self.config)
         for x, y in points:
@@ -183,15 +183,18 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
     def _direct_body_path(self, target_body: BodyPoint):
         tx, ty = target_body
         dist = max(math.hypot(tx, ty), 1.0e-6)
-        length = min(max(1.4, dist), max(2.2, self.config.astar_local_goal_dist))
+        length = min(max(1.2, dist), max(2.0, self.config.astar_local_goal_dist))
         ux, uy = tx / dist, ty / dist
         return [(0.0, 0.0), (0.55 * length * ux, 0.55 * length * uy), (length * ux, length * uy)]
 
     def _hard_required_clearance(self) -> float:
-        return max(0.72, self.config.drone_radius + 0.18 + 0.18)
+        # Match the offline smoke-test safety shell.  The SafetyChecker still
+        # performs the final hard gate, so this only prevents local A* from
+        # rejecting every practical side passage before a candidate is generated.
+        return max(0.45, self.config.drone_radius + 0.20)
 
     def _safe_required_clearance(self) -> float:
-        return max(1.02, self._hard_required_clearance() + 0.28)
+        return max(0.70, self._hard_required_clearance() + 0.20)
 
     def _front_blocked(self, points: Sequence[BodyPoint]) -> bool:
         width = max(0.62, self.config.drone_radius + 0.25)
