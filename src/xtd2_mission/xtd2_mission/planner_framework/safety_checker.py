@@ -82,6 +82,12 @@ class SafetyChecker:
 
         feasible = bool(hard_ok and static_ok)
         safe = bool(feasible and min_clearance >= emergency_margin and min_static_clearance >= static_emergency_margin)
+        if not safe and feasible and trajectory.name.startswith("local_astar:"):
+            recovery_eps = float(getattr(self.config, "recovery_safety_epsilon", 0.02))
+            safe = bool(
+                min_clearance + recovery_eps >= emergency_margin
+                and min_static_clearance + recovery_eps >= static_emergency_margin
+            )
 
         reason = "ok"
         if ttc_violation:

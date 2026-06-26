@@ -179,12 +179,29 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
         if getattr(self, "_single_obstacle_mode", False):
             return super()._bypass_target(points, mission_target_body, now, front_blocked, mission_corridor_blocked)
 
-        # Multi-obstacle mode uses LocalSubgoalSelector as the single owner of
-        # bypass choice.  The older fixed bypass state machine can fight the
-        # selector in S/forest scenes, so only disable it outside single-obstacle
-        # smoke tests.
+        direct_clear = self._sampled_path_clearance(self._direct_body_path(mission_target_body), points)
+        corridor_clear = not mission_corridor_blocked and direct_clear >= self._hard_required_clearance()
+        side_hint = self._side_latch if abs(self._side_latch) > 0.5 else 0.0
+
         if self._bypass_active:
-            self._clear_bypass(now, force_rejoin=False)
+            min_hold = now - self._bypass_started >= 0.80
+            timed_out = now - self._bypass_started > 3.2
+            if min_hold and (corridor_clear or timed_out):
+                self._clear_bypass(now, force_rejoin=True)
+                return None, "committed_rejoin"
+            self._bypass_until = max(self._bypass_until, now + 0.35)
+            return self._make_bypass_goal(self._bypass_side), "committed_bypass_hold"
+
+        if now < self._rejoin_forced_until and corridor_clear:
+            return None, "committed_rejoin"
+
+        if (front_blocked or mission_corridor_blocked or direct_clear < self._safe_required_clearance()) and abs(side_hint) > 0.5:
+            self._bypass_active = True
+            self._bypass_side = side_hint
+            self._bypass_started = now
+            self._bypass_until = now + 1.8
+            return self._make_bypass_goal(side_hint), "committed_bypass_start"
+
         return None, "subgoal_search"
 
     def _diag(self, *args, **kwargs):

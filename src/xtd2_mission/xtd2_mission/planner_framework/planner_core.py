@@ -15,6 +15,12 @@ from .safety_checker import SafetyChecker
 
 
 class EgoLikePlannerCore:
+    NORMAL_TRACK = "NORMAL_TRACK"
+    DYNAMIC_AVOID = "DYNAMIC_AVOID"
+    ESCAPE = "ESCAPE"
+    EMERGENCY_STOP = "EMERGENCY_STOP"
+    RECOVERY = "RECOVERY"
+
     def __init__(self, config: Optional[PlannerConfig] = None, waypoints: Optional[Sequence[Vec3]] = None):
         self.config = config or PlannerConfig()
         self.goal_manager = LocalGoalManager(self.config, waypoints=waypoints)
@@ -27,6 +33,11 @@ class EgoLikePlannerCore:
         self._last_shield_info: Dict[str, object] = {"active": False}
         self._planning_heading: Optional[float] = None
         self._planning_heading_desired: Optional[float] = None
+        self.mode = self.NORMAL_TRACK
+        self.mode_until = 0.0
+        self.safe_streak = 0
+        self.unsafe_streak = 0
+        self.last_mode_reason = "init"
 
     @staticmethod
     def _planner_now(state: PlannerState) -> float:
@@ -57,21 +68,60 @@ class EgoLikePlannerCore:
         evaluations = self.backend.evaluate_all(candidates, safety_reports, state, local_goal)
         best = self.backend.select_best(evaluations, state, local_goal)
 
-        if best is None or not best.safety.feasible:
+        risk = self._risk_summary(evaluations, best, state, perception)
+        mode = self._update_mode(now, risk)
+
+        if mode == self.NORMAL_TRACK:
+            selected = self._select_normal_candidate(evaluations, best)
+            if selected is None:
+                command = self.fallback.command(state, perception, evaluations)
+            else:
+                command = PlannerCommand(selected.trajectory.velocity, "planner", selected.trajectory.name, selected.safety.reason)
+        elif mode == self.DYNAMIC_AVOID:
+            selected = self._select_dynamic_avoid_candidate(evaluations)
+            if selected is None:
+                command = self.fallback.command(state, perception, evaluations)
+            else:
+                command = PlannerCommand(
+                    selected.trajectory.velocity.limit_norm(min(0.22, self.config.max_speed)),
+                    "planner",
+                    selected.trajectory.name,
+                    f"{selected.safety.reason}|fsm:dynamic_avoid",
+                )
+        elif mode == self.ESCAPE:
             command = self.fallback.command(state, perception, evaluations)
-        elif best.safety.safe:
-            command = PlannerCommand(best.trajectory.velocity, "planner", best.trajectory.name, best.safety.reason)
+        elif mode == self.EMERGENCY_STOP:
+            command = PlannerCommand(Vec3(), "fallback_hover", "hover", "emergency_stop")
+        elif mode == self.RECOVERY:
+            selected = self._select_recovery_candidate(evaluations, float(risk.get("min_clearance", 999.0)))
+            if selected is None:
+                command = self.fallback.command(state, perception, evaluations)
+            else:
+                command = PlannerCommand(
+                    selected.trajectory.velocity.limit_norm(min(0.15, self.config.max_speed)),
+                    "planner",
+                    selected.trajectory.name,
+                    f"{selected.safety.reason}|fsm:recovery",
+                )
         else:
-            # The path tracker already limits velocity by path clearance.  Do not
-            # crush every hard-feasible trajectory to 0.08 m/s; mature planners
-            # keep executing a feasible short trajectory slowly enough to escape
-            # the soft shell, otherwise the vehicle just stalls in front of the gap.
-            cautious_speed = 0.18 if best.safety.min_clearance >= 0.30 else 0.12
+            command = self.fallback.command(state, perception, evaluations)
+
+        if mode == self.ESCAPE and command.source_trajectory in {"track_goal", "slow_goal", "target_slow", "target_left", "target_right"}:
+            command = PlannerCommand(Vec3(), "fallback_hover", "hover", "escape_blocked_goal_directed")
+
+        if mode == self.DYNAMIC_AVOID and command.velocity.norm() > 0.20:
             command = PlannerCommand(
-                best.trajectory.velocity.limit_norm(min(cautious_speed, self.config.max_speed)),
-                "planner_cautious",
-                best.trajectory.name,
-                best.safety.reason,
+                command.velocity.limit_norm(min(0.22, self.config.max_speed)),
+                command.mode,
+                command.source_trajectory,
+                command.reason,
+            )
+        elif mode == self.RECOVERY and command.velocity.norm() > 0.12:
+            command = PlannerCommand(
+                command.velocity.limit_norm(min(0.15, self.config.max_speed)),
+                command.mode,
+                command.source_trajectory,
+                command.reason,
             )
 
         command = self._lidar_velocity_shield(command, state, perception)
@@ -106,8 +156,203 @@ class EgoLikePlannerCore:
             "frontend": dict(self.frontend.diagnostics),
             "goal_manager": self.goal_manager.diagnostics(),
             "shield": dict(self._last_shield_info),
+            "planner_fsm": {
+                "mode": self.mode,
+                "mode_until": self.mode_until,
+                "safe_streak": self.safe_streak,
+                "unsafe_streak": self.unsafe_streak,
+                "reason": self.last_mode_reason,
+                "risk": risk,
+            },
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
+
+
+    def _risk_summary(self, evaluations, best, state: PlannerState, perception: PerceptionData) -> Dict[str, object]:
+        safe_count = sum(1 for item in evaluations if item.safety.safe)
+        feasible_count = sum(1 for item in evaluations if item.safety.feasible)
+        candidate_min_clearance = min((item.safety.min_clearance for item in evaluations), default=999.0)
+        min_clearance = self._current_min_clearance(state, perception)
+        recoverable_count = sum(1 for item in evaluations if self._is_recoverable_rejoin(item, min_clearance))
+        min_ttc = min((item.safety.min_ttc for item in evaluations), default=999.0)
+        best_name = best.trajectory.name if best is not None else None
+        return {
+            "safe_count": int(safe_count),
+            "feasible_count": int(feasible_count),
+            "recoverable_count": int(recoverable_count),
+            "min_clearance": float(min_clearance),
+            "candidate_min_clearance": float(candidate_min_clearance),
+            "min_ttc": float(min_ttc),
+            "near_field_danger": bool(perception.near_field_danger),
+            "best_name": best_name,
+            "best_safe": bool(best.safety.safe) if best is not None else False,
+            "best_feasible": bool(best.safety.feasible) if best is not None else False,
+            "best_goal_directed": bool(best is not None and self._is_goal_directed_name(best.trajectory.name)),
+        }
+
+
+    def _current_min_clearance(self, state: PlannerState, perception: PerceptionData) -> float:
+        min_clearance = 999.0
+        for obs in perception.obstacles:
+            rel = obs.position_at(0.0) - state.position
+            clearance = rel.norm() - self._execution_radius(obs)
+            min_clearance = min(min_clearance, clearance)
+        return float(min_clearance)
+
+    def _execution_radius(self, obs) -> float:
+        if obs.source == "lidar_near_field":
+            return self.config.drone_radius + float(obs.radius) + 0.20
+        if obs.source == "static":
+            return self.config.drone_radius + float(obs.radius) + min(self.config.obstacle_margin, 0.10)
+        return self.config.drone_radius + float(obs.radius) + self.config.obstacle_margin
+
+    def _update_mode(self, now: float, risk: Dict[str, object]) -> str:
+        safe_count = int(risk.get("safe_count", 0) or 0)
+        recoverable_count = int(risk.get("recoverable_count", 0) or 0)
+        min_clearance = float(risk.get("min_clearance", 999.0) or 999.0)
+        min_ttc = float(risk.get("min_ttc", 999.0) or 999.0)
+        near_field_danger = bool(risk.get("near_field_danger", False))
+
+        if safe_count > 0 or recoverable_count > 0:
+            self.safe_streak += 1
+            self.unsafe_streak = 0
+        else:
+            self.unsafe_streak += 1
+            self.safe_streak = 0
+
+        emergency_ttc = float(getattr(self.config, "emergency_ttc", 0.80))
+        emergency_hold_sec = float(getattr(self.config, "emergency_hold_sec", 0.80))
+        escape_hold_sec = float(getattr(self.config, "escape_hold_sec", 0.60))
+        recovery_hold_sec = float(getattr(self.config, "recovery_hold_sec", 0.80))
+        recovery_safe_frames = int(getattr(self.config, "recovery_safe_frames", 3))
+        recovery_clearance = float(getattr(self.config, "recovery_clearance", max(0.75, self.config.emergency_clearance)))
+        dynamic_clearance = float(getattr(self.config, "dynamic_avoid_clearance", max(0.75, self.config.emergency_clearance)))
+        dynamic_ttc = float(getattr(self.config, "dynamic_avoid_ttc", 1.20))
+
+        if near_field_danger or min_clearance < 0.0 or min_ttc < emergency_ttc:
+            self._set_mode(self.EMERGENCY_STOP, now + emergency_hold_sec, "emergency_risk")
+            return self.mode
+
+        if self.mode == self.EMERGENCY_STOP:
+            if now < self.mode_until:
+                self.last_mode_reason = "emergency_hold"
+                return self.mode
+            if safe_count > 0 or recoverable_count > 0:
+                self._set_mode(self.RECOVERY, now + recovery_hold_sec, "emergency_recovery")
+            else:
+                self._set_mode(self.ESCAPE, now + escape_hold_sec, "emergency_escape")
+            return self.mode
+
+        if self.mode in (self.NORMAL_TRACK, self.DYNAMIC_AVOID):
+            if safe_count == 0 and recoverable_count == 0:
+                self._set_mode(self.ESCAPE, now + escape_hold_sec, "no_safe_candidates")
+            elif safe_count == 0:
+                self._set_mode(self.RECOVERY, now + recovery_hold_sec, "recoverable_rejoin")
+            elif min_clearance < dynamic_clearance or min_ttc < dynamic_ttc:
+                self._set_mode(self.DYNAMIC_AVOID, now, "elevated_risk")
+            else:
+                self._set_mode(self.NORMAL_TRACK, now, "risk_low")
+            return self.mode
+
+        if self.mode == self.ESCAPE:
+            if now < self.mode_until:
+                self.last_mode_reason = "escape_hold"
+                return self.mode
+            if safe_count > 0 or recoverable_count > 0:
+                self._set_mode(self.RECOVERY, now + recovery_hold_sec, "escape_recovery")
+            else:
+                self._set_mode(self.ESCAPE, now + escape_hold_sec, "escape_no_safe_candidates")
+            return self.mode
+
+        if self.mode == self.RECOVERY:
+            if safe_count == 0 and recoverable_count == 0:
+                self._set_mode(self.ESCAPE, now + escape_hold_sec, "recovery_lost_safe_candidates")
+                return self.mode
+            if now < self.mode_until:
+                self.last_mode_reason = "recovery_hold"
+                return self.mode
+            if safe_count > 0 and self.safe_streak >= recovery_safe_frames and min_clearance > recovery_clearance:
+                self._set_mode(self.NORMAL_TRACK, now, "recovery_complete")
+            else:
+                self.last_mode_reason = "recovery_wait_clearance"
+            return self.mode
+
+        self._set_mode(self.NORMAL_TRACK, now, "unknown_mode_reset")
+        return self.mode
+
+    def _set_mode(self, mode: str, mode_until: float, reason: str) -> None:
+        self.mode = mode
+        self.mode_until = float(mode_until)
+        self.last_mode_reason = reason
+
+    def _select_normal_candidate(self, evaluations, best):
+        safe = [item for item in evaluations if item.safety.safe]
+        if best is not None and best.safety.safe:
+            return best
+        return min(safe, key=lambda item: item.score) if safe else None
+
+    def _select_dynamic_avoid_candidate(self, evaluations):
+        safe = [item for item in evaluations if item.safety.safe]
+        if not safe:
+            return None
+        return min(
+            safe,
+            key=lambda item: (
+                0 if self._is_avoid_preferred_name(item.trajectory.name) else 1,
+                item.costs.get("reverse", 999.0),
+                item.costs.get("progress", 999.0),
+                item.costs.get("goal", 999.0),
+                item.costs.get("lateral", 999.0),
+                -float(item.safety.min_clearance),
+                -float(item.safety.min_ttc),
+                item.score,
+            ),
+        )
+
+    def _select_recovery_candidate(self, evaluations, current_clearance: float = 999.0):
+        safe = [item for item in evaluations if item.safety.safe]
+        recoverable = [
+            item for item in evaluations
+            if self._is_recoverable_rejoin(item, current_clearance)
+        ]
+        pool = safe or recoverable
+        if not pool:
+            return None
+        return min(
+            pool,
+            key=lambda item: (
+                0 if item.safety.safe else 1,
+                item.costs.get("reverse", 999.0),
+                item.costs.get("progress", 999.0),
+                item.costs.get("goal", 999.0),
+                item.costs.get("lateral", 999.0),
+                -float(item.safety.min_clearance),
+                -float(item.safety.min_ttc),
+                item.score,
+            ),
+        )
+
+    def _is_recoverable_rejoin(self, item, current_clearance: float) -> bool:
+        default_clearance = max(float(getattr(self.config, "static_hard_clearance", 0.25)), self.config.hard_clearance) + 0.01
+        rejoin_clearance = float(getattr(self.config, "recoverable_rejoin_clearance", default_clearance))
+        if current_clearance < rejoin_clearance:
+            return False
+        return bool(
+            item.safety.feasible
+            and not item.safety.safe
+            and item.safety.reason == "rejoining_corridor"
+            and item.trajectory.name.startswith("local_astar:")
+            and item.safety.min_static_clearance >= 0.28
+            and item.trajectory.velocity.norm() <= 0.45
+        )
+
+    @staticmethod
+    def _is_avoid_preferred_name(name: str) -> bool:
+        return name.startswith("local_astar:") or "lateral" in name
+
+    @staticmethod
+    def _is_goal_directed_name(name: str) -> bool:
+        return name in {"track_goal", "slow_goal", "target_slow", "target_left", "target_right"}
 
     def _goal_aligned_state(self, state: PlannerState, local_goal: Vec3, dt: Optional[float]) -> tuple[PlannerState, float]:
         to_goal = local_goal - state.position
