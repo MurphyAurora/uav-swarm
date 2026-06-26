@@ -42,6 +42,7 @@ setup(
             'ego_like_planner_framework = xtd2_mission.ego_like_planner_framework_node:main',
             'local_static_planner = xtd2_mission.local_static_planner:main',
             'multi_waypoint2 = xtd2_mission.multi_waypoint2:main',
+            'multi_waypoint2_arbiter = xtd2_mission.multi_waypoint2_arbiter:main',
             'mission_controller = xtd2_mission.mission_controller:main',
             'obstacle_config = xtd2_mission.obstacle_config:main',
         ],
