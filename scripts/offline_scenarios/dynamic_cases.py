@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .base import CircleObstacle, MovingCircleObstacle, SimCase, v3
+from .base import CircleObstacle, MovingCircleObstacle, SimCase, default_bounds, v3
 
 
 def dynamic_crossing_slow() -> SimCase:
@@ -11,6 +11,7 @@ def dynamic_crossing_slow() -> SimCase:
         dynamic_obstacles=(
             MovingCircleObstacle(6.0, -3.0, 0.0, 0.45, 0.40, obstacle_id="cross_slow"),
         ),
+        bounds=default_bounds(12.5, half_width=3.2),
         steps=650,
     )
 
@@ -23,6 +24,7 @@ def dynamic_crossing_fast() -> SimCase:
         dynamic_obstacles=(
             MovingCircleObstacle(6.0, -3.0, 0.0, 0.85, 0.40, obstacle_id="cross_fast"),
         ),
+        bounds=default_bounds(12.5, half_width=3.2),
         steps=650,
     )
 
@@ -35,6 +37,7 @@ def head_on_slow() -> SimCase:
         dynamic_obstacles=(
             MovingCircleObstacle(10.0, 0.0, -0.45, 0.0, 0.42, obstacle_id="head_on_slow"),
         ),
+        bounds=default_bounds(12.5, half_width=3.0),
         steps=700,
     )
 
@@ -47,6 +50,7 @@ def head_on_fast() -> SimCase:
         dynamic_obstacles=(
             MovingCircleObstacle(10.0, 0.0, -0.80, 0.0, 0.42, obstacle_id="head_on_fast"),
         ),
+        bounds=default_bounds(12.5, half_width=3.0),
         steps=700,
     )
 
@@ -64,5 +68,6 @@ def mixed_static_dynamic_crossing() -> SimCase:
             MovingCircleObstacle(6.5, -3.0, 0.0, 0.55, 0.38, obstacle_id="cross_1"),
             MovingCircleObstacle(10.5, 3.0, 0.0, -0.45, 0.38, obstacle_id="cross_2"),
         ),
+        bounds=default_bounds(14.5, half_width=3.2),
         steps=800,
     )
