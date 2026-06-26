@@ -103,6 +103,53 @@ def default_bounds(length: float, half_width: float = 3.0, back: float = 0.6) ->
     return Bounds2D(xmin=-back, xmax=float(length), ymin=-half_width, ymax=half_width)
 
 
+def boundary_obstacles(case: SimCase, spacing: float = 0.35, radius: float = 0.16) -> Iterable[Obstacle]:
+    """Convert test bounds into virtual static obstacles visible to the planner.
+
+    The runner still judges out-of-bounds explicitly, but planner modules also
+    need to see the boundary; otherwise they can plan an outside detour and only
+    fail after execution.  The boundary is represented by small static disks
+    sampled along each side of the rectangle.
+    """
+
+    if case.bounds is None:
+        return []
+    z = case.start.z
+    b = case.bounds
+
+    def samples(start: float, end: float) -> int:
+        return max(2, int(math.ceil(abs(end - start) / max(spacing, 1.0e-6))) + 1)
+
+    out: List[Obstacle] = []
+    nx = samples(b.xmin, b.xmax)
+    ny = samples(b.ymin, b.ymax)
+    for idx in range(nx):
+        alpha = idx / max(nx - 1, 1)
+        x = b.xmin + alpha * (b.xmax - b.xmin)
+        for y, side in ((b.ymin, "bottom"), (b.ymax, "top")):
+            out.append(
+                Obstacle(
+                    position=Vec3(x, y, z),
+                    radius=radius,
+                    source="boundary",
+                    obstacle_id=f"bound_{side}_{idx:03d}",
+                )
+            )
+    for idx in range(ny):
+        alpha = idx / max(ny - 1, 1)
+        y = b.ymin + alpha * (b.ymax - b.ymin)
+        for x, side in ((b.xmin, "left"), (b.xmax, "right")):
+            out.append(
+                Obstacle(
+                    position=Vec3(x, y, z),
+                    radius=radius,
+                    source="boundary",
+                    obstacle_id=f"bound_{side}_{idx:03d}",
+                )
+            )
+    return out
+
+
 def make_perception(case: SimCase, stamp: float) -> PerceptionData:
     obstacles: List[Obstacle] = []
     z = case.start.z
@@ -129,6 +176,8 @@ def make_perception(case: SimCase, stamp: float) -> PerceptionData:
                 predictions=item.predictions(stamp, z),
             )
         )
+
+    obstacles.extend(boundary_obstacles(case))
 
     return PerceptionData(
         obstacles=obstacles,
