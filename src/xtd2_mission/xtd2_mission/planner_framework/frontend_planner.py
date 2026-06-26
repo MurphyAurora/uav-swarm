@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Front-end candidate trajectory generator.
 
-This frontend is intentionally path-first:
+This frontend is path-centered rather than behavior-centered:
 
-1. Local A* / PathTracker owns the normal path-following behavior.
+1. Local A* / PathTracker owns the nominal path-following behavior.
 2. CorridorSelector is only a multi-obstacle search bias.
-3. Escape candidates are emergency-only and must not compete with a valid path.
+3. The frontend generates a small family of variants around the nominal path.
+4. Escape candidates are emergency fallback only.
 """
 
 import math
@@ -38,9 +39,8 @@ class FrontendPlanner:
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
 
-            # Layering rule: corridor selection is not a controller.  It only biases
-            # local A* in genuinely multi-obstacle scenes.  Single-pillar cases use
-            # the baseline local-A*/path-tracker behavior.
+            # Corridor selection is only a hint for local A* in multi-obstacle scenes.
+            # It must not directly create a control action or disturb single-pillar tests.
             obstacle_count = sum(1 for obs in perception.obstacles if obs.source not in ("boundary", "lidar_near_field"))
             enable_corridor = bool(obstacle_count >= 2)
             if enable_corridor:
@@ -52,7 +52,6 @@ class FrontendPlanner:
                 self._corridor_lock_until = 0.0
 
             if corridor_decision.active and abs(corridor_decision.side) > 0.5 and not self._corridor_lock_active:
-                # Bias local A* side selection, but do not generate a control action.
                 try:
                     self.local_astar._side_latch = corridor_decision.side
                     self.local_astar._side_latch_until = max(
@@ -67,29 +66,36 @@ class FrontendPlanner:
             candidate_reason = ""
             candidate_margin = 999.0
             candidate_progress = 0.0
+            path_variants: List[CandidateTrajectory] = []
+
             if astar_candidate is not None:
                 candidate_reason = str(astar_candidate.metadata.get("safety_reason", astar_candidate.metadata.get("reason", "")) or "")
                 candidate_margin = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
                 to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
                 goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
                 candidate_progress = astar_candidate.velocity.x * goal_dir.x + astar_candidate.velocity.y * goal_dir.y
-                astar_candidate.metadata["path_primary"] = True
-                astar_candidate.metadata["corridor_enabled"] = bool(enable_corridor)
-                astar_candidate.metadata["corridor_selector"] = corridor_decision.to_dict()
-                astar_candidate.metadata["risk"] = float(self._last_risk)
-                astar_candidate.metadata["candidate_progress"] = float(candidate_progress)
+                self._tag_path_candidate(astar_candidate, "primary", enable_corridor, corridor_decision, candidate_progress)
                 candidates.append(astar_candidate)
+
+                # Important: a mature path-centric frontend does not output only one
+                # nominal path candidate.  It outputs a small candidate family around
+                # the same path direction so SafetyChecker/BackendSelector can still
+                # choose a safe command when the centerline is temporarily too close.
+                path_variants = self._path_centered_variants(state, local_goal, astar_candidate, candidate_progress)
+                for cand in path_variants:
+                    self._tag_path_candidate(cand, cand.metadata.get("path_variant", "variant"), enable_corridor, corridor_decision, candidate_progress)
+                candidates.extend(path_variants)
 
             risk_value = float(risk.get("risk", 0.0) or 0.0)
             current_clearance = float(risk.get("clearance", 999.0) or 999.0)
             path_available = astar_candidate is not None
-            path_forward_ok = bool(path_available and candidate_progress > 0.0 and candidate_margin >= 0.45)
+            path_forward_ok = bool(path_available and candidate_progress > 0.0 and candidate_margin >= 0.40)
             critical_current = bool(current_clearance < 0.20)
-            path_missing_or_unusable = bool(not path_available or (candidate_margin < 0.30 and candidate_progress <= 0.0))
+            path_missing_or_unusable = bool(not path_available or (candidate_margin < 0.25 and candidate_progress <= 0.0))
 
-            # Escape is emergency-only.  If Local A* has produced a path candidate,
-            # let SafetyChecker/BackendSelector handle it; do not add competing
-            # escape/back behaviors unless the vehicle is already in near-contact.
+            # Escape remains a fallback.  It is allowed when no path exists, when the
+            # path is clearly unusable, or when current clearance is already critical.
+            # It is not a normal alternative to the path-centered variants.
             escape_candidates: List[CandidateTrajectory] = []
             allow_escape = bool(path_missing_or_unusable or critical_current)
             if allow_escape:
@@ -108,7 +114,6 @@ class FrontendPlanner:
                     cand.metadata["corridor_selector"] = corridor_decision.to_dict()
                 candidates.extend(escape_candidates)
 
-            # Reset stale escape/avoid state when the normal path is making progress.
             if path_forward_ok and not critical_current:
                 self._escape_hold_until = 0.0
                 self._avoid_active = False
@@ -120,9 +125,10 @@ class FrontendPlanner:
                 "mode": mode,
                 "local_astar": dict(self.local_astar.diagnostics),
                 "risk_field": dict(risk),
-                "path_first": True,
+                "path_centered": True,
                 "path_available": bool(path_available),
                 "path_forward_ok": bool(path_forward_ok),
+                "path_variants": len(path_variants),
                 "candidate_progress": float(candidate_progress),
                 "candidate_margin": float(candidate_margin),
                 "candidate_reason": candidate_reason,
@@ -134,7 +140,7 @@ class FrontendPlanner:
                 "astar_direct": bool(astar_direct),
             }
         else:
-            self.diagnostics = {"mode": mode, "path_first": False}
+            self.diagnostics = {"mode": mode, "path_centered": False}
             self._escape_side = 0.0
             self._avoid_active = False
             self._avoid_side = 0.0
@@ -147,6 +153,48 @@ class FrontendPlanner:
 
     def generate_from_velocity_set(self, state: PlannerState, velocity_set: Iterable[Tuple[str, Vec3]]) -> List[CandidateTrajectory]:
         return [self._rollout(name, velocity.limit_norm(self.config.max_speed), state.position) for name, velocity in velocity_set]
+
+    def _tag_path_candidate(self, candidate, variant: str, enable_corridor: bool, corridor_decision, progress: float) -> None:
+        candidate.metadata["path_primary"] = variant == "primary"
+        candidate.metadata["path_centered"] = True
+        candidate.metadata["path_variant"] = str(variant)
+        candidate.metadata["corridor_enabled"] = bool(enable_corridor)
+        candidate.metadata["corridor_selector"] = corridor_decision.to_dict()
+        candidate.metadata["risk"] = float(self._last_risk)
+        candidate.metadata["candidate_progress"] = float(progress)
+
+    def _path_centered_variants(self, state: PlannerState, local_goal: Vec3, primary: CandidateTrajectory,
+                                primary_progress: float) -> List[CandidateTrajectory]:
+        variants: List[CandidateTrajectory] = []
+        base = Vec3(primary.velocity.x, primary.velocity.y, 0.0)
+        speed = base.norm()
+        if speed <= 1.0e-6:
+            return variants
+
+        to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
+        goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
+        base_dir = base.normalized(goal_dir)
+        left = Vec3(-base_dir.y, base_dir.x, 0.0)
+        max_speed = max(self.config.max_speed, 1.0e-6)
+
+        # Slow path-follow: useful when the nominal path is directionally correct but
+        # the current clearance is tight.
+        slow = self._rollout("local_astar:path_slow", base_dir * min(speed * 0.55, max_speed * 0.45), state.position)
+        slow.metadata["path_variant"] = "slow"
+        variants.append(slow)
+
+        # Around-path variants: still move with the path, but bias slightly to either
+        # side.  These are not independent escape behaviors; they are local rollout
+        # variants around the same nominal path direction.
+        side_speed = min(max(speed * 0.78, 0.10), max_speed * 0.70)
+        lateral_gain = 0.34 if primary_progress >= -0.02 else 0.20
+        for side_name, side_vec in (("left", left), ("right", left * -1.0)):
+            direction = self._norm_vec(base_dir * 0.95 + side_vec * lateral_gain)
+            cand = self._rollout(f"local_astar:path_lateral_forward_{side_name}", direction * side_speed, state.position)
+            cand.metadata["path_variant"] = f"lateral_forward_{side_name}"
+            variants.append(cand)
+
+        return variants
 
     def _desired_velocity_towards_goal(self, state: PlannerState, local_goal: Vec3) -> Vec3:
         to_goal = local_goal - state.position
