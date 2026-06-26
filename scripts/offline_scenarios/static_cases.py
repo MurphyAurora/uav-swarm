@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .base import CircleObstacle, SimCase, v3
+from .base import CircleObstacle, SimCase, default_bounds, v3
 
 
 def single_pillar() -> SimCase:
@@ -9,6 +9,7 @@ def single_pillar() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(12.0, 0.0),
         obstacles=(CircleObstacle(4.0, 0.0, 0.55, obstacle_id="pillar_1"),),
+        bounds=default_bounds(12.5, half_width=3.0),
     )
 
 
@@ -18,6 +19,7 @@ def single_pillar_left_bias() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(12.0, 0.0),
         obstacles=(CircleObstacle(4.0, 0.65, 0.55, obstacle_id="pillar_left_bias"),),
+        bounds=default_bounds(12.5, half_width=3.0),
     )
 
 
@@ -27,6 +29,7 @@ def single_pillar_right_bias() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(12.0, 0.0),
         obstacles=(CircleObstacle(4.0, -0.65, 0.55, obstacle_id="pillar_right_bias"),),
+        bounds=default_bounds(12.5, half_width=3.0),
     )
 
 
@@ -43,6 +46,7 @@ def forest_gap() -> SimCase:
             CircleObstacle(9.0, -1.0, 0.50, obstacle_id="p5"),
             CircleObstacle(11.0, 0.4, 0.45, obstacle_id="p6"),
         ),
+        bounds=default_bounds(16.5, half_width=3.0),
         steps=700,
     )
 
@@ -56,6 +60,7 @@ def rejoin_shell() -> SimCase:
             CircleObstacle(1.1, -0.8, 0.50, obstacle_id="near_side"),
             CircleObstacle(3.8, 0.8, 0.45, obstacle_id="front_side"),
         ),
+        bounds=default_bounds(8.5, half_width=2.8),
         steps=450,
     )
 
@@ -66,11 +71,13 @@ def s_curve_easy() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(13.0, 0.0),
         obstacles=(
-            CircleObstacle(3.0, -0.95, 0.45, obstacle_id="s1"),
-            CircleObstacle(5.2, 0.95, 0.45, obstacle_id="s2"),
-            CircleObstacle(7.4, -0.95, 0.45, obstacle_id="s3"),
-            CircleObstacle(9.6, 0.95, 0.45, obstacle_id="s4"),
+            # Tightened toward the centerline so straight tracking is no longer a pass.
+            CircleObstacle(3.0, -0.55, 0.55, obstacle_id="s1"),
+            CircleObstacle(5.2, 0.55, 0.55, obstacle_id="s2"),
+            CircleObstacle(7.4, -0.55, 0.55, obstacle_id="s3"),
+            CircleObstacle(9.6, 0.55, 0.55, obstacle_id="s4"),
         ),
+        bounds=default_bounds(13.5, half_width=2.6),
         steps=650,
     )
 
@@ -81,12 +88,13 @@ def s_curve_medium() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(14.0, 0.0),
         obstacles=(
-            CircleObstacle(2.8, -0.80, 0.52, obstacle_id="s1"),
-            CircleObstacle(4.9, 0.85, 0.52, obstacle_id="s2"),
-            CircleObstacle(7.0, -0.85, 0.52, obstacle_id="s3"),
-            CircleObstacle(9.1, 0.85, 0.52, obstacle_id="s4"),
-            CircleObstacle(11.2, -0.80, 0.52, obstacle_id="s5"),
+            CircleObstacle(2.8, -0.50, 0.58, obstacle_id="s1"),
+            CircleObstacle(4.9, 0.55, 0.58, obstacle_id="s2"),
+            CircleObstacle(7.0, -0.55, 0.58, obstacle_id="s3"),
+            CircleObstacle(9.1, 0.55, 0.58, obstacle_id="s4"),
+            CircleObstacle(11.2, -0.50, 0.58, obstacle_id="s5"),
         ),
+        bounds=default_bounds(14.5, half_width=2.5),
         steps=750,
     )
 
@@ -104,6 +112,7 @@ def two_corridors() -> SimCase:
             CircleObstacle(6.0, 2.0, 0.45, obstacle_id="top_pressure"),
             CircleObstacle(8.0, -2.0, 0.45, obstacle_id="bottom_pressure"),
         ),
+        bounds=default_bounds(14.5, half_width=3.0),
         steps=750,
     )
 
@@ -122,6 +131,7 @@ def u_trap_shallow() -> SimCase:
             CircleObstacle(6.0, -1.0, 0.45, obstacle_id="u_bottom_3"),
             CircleObstacle(6.4, 0.0, 0.45, obstacle_id="u_end"),
         ),
+        bounds=default_bounds(10.5, half_width=2.8),
         steps=650,
     )
 
@@ -143,6 +153,7 @@ def narrow_corridor_easy() -> SimCase:
             CircleObstacle(8.8, -1.75, 0.40, obstacle_id="bottom_4"),
             CircleObstacle(10.8, -1.75, 0.40, obstacle_id="bottom_5"),
         ),
+        bounds=default_bounds(13.5, half_width=2.9),
         steps=650,
     )
 
@@ -164,6 +175,7 @@ def narrow_corridor() -> SimCase:
             CircleObstacle(9.4, -1.55, 0.42, obstacle_id="bottom_4"),
             CircleObstacle(11.3, -1.60, 0.42, obstacle_id="bottom_5"),
         ),
+        bounds=default_bounds(13.5, half_width=2.7),
         steps=650,
     )
 
@@ -186,5 +198,6 @@ def narrow_corridor_bias() -> SimCase:
             CircleObstacle(11.3, -1.55, 0.42, obstacle_id="bottom_5"),
             CircleObstacle(6.4, 0.45, 0.20, obstacle_id="center_bias"),
         ),
+        bounds=default_bounds(13.5, half_width=2.6),
         steps=700,
     )
