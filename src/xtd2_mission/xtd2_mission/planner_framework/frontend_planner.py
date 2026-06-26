@@ -22,9 +22,6 @@ class FrontendPlanner:
         self._last_risk = 0.0
         self._corridor_lock_until = 0.0
         self._corridor_lock_active = False
-        # Temporal consistency for constrained passages.  This is intentionally a
-        # soft cooldown: it can suppress weak rejoin attempts, but it must not keep
-        # generating back/escape candidates once clearance is already acceptable.
         self._escape_hold_until = 0.0
         self._last_escape_stamp = -999.0
 
@@ -33,21 +30,22 @@ class FrontendPlanner:
         mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
-            # Corridor selector is only useful for constrained/multi-obstacle fields.
-            # In single-pillar smoke tests it adds a topological mode where none is
-            # needed and can trap the vehicle in an artificial side preference.
+
+            # Corridor selector is a topology/mode decision layer for constrained
+            # multi-obstacle fields.  Keep it completely off for single-obstacle
+            # smoke tests so the baseline single_pillar behavior stays comparable
+            # with the pre-corridor planner.
             obstacle_count = sum(1 for obs in perception.obstacles if obs.source not in ("boundary", "lidar_near_field"))
-            boundary_count = sum(1 for obs in perception.obstacles if obs.source == "boundary")
-            enable_corridor = bool(obstacle_count >= 2 or (obstacle_count >= 1 and boundary_count >= 8 and float(risk.get("risk", 0.0) or 0.0) > 0.55))
+            enable_corridor = bool(obstacle_count >= 2)
             if enable_corridor:
                 corridor_decision = self.corridor_selector.update(state, local_goal, perception, risk)
             else:
                 self.corridor_selector.reset()
                 corridor_decision = self.corridor_selector._last_decision
+                self._corridor_lock_active = False
+                self._corridor_lock_until = 0.0
 
             if corridor_decision.active and abs(corridor_decision.side) > 0.5:
-                # Corridor-level preference is stronger than instantaneous nearest
-                # obstacle side.  It is the lightweight topology/mode decision layer.
                 self._avoid_side = corridor_decision.side
                 if abs(self._escape_side) < 0.5:
                     self._escape_side = corridor_decision.side
@@ -83,15 +81,11 @@ class FrontendPlanner:
             risk_value = float(risk.get("risk", 1.0) or 1.0)
             forward_rejoin_ok = bool(astar_candidate is not None and candidate_margin >= 0.62 and candidate_progress > 0.015 and risk_value < 0.85)
             strong_forward_rejoin = bool(astar_candidate is not None and candidate_margin >= 0.78 and candidate_progress > 0.03 and risk_value < 0.70)
-            # If a candidate is already well clear and moves toward the local goal,
-            # stop holding the previous escape.  This prevents single-pillar cases
-            # from freezing after they have safely gone around the obstacle.
+
             if escape_hold and forward_rejoin_ok:
                 self._escape_hold_until = 0.0
                 escape_hold = False
             if strong_forward_rejoin:
-                # Rejoin has enough clearance and positive progress; do not keep a
-                # stale escape/avoid state alive.
                 self._avoid_active = False
                 self._avoid_side = 0.0 if not corridor_decision.active else self._avoid_side
                 self._escape_side = 0.0 if not corridor_decision.active else self._escape_side
@@ -157,9 +151,6 @@ class FrontendPlanner:
                     state,
                     local_goal,
                     perception,
-                    # Do not use escape_hold itself as early-escape permission.
-                    # Otherwise a previously valid escape can keep regenerating back
-                    # motions forever even after clearance has improved.
                     allow_early_escape=astar_candidate is None or self._last_risk > 0.78,
                 )
             if escape_candidates:
