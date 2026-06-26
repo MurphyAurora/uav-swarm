@@ -31,7 +31,7 @@ SRC_DIR = os.path.join(REPO_ROOT, "src", "xtd2_mission")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from offline_scenarios.base import SimCase, collision_margin, make_perception, obstacle_snapshots
+from offline_scenarios.base import SimCase, bounds_margin, collision_margin, make_perception, obstacle_snapshots
 from offline_scenarios.registry import CASE_REGISTRY, get_case
 from xtd2_mission.planner_framework import EgoLikePlannerCore, PlannerConfig, PlannerState, Vec3
 
@@ -61,6 +61,7 @@ def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[
             heading = math.atan2(vel.y, vel.x)
 
         margin = collision_margin(pos, case, config.drone_radius, next_stamp)
+        b_margin = bounds_margin(pos, case, config.drone_radius)
         row = {
             "step": step,
             "t": next_stamp,
@@ -76,6 +77,8 @@ def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[
             "feasible_count": report.get("feasible_count", 0),
             "candidate_count": report.get("candidate_count", 0),
             "collision_margin": margin,
+            "bounds_margin": b_margin,
+            "max_abs_y": abs(pos.y),
             "distance_to_goal": pos.distance_to(case.goal),
         }
         history.append(row)
@@ -85,12 +88,15 @@ def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[
             print(
                 f"step={step:04d} pos=({pos.x:5.2f},{pos.y:5.2f}) "
                 f"cmd=({vel.x:5.2f},{vel.y:5.2f}) src={row['source']} "
-                f"reason={row['reason']} margin={margin:5.2f}"
+                f"reason={row['reason']} margin={margin:5.2f} bounds={b_margin:5.2f}"
             )
         last_source = str(row["source"])
 
         if margin < 0.0:
             status = "collision"
+            break
+        if b_margin < 0.0:
+            status = "out_of_bounds"
             break
         if pos.distance_to(case.goal) <= config.local_goal_reached_radius:
             status = "reached"
@@ -112,11 +118,17 @@ def write_csv(path: str, history: Iterable[Dict[str, object]]) -> None:
 def plot_case(path: str, case: SimCase, history: List[Dict[str, object]], config: PlannerConfig) -> None:
     try:
         import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
     except ImportError as exc:
         raise SystemExit("matplotlib is required for --plot: pip install matplotlib") from exc
 
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     fig, ax = plt.subplots(figsize=(9, 5))
+    if case.bounds is not None:
+        width = case.bounds.xmax - case.bounds.xmin
+        height = case.bounds.ymax - case.bounds.ymin
+        rect = Rectangle((case.bounds.xmin, case.bounds.ymin), width, height, fill=False, linestyle="--", linewidth=1.2, label="bounds")
+        ax.add_patch(rect)
     ax.plot([case.start.x], [case.start.y], "go", label="start")
     ax.plot([case.goal.x], [case.goal.y], "r*", markersize=12, label="goal")
     if history:
@@ -184,7 +196,9 @@ def main() -> int:
         f"[result] case={case.name} status={status} steps={len(history)} "
         f"final=({float(final.get('x', case.start.x)):.2f},{float(final.get('y', case.start.y)):.2f}) "
         f"goal_dist={float(final.get('distance_to_goal', case.start.distance_to(case.goal))):.2f} "
-        f"min_margin={min(float(r['collision_margin']) for r in history):.2f}"
+        f"min_margin={min(float(r['collision_margin']) for r in history):.2f} "
+        f"min_bounds={min(float(r['bounds_margin']) for r in history):.2f} "
+        f"max_abs_y={max(float(r['max_abs_y']) for r in history):.2f}"
     )
 
     if args.csv:
