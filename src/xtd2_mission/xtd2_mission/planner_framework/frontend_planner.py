@@ -33,7 +33,18 @@ class FrontendPlanner:
         mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
-            corridor_decision = self.corridor_selector.update(state, local_goal, perception, risk)
+            # Corridor selector is only useful for constrained/multi-obstacle fields.
+            # In single-pillar smoke tests it adds a topological mode where none is
+            # needed and can trap the vehicle in an artificial side preference.
+            obstacle_count = sum(1 for obs in perception.obstacles if obs.source not in ("boundary", "lidar_near_field"))
+            boundary_count = sum(1 for obs in perception.obstacles if obs.source == "boundary")
+            enable_corridor = bool(obstacle_count >= 2 or (obstacle_count >= 1 and boundary_count >= 8 and float(risk.get("risk", 0.0) or 0.0) > 0.55))
+            if enable_corridor:
+                corridor_decision = self.corridor_selector.update(state, local_goal, perception, risk)
+            else:
+                self.corridor_selector.reset()
+                corridor_decision = self.corridor_selector._last_decision
+
             if corridor_decision.active and abs(corridor_decision.side) > 0.5:
                 # Corridor-level preference is stronger than instantaneous nearest
                 # obstacle side.  It is the lightweight topology/mode decision layer.
@@ -60,17 +71,31 @@ class FrontendPlanner:
             astar_direct = bool(astar_candidate is not None and astar_candidate.name == "local_astar:direct")
             candidate_reason = ""
             candidate_margin = 999.0
+            candidate_progress = 0.0
             if astar_candidate is not None:
                 candidate_reason = str(astar_candidate.metadata.get("safety_reason", astar_candidate.metadata.get("reason", "")) or "")
                 candidate_margin = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
+                if astar_candidate.points:
+                    to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
+                    goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
+                    candidate_progress = astar_candidate.velocity.x * goal_dir.x + astar_candidate.velocity.y * goal_dir.y
 
             risk_value = float(risk.get("risk", 1.0) or 1.0)
-            # If a candidate is already well clear, stop holding the previous escape.
-            # This is the key guard that prevents single_pillar from freezing after
-            # it has safely gone around the obstacle.
-            if escape_hold and candidate_margin >= 0.88 and risk_value < 0.70:
+            forward_rejoin_ok = bool(astar_candidate is not None and candidate_margin >= 0.62 and candidate_progress > 0.015 and risk_value < 0.85)
+            strong_forward_rejoin = bool(astar_candidate is not None and candidate_margin >= 0.78 and candidate_progress > 0.03 and risk_value < 0.70)
+            # If a candidate is already well clear and moves toward the local goal,
+            # stop holding the previous escape.  This prevents single-pillar cases
+            # from freezing after they have safely gone around the obstacle.
+            if escape_hold and forward_rejoin_ok:
                 self._escape_hold_until = 0.0
                 escape_hold = False
+            if strong_forward_rejoin:
+                # Rejoin has enough clearance and positive progress; do not keep a
+                # stale escape/avoid state alive.
+                self._avoid_active = False
+                self._avoid_side = 0.0 if not corridor_decision.active else self._avoid_side
+                self._escape_side = 0.0 if not corridor_decision.active else self._escape_side
+                self._avoid_until = 0.0
 
             if astar_direct:
                 self._update_corridor_lock(state, astar_candidate, risk)
@@ -82,7 +107,7 @@ class FrontendPlanner:
             allow_rejoin_during_hold = bool(
                 not escape_hold
                 or low_risk_direct
-                or (candidate_margin >= 0.88 and risk_value < 0.70)
+                or forward_rejoin_ok
             )
             if low_risk_direct and not corridor_decision.active:
                 self._avoid_active = False
@@ -95,6 +120,7 @@ class FrontendPlanner:
                 "mode": mode,
                 "local_astar": dict(self.local_astar.diagnostics),
                 "risk_field": dict(risk),
+                "corridor_enabled": bool(enable_corridor),
                 "corridor_selector": corridor_decision.to_dict(),
                 "avoid_active": bool(self._avoid_active),
                 "avoid_side": float(self._avoid_side),
@@ -106,6 +132,9 @@ class FrontendPlanner:
                 "escape_hold": bool(escape_hold),
                 "escape_hold_until": float(self._escape_hold_until),
                 "allow_rejoin_during_hold": bool(allow_rejoin_during_hold),
+                "forward_rejoin_ok": bool(forward_rejoin_ok),
+                "strong_forward_rejoin": bool(strong_forward_rejoin),
+                "candidate_progress": float(candidate_progress),
                 "candidate_margin": float(candidate_margin),
                 "candidate_reason": candidate_reason,
             }
@@ -114,14 +143,16 @@ class FrontendPlanner:
                 astar_candidate.metadata["avoid_side"] = float(self._avoid_side)
                 astar_candidate.metadata["risk"] = float(self._last_risk)
                 astar_candidate.metadata["corridor_locked"] = bool(corridor_locked)
+                astar_candidate.metadata["corridor_enabled"] = bool(enable_corridor)
                 astar_candidate.metadata["corridor_selector"] = corridor_decision.to_dict()
                 astar_candidate.metadata["escape_hold"] = bool(escape_hold)
+                astar_candidate.metadata["forward_rejoin_ok"] = bool(forward_rejoin_ok)
                 candidates.append(astar_candidate)
             elif astar_candidate is not None:
                 self.diagnostics["suppressed_astar"] = astar_candidate.name
 
             escape_candidates: List[CandidateTrajectory] = []
-            if not corridor_locked and not low_risk_direct:
+            if not corridor_locked and not low_risk_direct and not strong_forward_rejoin:
                 escape_candidates = self._hard_zone_escape_candidates(
                     state,
                     local_goal,
@@ -129,13 +160,11 @@ class FrontendPlanner:
                     # Do not use escape_hold itself as early-escape permission.
                     # Otherwise a previously valid escape can keep regenerating back
                     # motions forever even after clearance has improved.
-                    allow_early_escape=astar_candidate is None or self._last_risk > 0.70,
+                    allow_early_escape=astar_candidate is None or self._last_risk > 0.78,
                 )
             if escape_candidates:
                 self._last_escape_stamp = state.stamp
-                # Shorter hold than before; enough to avoid one-frame flip-flop but
-                # not enough to dominate easy maps.
-                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.45)
+                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.35)
                 for cand in escape_candidates:
                     cand.metadata["escape_hold_until"] = float(self._escape_hold_until)
                     cand.metadata["corridor_selector"] = corridor_decision.to_dict()
@@ -305,13 +334,16 @@ class FrontendPlanner:
         preferred = lateral_left if self._escape_side > 0.0 else lateral_right
         back = goal_dir * -1.0
         speed = min(0.24, max(0.18, self.config.max_speed * 0.32))
-        back_speed = min(0.14, max(0.08, self.config.max_speed * 0.18))
+        back_speed = min(0.11, max(0.06, self.config.max_speed * 0.14))
+        critical = bool(nearest_clearance < max(0.36, self.config.static_emergency_clearance * 0.75))
 
         directions = [
             ("local_escape:lateral_latched", preferred, speed),
-            ("local_escape:back_latched", self._norm_vec(back * 0.35 + preferred), speed * 0.65),
-            ("local_escape:back", back, back_speed),
+            ("local_escape:lateral_forward_latched", self._norm_vec(preferred * 0.85 + goal_dir * 0.45), speed * 0.92),
+            ("local_escape:back_latched", self._norm_vec(back * 0.25 + preferred), speed * 0.45),
         ]
+        if critical:
+            directions.append(("local_escape:back", back, back_speed))
         return [
             self._rollout(name, direction * cmd_speed, state.position)
             for name, direction, cmd_speed in directions
