@@ -5,6 +5,7 @@ import math
 from typing import Iterable, List, Optional, Tuple
 
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
+from .corridor_selector import CorridorSelector
 from .local_astar_passable import LocalAStarPlanner
 
 
@@ -12,6 +13,7 @@ class FrontendPlanner:
     def __init__(self, config: Optional[PlannerConfig] = None):
         self.config = config or PlannerConfig()
         self.local_astar = LocalAStarPlanner(self.config)
+        self.corridor_selector = CorridorSelector(self.config)
         self.diagnostics = {}
         self._escape_side = 0.0
         self._avoid_active = False
@@ -31,12 +33,26 @@ class FrontendPlanner:
         mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
+            corridor_decision = self.corridor_selector.update(state, local_goal, perception, risk)
+            if corridor_decision.active and abs(corridor_decision.side) > 0.5:
+                # Corridor-level preference is stronger than instantaneous nearest
+                # obstacle side.  It is the lightweight topology/mode decision layer.
+                self._avoid_side = corridor_decision.side
+                if abs(self._escape_side) < 0.5:
+                    self._escape_side = corridor_decision.side
+                if bool(risk.get("front_obstacle", False)) or float(risk.get("risk", 0.0) or 0.0) > 0.25:
+                    self._avoid_active = True
+                    self._avoid_until = max(self._avoid_until, state.stamp + 1.2)
+
             escape_hold = state.stamp <= self._escape_hold_until
-            if (self._avoid_active or escape_hold) and abs(self._avoid_side or self._escape_side) > 0.5 and not self._corridor_lock_active:
+            if (self._avoid_active or escape_hold or corridor_decision.active) and abs(self._avoid_side or self._escape_side or corridor_decision.side) > 0.5 and not self._corridor_lock_active:
                 try:
-                    side = self._avoid_side if abs(self._avoid_side) > 0.5 else self._escape_side
+                    side = self._avoid_side if abs(self._avoid_side) > 0.5 else (self._escape_side if abs(self._escape_side) > 0.5 else corridor_decision.side)
                     self.local_astar._side_latch = side
-                    self.local_astar._side_latch_until = max(getattr(self.local_astar, "_side_latch_until", 0.0), state.stamp + 1.2)
+                    self.local_astar._side_latch_until = max(
+                        getattr(self.local_astar, "_side_latch_until", 0.0),
+                        state.stamp + (1.8 if corridor_decision.active else 1.2),
+                    )
                 except Exception:
                     pass
 
@@ -68,7 +84,7 @@ class FrontendPlanner:
                 or low_risk_direct
                 or (candidate_margin >= 0.88 and risk_value < 0.70)
             )
-            if low_risk_direct:
+            if low_risk_direct and not corridor_decision.active:
                 self._avoid_active = False
                 self._avoid_side = 0.0
                 self._escape_side = 0.0
@@ -79,6 +95,7 @@ class FrontendPlanner:
                 "mode": mode,
                 "local_astar": dict(self.local_astar.diagnostics),
                 "risk_field": dict(risk),
+                "corridor_selector": corridor_decision.to_dict(),
                 "avoid_active": bool(self._avoid_active),
                 "avoid_side": float(self._avoid_side),
                 "avoid_until": float(self._avoid_until),
@@ -97,6 +114,7 @@ class FrontendPlanner:
                 astar_candidate.metadata["avoid_side"] = float(self._avoid_side)
                 astar_candidate.metadata["risk"] = float(self._last_risk)
                 astar_candidate.metadata["corridor_locked"] = bool(corridor_locked)
+                astar_candidate.metadata["corridor_selector"] = corridor_decision.to_dict()
                 astar_candidate.metadata["escape_hold"] = bool(escape_hold)
                 candidates.append(astar_candidate)
             elif astar_candidate is not None:
@@ -120,6 +138,7 @@ class FrontendPlanner:
                 self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.45)
                 for cand in escape_candidates:
                     cand.metadata["escape_hold_until"] = float(self._escape_hold_until)
+                    cand.metadata["corridor_selector"] = corridor_decision.to_dict()
                 candidates.extend(escape_candidates)
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
                 self.diagnostics["escape_hold_until"] = float(self._escape_hold_until)
@@ -134,6 +153,7 @@ class FrontendPlanner:
             self._corridor_lock_active = False
             self._corridor_lock_until = 0.0
             self._escape_hold_until = 0.0
+            self.corridor_selector.reset()
             candidates.append(self._rollout("track_goal", self._desired_velocity_towards_goal(state, local_goal), state.position))
         return candidates
 
