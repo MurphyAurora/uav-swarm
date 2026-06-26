@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Front-end candidate trajectory generator."""
+"""Front-end candidate trajectory generator.
+
+This frontend is intentionally path-first:
+
+1. Local A* / PathTracker owns the normal path-following behavior.
+2. CorridorSelector is only a multi-obstacle search bias.
+3. Escape candidates are emergency-only and must not compete with a valid path.
+"""
 
 import math
 from typing import Iterable, List, Optional, Tuple
@@ -31,10 +38,9 @@ class FrontendPlanner:
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
 
-            # Corridor selector is a topology/mode decision layer for constrained
-            # multi-obstacle fields.  Keep it completely off for single-obstacle
-            # smoke tests so the baseline single_pillar behavior stays comparable
-            # with the pre-corridor planner.
+            # Layering rule: corridor selection is not a controller.  It only biases
+            # local A* in genuinely multi-obstacle scenes.  Single-pillar cases use
+            # the baseline local-A*/path-tracker behavior.
             obstacle_count = sum(1 for obs in perception.obstacles if obs.source not in ("boundary", "lidar_near_field"))
             enable_corridor = bool(obstacle_count >= 2)
             if enable_corridor:
@@ -45,22 +51,13 @@ class FrontendPlanner:
                 self._corridor_lock_active = False
                 self._corridor_lock_until = 0.0
 
-            if corridor_decision.active and abs(corridor_decision.side) > 0.5:
-                self._avoid_side = corridor_decision.side
-                if abs(self._escape_side) < 0.5:
-                    self._escape_side = corridor_decision.side
-                if bool(risk.get("front_obstacle", False)) or float(risk.get("risk", 0.0) or 0.0) > 0.25:
-                    self._avoid_active = True
-                    self._avoid_until = max(self._avoid_until, state.stamp + 1.2)
-
-            escape_hold = state.stamp <= self._escape_hold_until
-            if (self._avoid_active or escape_hold or corridor_decision.active) and abs(self._avoid_side or self._escape_side or corridor_decision.side) > 0.5 and not self._corridor_lock_active:
+            if corridor_decision.active and abs(corridor_decision.side) > 0.5 and not self._corridor_lock_active:
+                # Bias local A* side selection, but do not generate a control action.
                 try:
-                    side = self._avoid_side if abs(self._avoid_side) > 0.5 else (self._escape_side if abs(self._escape_side) > 0.5 else corridor_decision.side)
-                    self.local_astar._side_latch = side
+                    self.local_astar._side_latch = corridor_decision.side
                     self.local_astar._side_latch_until = max(
                         getattr(self.local_astar, "_side_latch_until", 0.0),
-                        state.stamp + (1.8 if corridor_decision.active else 1.2),
+                        state.stamp + 1.5,
                     )
                 except Exception:
                     pass
@@ -73,100 +70,71 @@ class FrontendPlanner:
             if astar_candidate is not None:
                 candidate_reason = str(astar_candidate.metadata.get("safety_reason", astar_candidate.metadata.get("reason", "")) or "")
                 candidate_margin = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
-                if astar_candidate.points:
-                    to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
-                    goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
-                    candidate_progress = astar_candidate.velocity.x * goal_dir.x + astar_candidate.velocity.y * goal_dir.y
+                to_goal = Vec3(local_goal.x - state.position.x, local_goal.y - state.position.y, 0.0)
+                goal_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
+                candidate_progress = astar_candidate.velocity.x * goal_dir.x + astar_candidate.velocity.y * goal_dir.y
+                astar_candidate.metadata["path_primary"] = True
+                astar_candidate.metadata["corridor_enabled"] = bool(enable_corridor)
+                astar_candidate.metadata["corridor_selector"] = corridor_decision.to_dict()
+                astar_candidate.metadata["risk"] = float(self._last_risk)
+                astar_candidate.metadata["candidate_progress"] = float(candidate_progress)
+                candidates.append(astar_candidate)
 
-            risk_value = float(risk.get("risk", 1.0) or 1.0)
-            forward_rejoin_ok = bool(astar_candidate is not None and candidate_margin >= 0.62 and candidate_progress > 0.015 and risk_value < 0.85)
-            strong_forward_rejoin = bool(astar_candidate is not None and candidate_margin >= 0.78 and candidate_progress > 0.03 and risk_value < 0.70)
+            risk_value = float(risk.get("risk", 0.0) or 0.0)
+            current_clearance = float(risk.get("clearance", 999.0) or 999.0)
+            path_available = astar_candidate is not None
+            path_forward_ok = bool(path_available and candidate_progress > 0.0 and candidate_margin >= 0.45)
+            critical_current = bool(current_clearance < 0.20)
+            path_missing_or_unusable = bool(not path_available or (candidate_margin < 0.30 and candidate_progress <= 0.0))
 
-            if escape_hold and forward_rejoin_ok:
+            # Escape is emergency-only.  If Local A* has produced a path candidate,
+            # let SafetyChecker/BackendSelector handle it; do not add competing
+            # escape/back behaviors unless the vehicle is already in near-contact.
+            escape_candidates: List[CandidateTrajectory] = []
+            allow_escape = bool(path_missing_or_unusable or critical_current)
+            if allow_escape:
+                escape_candidates = self._hard_zone_escape_candidates(
+                    state,
+                    local_goal,
+                    perception,
+                    allow_early_escape=not path_forward_ok and risk_value > 0.90,
+                )
+            if escape_candidates:
+                self._last_escape_stamp = state.stamp
+                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.25)
+                for cand in escape_candidates:
+                    cand.metadata["emergency_only"] = True
+                    cand.metadata["path_primary_available"] = bool(path_available)
+                    cand.metadata["corridor_selector"] = corridor_decision.to_dict()
+                candidates.extend(escape_candidates)
+
+            # Reset stale escape/avoid state when the normal path is making progress.
+            if path_forward_ok and not critical_current:
                 self._escape_hold_until = 0.0
-                escape_hold = False
-            if strong_forward_rejoin:
-                self._avoid_active = False
-                self._avoid_side = 0.0 if not corridor_decision.active else self._avoid_side
-                self._escape_side = 0.0 if not corridor_decision.active else self._escape_side
-                self._avoid_until = 0.0
-
-            if astar_direct:
-                self._update_corridor_lock(state, astar_candidate, risk)
-            else:
-                self._release_corridor_lock_if_expired(state, risk)
-
-            corridor_locked = self._corridor_lock_active and state.stamp <= self._corridor_lock_until
-            low_risk_direct = bool(astar_direct and risk.get("risk", 1.0) < 0.25 and not risk.get("front_obstacle", False))
-            allow_rejoin_during_hold = bool(
-                not escape_hold
-                or low_risk_direct
-                or forward_rejoin_ok
-            )
-            if low_risk_direct and not corridor_decision.active:
                 self._avoid_active = False
                 self._avoid_side = 0.0
                 self._escape_side = 0.0
                 self._avoid_until = 0.0
-                self._escape_hold_until = 0.0
 
             self.diagnostics = {
                 "mode": mode,
                 "local_astar": dict(self.local_astar.diagnostics),
                 "risk_field": dict(risk),
-                "corridor_enabled": bool(enable_corridor),
-                "corridor_selector": corridor_decision.to_dict(),
-                "avoid_active": bool(self._avoid_active),
-                "avoid_side": float(self._avoid_side),
-                "avoid_until": float(self._avoid_until),
-                "astar_direct": bool(astar_direct),
-                "low_risk_direct": bool(low_risk_direct),
-                "corridor_locked": bool(corridor_locked),
-                "corridor_lock_until": float(self._corridor_lock_until),
-                "escape_hold": bool(escape_hold),
-                "escape_hold_until": float(self._escape_hold_until),
-                "allow_rejoin_during_hold": bool(allow_rejoin_during_hold),
-                "forward_rejoin_ok": bool(forward_rejoin_ok),
-                "strong_forward_rejoin": bool(strong_forward_rejoin),
+                "path_first": True,
+                "path_available": bool(path_available),
+                "path_forward_ok": bool(path_forward_ok),
                 "candidate_progress": float(candidate_progress),
                 "candidate_margin": float(candidate_margin),
                 "candidate_reason": candidate_reason,
+                "critical_current": bool(critical_current),
+                "allow_escape": bool(allow_escape),
+                "escape_candidates": len(escape_candidates),
+                "corridor_enabled": bool(enable_corridor),
+                "corridor_selector": corridor_decision.to_dict(),
+                "astar_direct": bool(astar_direct),
             }
-            if astar_candidate is not None and allow_rejoin_during_hold:
-                astar_candidate.metadata["avoid_active"] = bool(self._avoid_active)
-                astar_candidate.metadata["avoid_side"] = float(self._avoid_side)
-                astar_candidate.metadata["risk"] = float(self._last_risk)
-                astar_candidate.metadata["corridor_locked"] = bool(corridor_locked)
-                astar_candidate.metadata["corridor_enabled"] = bool(enable_corridor)
-                astar_candidate.metadata["corridor_selector"] = corridor_decision.to_dict()
-                astar_candidate.metadata["escape_hold"] = bool(escape_hold)
-                astar_candidate.metadata["forward_rejoin_ok"] = bool(forward_rejoin_ok)
-                candidates.append(astar_candidate)
-            elif astar_candidate is not None:
-                self.diagnostics["suppressed_astar"] = astar_candidate.name
-
-            escape_candidates: List[CandidateTrajectory] = []
-            if not corridor_locked and not low_risk_direct and not strong_forward_rejoin:
-                escape_candidates = self._hard_zone_escape_candidates(
-                    state,
-                    local_goal,
-                    perception,
-                    allow_early_escape=astar_candidate is None or self._last_risk > 0.78,
-                )
-            if escape_candidates:
-                self._last_escape_stamp = state.stamp
-                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.35)
-                for cand in escape_candidates:
-                    cand.metadata["escape_hold_until"] = float(self._escape_hold_until)
-                    cand.metadata["corridor_selector"] = corridor_decision.to_dict()
-                candidates.extend(escape_candidates)
-                self.diagnostics["escape_candidates"] = len(escape_candidates)
-                self.diagnostics["escape_hold_until"] = float(self._escape_hold_until)
-            elif astar_candidate is not None and not candidates:
-                astar_candidate.metadata["forced_after_empty_escape"] = True
-                candidates.append(astar_candidate)
         else:
-            self.diagnostics = {"mode": mode}
+            self.diagnostics = {"mode": mode, "path_first": False}
             self._escape_side = 0.0
             self._avoid_active = False
             self._avoid_side = 0.0
