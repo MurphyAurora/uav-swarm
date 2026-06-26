@@ -20,16 +20,23 @@ class FrontendPlanner:
         self._last_risk = 0.0
         self._corridor_lock_until = 0.0
         self._corridor_lock_active = False
+        # Temporal consistency for constrained passages: after escape candidates are
+        # generated, do not immediately accept a weak local-A* rejoin candidate on
+        # the next frame.  This avoids the observed escape -> rejoin -> escape loop.
+        self._escape_hold_until = 0.0
+        self._last_escape_stamp = -999.0
 
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         candidates: List[CandidateTrajectory] = []
         mode = str(self.config.frontend_mode or "local_astar").lower()
         if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
-            if self._avoid_active and abs(self._avoid_side) > 0.5 and not self._corridor_lock_active:
-                # Feed the same-side memory into LocalAStarPlanner/LocalSubgoalSelector.
+            escape_hold = state.stamp <= self._escape_hold_until
+            if (self._avoid_active or escape_hold) and abs(self._avoid_side or self._escape_side) > 0.5 and not self._corridor_lock_active:
+                # Feed the same-side/escape memory into LocalAStarPlanner/LocalSubgoalSelector.
                 try:
-                    self.local_astar._side_latch = self._avoid_side
+                    side = self._avoid_side if abs(self._avoid_side) > 0.5 else self._escape_side
+                    self.local_astar._side_latch = side
                     self.local_astar._side_latch_until = max(getattr(self.local_astar, "_side_latch_until", 0.0), state.stamp + 1.2)
                 except Exception:
                     pass
@@ -48,11 +55,20 @@ class FrontendPlanner:
 
             corridor_locked = self._corridor_lock_active and state.stamp <= self._corridor_lock_until
             low_risk_direct = bool(astar_direct and risk.get("risk", 1.0) < 0.25 and not risk.get("front_obstacle", False))
+            # During an escape hold, a local-A* rejoin must be clearly safe before
+            # it can compete with escape candidates.  Otherwise the planner often
+            # alternates between rejoining_corridor and local_escape in tight maps.
+            allow_rejoin_during_hold = bool(
+                not escape_hold
+                or low_risk_direct
+                or (candidate_margin >= 0.95 and float(risk.get("risk", 1.0) or 1.0) < 0.45)
+            )
             if low_risk_direct:
                 self._avoid_active = False
                 self._avoid_side = 0.0
                 self._escape_side = 0.0
                 self._avoid_until = 0.0
+                self._escape_hold_until = 0.0
 
             self.diagnostics = {
                 "mode": mode,
@@ -65,15 +81,21 @@ class FrontendPlanner:
                 "low_risk_direct": bool(low_risk_direct),
                 "corridor_locked": bool(corridor_locked),
                 "corridor_lock_until": float(self._corridor_lock_until),
+                "escape_hold": bool(escape_hold),
+                "escape_hold_until": float(self._escape_hold_until),
+                "allow_rejoin_during_hold": bool(allow_rejoin_during_hold),
                 "candidate_margin": float(candidate_margin),
                 "candidate_reason": candidate_reason,
             }
-            if astar_candidate is not None:
+            if astar_candidate is not None and allow_rejoin_during_hold:
                 astar_candidate.metadata["avoid_active"] = bool(self._avoid_active)
                 astar_candidate.metadata["avoid_side"] = float(self._avoid_side)
                 astar_candidate.metadata["risk"] = float(self._last_risk)
                 astar_candidate.metadata["corridor_locked"] = bool(corridor_locked)
+                astar_candidate.metadata["escape_hold"] = bool(escape_hold)
                 candidates.append(astar_candidate)
+            elif astar_candidate is not None:
+                self.diagnostics["suppressed_astar"] = astar_candidate.name
 
             # Corridor lock: once direct rejoin has started with an acceptable
             # margin, do not let escape/back/lateral modes compete for a short
@@ -85,11 +107,25 @@ class FrontendPlanner:
                     state,
                     local_goal,
                     perception,
-                    allow_early_escape=astar_candidate is None or self._last_risk > 0.55,
+                    allow_early_escape=escape_hold or astar_candidate is None or self._last_risk > 0.55,
                 )
             if escape_candidates:
+                # Treat generated escape candidates as an escape state for a short
+                # horizon.  They may or may not be selected by the backend, but if
+                # they are being generated repeatedly, immediate rejoin competition
+                # is the typical source of oscillation.
+                self._last_escape_stamp = state.stamp
+                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.85)
+                for cand in escape_candidates:
+                    cand.metadata["escape_hold_until"] = float(self._escape_hold_until)
                 candidates.extend(escape_candidates)
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
+                self.diagnostics["escape_hold_until"] = float(self._escape_hold_until)
+            elif astar_candidate is not None and not candidates:
+                # Do not leave the backend empty.  If escape was not possible, fall
+                # back to the A* candidate and let SafetyChecker/FallbackManager decide.
+                astar_candidate.metadata["forced_after_empty_escape"] = True
+                candidates.append(astar_candidate)
         else:
             self.diagnostics = {"mode": mode}
             self._escape_side = 0.0
@@ -97,6 +133,7 @@ class FrontendPlanner:
             self._avoid_side = 0.0
             self._corridor_lock_active = False
             self._corridor_lock_until = 0.0
+            self._escape_hold_until = 0.0
             candidates.append(self._rollout("track_goal", self._desired_velocity_towards_goal(state, local_goal), state.position))
         return candidates
 
@@ -127,10 +164,9 @@ class FrontendPlanner:
         # clearance plus the risk field.  Lock only when the direct candidate is
         # a rejoining/direct path with a non-contact path clearance.
         path_clearance = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
-        reason = str(astar_candidate.metadata.get("reason", astar_candidate.metadata.get("tracker", "")) or "")
         risk_value = float(risk.get("risk", 1.0) or 1.0)
         front_obstacle = bool(risk.get("front_obstacle", False))
-        enter_lock = path_clearance >= 0.55 and (risk_value <= 0.75 or not front_obstacle)
+        enter_lock = path_clearance >= 0.55 and (risk_value <= 0.75 or not front_obstacle) and state.stamp > self._escape_hold_until
         if enter_lock:
             self._corridor_lock_active = True
             self._corridor_lock_until = max(self._corridor_lock_until, state.stamp + 2.2)
@@ -175,7 +211,7 @@ class FrontendPlanner:
             self._avoid_active = True
             self._escape_side = self._avoid_side
             self._avoid_until = max(self._avoid_until, state.stamp + 1.6)
-        elif release and state.stamp > self._avoid_until:
+        elif release and state.stamp > self._avoid_until and state.stamp > self._escape_hold_until:
             self._avoid_active = False
             self._avoid_side = 0.0
             self._escape_side = 0.0
@@ -240,7 +276,7 @@ class FrontendPlanner:
         front_obstacle = 0.2 <= obs_forward <= 3.8 and abs(obs_lateral) <= 1.5
         close_trigger = max(self.config.static_emergency_clearance, 0.65)
         if nearest_clearance > close_trigger and not (allow_early_escape and front_obstacle):
-            if nearest_clearance > close_trigger + 0.20 and not self._avoid_active:
+            if nearest_clearance > close_trigger + 0.20 and not self._avoid_active and state.stamp > self._escape_hold_until:
                 self._escape_side = 0.0
             return []
 
