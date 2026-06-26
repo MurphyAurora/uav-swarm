@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Iterable, List, Sequence, Tuple
+
+from xtd2_mission.planner_framework import Obstacle, PerceptionData, Vec3
+
+
+@dataclass(frozen=True)
+class CircleObstacle:
+    """Static circular obstacle used by the offline 2D smoke simulator."""
+
+    x: float
+    y: float
+    radius: float
+    source: str = "static"
+    obstacle_id: str = ""
+
+    def position_at(self, _stamp: float) -> Tuple[float, float]:
+        return self.x, self.y
+
+
+@dataclass(frozen=True)
+class MovingCircleObstacle:
+    """Constant-velocity circular obstacle for offline dynamic tests."""
+
+    x0: float
+    y0: float
+    vx: float
+    vy: float
+    radius: float
+    source: str = "dynamic"
+    obstacle_id: str = ""
+    prediction_horizon: float = 3.0
+    prediction_dt: float = 0.5
+
+    def position_at(self, stamp: float) -> Tuple[float, float]:
+        return self.x0 + self.vx * stamp, self.y0 + self.vy * stamp
+
+    def predictions(self, stamp: float, z: float) -> List[dict]:
+        points: List[dict] = []
+        steps = max(1, int(round(self.prediction_horizon / max(self.prediction_dt, 1.0e-6))))
+        for idx in range(1, steps + 1):
+            t = idx * self.prediction_dt
+            x, y = self.position_at(stamp + t)
+            points.append({"t": float(t), "x": float(x), "y": float(y), "z": float(z)})
+        return points
+
+
+@dataclass(frozen=True)
+class SimCase:
+    """Complete offline scenario definition.
+
+    This is intentionally planner-facing, not Gazebo-facing: the same case can
+    later be exported to SDF/world, but offline tests use these analytic obstacle
+    definitions directly.
+    """
+
+    name: str
+    start: Vec3
+    goal: Vec3
+    obstacles: Tuple[CircleObstacle, ...] = field(default_factory=tuple)
+    dynamic_obstacles: Tuple[MovingCircleObstacle, ...] = field(default_factory=tuple)
+    steps: int = 500
+    dt: float = 0.2
+
+    @property
+    def all_obstacles(self) -> Tuple[object, ...]:
+        return tuple(self.obstacles) + tuple(self.dynamic_obstacles)
+
+
+def v3(x: float, y: float, z: float = -3.0) -> Vec3:
+    return Vec3(float(x), float(y), float(z))
+
+
+def make_perception(case: SimCase, stamp: float) -> PerceptionData:
+    obstacles: List[Obstacle] = []
+    z = case.start.z
+
+    for item in case.obstacles:
+        obstacles.append(
+            Obstacle(
+                position=Vec3(item.x, item.y, z),
+                radius=item.radius,
+                source=item.source,
+                obstacle_id=item.obstacle_id,
+            )
+        )
+
+    for item in case.dynamic_obstacles:
+        x, y = item.position_at(stamp)
+        obstacles.append(
+            Obstacle(
+                position=Vec3(x, y, z),
+                radius=item.radius,
+                velocity=Vec3(item.vx, item.vy, 0.0),
+                source=item.source,
+                obstacle_id=item.obstacle_id,
+                predictions=item.predictions(stamp, z),
+            )
+        )
+
+    return PerceptionData(
+        obstacles=obstacles,
+        nearest_distance=999.0,
+        near_field_danger=False,
+        frame_id="world",
+        stamp=stamp,
+    )
+
+
+def obstacle_snapshots(case: SimCase, stamp: float) -> Iterable[Tuple[float, float, float, str]]:
+    for item in case.obstacles:
+        yield item.x, item.y, item.radius, item.obstacle_id
+    for item in case.dynamic_obstacles:
+        x, y = item.position_at(stamp)
+        yield x, y, item.radius, item.obstacle_id
+
+
+def collision_margin(pos: Vec3, case: SimCase, drone_radius: float, stamp: float) -> float:
+    margin = 999.0
+    for x, y, radius, _obs_id in obstacle_snapshots(case, stamp):
+        dist = math.hypot(pos.x - x, pos.y - y)
+        margin = min(margin, dist - (drone_radius + radius))
+    return margin
