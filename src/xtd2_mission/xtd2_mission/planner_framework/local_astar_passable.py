@@ -55,8 +55,18 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
         super().__init__(config)
         self.map_builder = PassableLocalMapBuilder(self.config)
         self.subgoal_selector = LocalSubgoalSelector(self.config)
+        self._single_obstacle_mode = False
 
     def plan_candidate(self, state: PlannerState, local_goal: Vec3, obstacles) -> CandidateTrajectory | None:
+        # Logic split:
+        # - Single obstacle smoke tests are best handled by the stable bypass state
+        #   machine from local_astar_tracker: pick one side, hold it, then rejoin.
+        # - Multi-obstacle / corridor tests use LocalSubgoalSelector.
+        # This prevents the multi-subgoal search from replacing the simple and
+        # previously working single-pillar behavior.
+        real_obstacle_count = sum(1 for obs in obstacles if getattr(obs, "source", "") not in ("boundary", "lidar_near_field"))
+        self._single_obstacle_mode = real_obstacle_count <= 1
+
         local_map = self.map_builder.build(state, obstacles)
         target_body = self._world_to_body(local_goal.x - state.position.x, local_goal.y - state.position.y, state.heading)
         front_blocked = self._front_blocked(local_map.points)
@@ -66,9 +76,6 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
         direct_clear_enough = direct_clear >= self._safe_required_clearance()
         rejoin_ready = (not front_blocked and corridor_clear and direct_clear >= self._hard_required_clearance())
         if rejoin_ready:
-            # The obstacle is no longer in the mission corridor.  Drop the old
-            # side latch so the next path is allowed to rejoin instead of
-            # continuing to arc around the same side.
             self._side_latch = 0.0
             self._side_latch_until = 0.0
             if self._bypass_active:
@@ -103,7 +110,7 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
                     "bypass_side": 0.0,
                     "bypass_mode": "normal",
                     "bypass_target_body": {"x": float(target_body[0]), "y": float(target_body[1])},
-                    "subgoal_debug": {"mode": "direct_corridor_clear"},
+                    "subgoal_debug": {"mode": "direct_corridor_clear", "single_obstacle_mode": self._single_obstacle_mode},
                 },
             )
             self.diagnostics = {
@@ -131,15 +138,18 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
                 "speed": float(candidate.metadata.get("tracker_speed", 0.0)),
                 "tracker": candidate.metadata.get("tracker", ""),
                 "body_velocity": dict(candidate.metadata.get("body_velocity", {})),
-                "subgoal_debug": {"mode": "direct_corridor_clear"},
+                "subgoal_debug": {"mode": "direct_corridor_clear", "single_obstacle_mode": self._single_obstacle_mode},
             }
             return candidate
         return super().plan_candidate(state, local_goal, obstacles)
 
     def _select_path(self, local_map: LocalOccupancyMap, start: GridIndex, target_body: BodyPoint) -> Optional[Dict[str, object]]:
-        # Mature local planning pattern: sample many free-space subgoals, run A*
-        # to each, and pick the best reachable short path.  This replaces the old
-        # fixed bypass target as the primary behavior.
+        if getattr(self, "_single_obstacle_mode", False):
+            # In single-obstacle mode the parent tracker already provides a stable
+            # committed bypass/rejoin path.  Do not let the multi-subgoal selector
+            # keep choosing side subgoals and stall beside the obstacle.
+            return super()._select_path(local_map, start, target_body)
+
         side_hint = self._side_latch if abs(self._side_latch) > 0.5 else 0.0
         selected = self.subgoal_selector.select(
             local_map=local_map,
@@ -166,11 +176,13 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
 
     def _bypass_target(self, points, mission_target_body: Tuple[float, float], now: float,
                        front_blocked: bool, mission_corridor_blocked: bool):
-        # The passable planner uses LocalSubgoalSelector as the single owner of
-        # bypass choice.  The older fixed bypass target state machine can fight
-        # the selector and flip between left/right subgoals, which shows up in
-        # RViz as small loops.  Keep the side latch from local_astar_stable, but
-        # always plan toward the mission-aligned local target.
+        if getattr(self, "_single_obstacle_mode", False):
+            return super()._bypass_target(points, mission_target_body, now, front_blocked, mission_corridor_blocked)
+
+        # Multi-obstacle mode uses LocalSubgoalSelector as the single owner of
+        # bypass choice.  The older fixed bypass state machine can fight the
+        # selector in S/forest scenes, so only disable it outside single-obstacle
+        # smoke tests.
         if self._bypass_active:
             self._clear_bypass(now, force_rejoin=False)
         return None, "subgoal_search"
@@ -178,6 +190,7 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
     def _diag(self, *args, **kwargs):
         out = super()._diag(*args, **kwargs)
         out["subgoal_debug"] = dict(getattr(self, "_last_subgoal_debug", {}))
+        out["single_obstacle_mode"] = bool(getattr(self, "_single_obstacle_mode", False))
         return out
 
     def _direct_body_path(self, target_body: BodyPoint):
@@ -188,9 +201,6 @@ class LocalAStarPlanner(TrackerLocalAStarPlanner):
         return [(0.0, 0.0), (0.55 * length * ux, 0.55 * length * uy), (length * ux, length * uy)]
 
     def _hard_required_clearance(self) -> float:
-        # Match the offline smoke-test safety shell.  The SafetyChecker still
-        # performs the final hard gate, so this only prevents local A* from
-        # rejecting every practical side passage before a candidate is generated.
         return max(0.45, self.config.drone_radius + 0.20)
 
     def _safe_required_clearance(self) -> float:
