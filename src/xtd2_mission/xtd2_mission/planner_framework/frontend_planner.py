@@ -20,9 +20,9 @@ class FrontendPlanner:
         self._last_risk = 0.0
         self._corridor_lock_until = 0.0
         self._corridor_lock_active = False
-        # Temporal consistency for constrained passages: after escape candidates are
-        # generated, do not immediately accept a weak local-A* rejoin candidate on
-        # the next frame.  This avoids the observed escape -> rejoin -> escape loop.
+        # Temporal consistency for constrained passages.  This is intentionally a
+        # soft cooldown: it can suppress weak rejoin attempts, but it must not keep
+        # generating back/escape candidates once clearance is already acceptable.
         self._escape_hold_until = 0.0
         self._last_escape_stamp = -999.0
 
@@ -33,7 +33,6 @@ class FrontendPlanner:
             risk = self._update_risk_memory(state, local_goal, perception)
             escape_hold = state.stamp <= self._escape_hold_until
             if (self._avoid_active or escape_hold) and abs(self._avoid_side or self._escape_side) > 0.5 and not self._corridor_lock_active:
-                # Feed the same-side/escape memory into LocalAStarPlanner/LocalSubgoalSelector.
                 try:
                     side = self._avoid_side if abs(self._avoid_side) > 0.5 else self._escape_side
                     self.local_astar._side_latch = side
@@ -48,6 +47,15 @@ class FrontendPlanner:
             if astar_candidate is not None:
                 candidate_reason = str(astar_candidate.metadata.get("safety_reason", astar_candidate.metadata.get("reason", "")) or "")
                 candidate_margin = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
+
+            risk_value = float(risk.get("risk", 1.0) or 1.0)
+            # If a candidate is already well clear, stop holding the previous escape.
+            # This is the key guard that prevents single_pillar from freezing after
+            # it has safely gone around the obstacle.
+            if escape_hold and candidate_margin >= 0.88 and risk_value < 0.70:
+                self._escape_hold_until = 0.0
+                escape_hold = False
+
             if astar_direct:
                 self._update_corridor_lock(state, astar_candidate, risk)
             else:
@@ -55,13 +63,10 @@ class FrontendPlanner:
 
             corridor_locked = self._corridor_lock_active and state.stamp <= self._corridor_lock_until
             low_risk_direct = bool(astar_direct and risk.get("risk", 1.0) < 0.25 and not risk.get("front_obstacle", False))
-            # During an escape hold, a local-A* rejoin must be clearly safe before
-            # it can compete with escape candidates.  Otherwise the planner often
-            # alternates between rejoining_corridor and local_escape in tight maps.
             allow_rejoin_during_hold = bool(
                 not escape_hold
                 or low_risk_direct
-                or (candidate_margin >= 0.95 and float(risk.get("risk", 1.0) or 1.0) < 0.45)
+                or (candidate_margin >= 0.88 and risk_value < 0.70)
             )
             if low_risk_direct:
                 self._avoid_active = False
@@ -97,33 +102,28 @@ class FrontendPlanner:
             elif astar_candidate is not None:
                 self.diagnostics["suppressed_astar"] = astar_candidate.name
 
-            # Corridor lock: once direct rejoin has started with an acceptable
-            # margin, do not let escape/back/lateral modes compete for a short
-            # window. This is the temporal consistency buffer that lets the vehicle
-            # pass through the channel instead of oscillating around the shell.
             escape_candidates: List[CandidateTrajectory] = []
             if not corridor_locked and not low_risk_direct:
                 escape_candidates = self._hard_zone_escape_candidates(
                     state,
                     local_goal,
                     perception,
-                    allow_early_escape=escape_hold or astar_candidate is None or self._last_risk > 0.55,
+                    # Do not use escape_hold itself as early-escape permission.
+                    # Otherwise a previously valid escape can keep regenerating back
+                    # motions forever even after clearance has improved.
+                    allow_early_escape=astar_candidate is None or self._last_risk > 0.70,
                 )
             if escape_candidates:
-                # Treat generated escape candidates as an escape state for a short
-                # horizon.  They may or may not be selected by the backend, but if
-                # they are being generated repeatedly, immediate rejoin competition
-                # is the typical source of oscillation.
                 self._last_escape_stamp = state.stamp
-                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.85)
+                # Shorter hold than before; enough to avoid one-frame flip-flop but
+                # not enough to dominate easy maps.
+                self._escape_hold_until = max(self._escape_hold_until, state.stamp + 0.45)
                 for cand in escape_candidates:
                     cand.metadata["escape_hold_until"] = float(self._escape_hold_until)
                 candidates.extend(escape_candidates)
                 self.diagnostics["escape_candidates"] = len(escape_candidates)
                 self.diagnostics["escape_hold_until"] = float(self._escape_hold_until)
             elif astar_candidate is not None and not candidates:
-                # Do not leave the backend empty.  If escape was not possible, fall
-                # back to the A* candidate and let SafetyChecker/FallbackManager decide.
                 astar_candidate.metadata["forced_after_empty_escape"] = True
                 candidates.append(astar_candidate)
         else:
@@ -160,9 +160,6 @@ class FrontendPlanner:
     def _update_corridor_lock(self, state: PlannerState, astar_candidate: CandidateTrajectory, risk: dict) -> None:
         if astar_candidate is None:
             return
-        # The frontend does not yet know SafetyReport, so use the local A* path
-        # clearance plus the risk field.  Lock only when the direct candidate is
-        # a rejoining/direct path with a non-contact path clearance.
         path_clearance = float(astar_candidate.metadata.get("min_path_clearance", 999.0) or 999.0)
         risk_value = float(risk.get("risk", 1.0) or 1.0)
         front_obstacle = bool(risk.get("front_obstacle", False))
@@ -170,8 +167,6 @@ class FrontendPlanner:
         if enter_lock:
             self._corridor_lock_active = True
             self._corridor_lock_until = max(self._corridor_lock_until, state.stamp + 2.2)
-            # While locked, stop carrying the side escape state. Direct tracking is
-            # now trusted unless the lock expires or a later safety gate rejects it.
             self._escape_side = 0.0
 
     def _release_corridor_lock_if_expired(self, state: PlannerState, risk: dict) -> None:
