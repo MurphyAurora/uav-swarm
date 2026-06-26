@@ -6,6 +6,9 @@ RViz.  It is intended for quick logic checks on Linux or Windows:
 
     python scripts/offline_planner_sim.py --case single_pillar --plot
 
+Scenario/map definitions live in scripts/offline_scenarios/.  This runner only
+loads a scenario, executes the planner loop, and writes optional CSV/plot output.
+
 On Windows from the repository root, if imports fail:
 
     powershell: $env:PYTHONPATH="$PWD\\src\\xtd2_mission"
@@ -19,7 +22,7 @@ import csv
 import math
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import replace
 from typing import Dict, Iterable, List, Tuple
 
 
@@ -28,151 +31,9 @@ SRC_DIR = os.path.join(REPO_ROOT, "src", "xtd2_mission")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from xtd2_mission.planner_framework import EgoLikePlannerCore, Obstacle, PerceptionData, PlannerConfig, PlannerState, Vec3
-
-
-@dataclass(frozen=True)
-class CircleObstacle:
-    x: float
-    y: float
-    radius: float
-    source: str = "static"
-    obstacle_id: str = ""
-
-
-@dataclass(frozen=True)
-class SimCase:
-    name: str
-    start: Vec3
-    goal: Vec3
-    obstacles: Tuple[CircleObstacle, ...]
-    steps: int = 500
-    dt: float = 0.2
-
-
-def build_cases() -> Dict[str, SimCase]:
-    return {
-        "single_pillar": SimCase(
-            name="single_pillar",
-            start=Vec3(0.0, 0.0, -3.0),
-            goal=Vec3(12.0, 0.0, -3.0),
-            obstacles=(CircleObstacle(4.0, 0.0, 0.55, obstacle_id="pillar_1"),),
-        ),
-        "forest_gap": SimCase(
-            name="forest_gap",
-            start=Vec3(0.0, 0.0, -3.0),
-            goal=Vec3(16.0, 0.0, -3.0),
-            obstacles=(
-                CircleObstacle(3.5, -0.9, 0.45, obstacle_id="p1"),
-                CircleObstacle(4.4, 0.8, 0.45, obstacle_id="p2"),
-                CircleObstacle(6.2, -0.2, 0.50, obstacle_id="p3"),
-                CircleObstacle(8.0, 1.0, 0.50, obstacle_id="p4"),
-                CircleObstacle(9.0, -1.0, 0.50, obstacle_id="p5"),
-                CircleObstacle(11.0, 0.4, 0.45, obstacle_id="p6"),
-            ),
-            steps=700,
-        ),
-        "rejoin_shell": SimCase(
-            name="rejoin_shell",
-            start=Vec3(0.0, 0.0, -3.0),
-            goal=Vec3(8.0, 0.0, -3.0),
-            obstacles=(
-                CircleObstacle(1.1, -0.8, 0.50, obstacle_id="near_side"),
-                CircleObstacle(3.8, 0.8, 0.45, obstacle_id="front_side"),
-            ),
-            steps=450,
-        ),
-        "narrow_corridor_easy": SimCase(
-            name="narrow_corridor_easy",
-            start=Vec3(0.0, 0.0, -3.0),
-            goal=Vec3(13.0, 0.0, -3.0),
-            obstacles=(
-                # Wide corridor without a center obstacle.  This is the first
-                # corridor-lock smoke test: the expected behavior is stable direct
-                # traversal inside the channel, not a detour outside the rows.
-                CircleObstacle(2.8, 1.75, 0.40, obstacle_id="top_1"),
-                CircleObstacle(4.8, 1.75, 0.40, obstacle_id="top_2"),
-                CircleObstacle(6.8, 1.75, 0.40, obstacle_id="top_3"),
-                CircleObstacle(8.8, 1.75, 0.40, obstacle_id="top_4"),
-                CircleObstacle(10.8, 1.75, 0.40, obstacle_id="top_5"),
-                CircleObstacle(2.8, -1.75, 0.40, obstacle_id="bottom_1"),
-                CircleObstacle(4.8, -1.75, 0.40, obstacle_id="bottom_2"),
-                CircleObstacle(6.8, -1.75, 0.40, obstacle_id="bottom_3"),
-                CircleObstacle(8.8, -1.75, 0.40, obstacle_id="bottom_4"),
-                CircleObstacle(10.8, -1.75, 0.40, obstacle_id="bottom_5"),
-            ),
-            steps=650,
-        ),
-        "narrow_corridor": SimCase(
-            name="narrow_corridor",
-            start=Vec3(0.0, 0.0, -3.0),
-            goal=Vec3(13.0, 0.0, -3.0),
-            obstacles=(
-                # Medium corridor with staggered rows.  Use this after the easy
-                # corridor passes; it tests whether same-side memory and corridor
-                # lock remain stable when the center line has mild local pressure.
-                CircleObstacle(2.8, 1.60, 0.42, obstacle_id="top_1"),
-                CircleObstacle(4.7, 1.55, 0.42, obstacle_id="top_2"),
-                CircleObstacle(6.6, 1.60, 0.42, obstacle_id="top_3"),
-                CircleObstacle(8.5, 1.55, 0.42, obstacle_id="top_4"),
-                CircleObstacle(10.4, 1.60, 0.42, obstacle_id="top_5"),
-                CircleObstacle(3.7, -1.60, 0.42, obstacle_id="bottom_1"),
-                CircleObstacle(5.6, -1.55, 0.42, obstacle_id="bottom_2"),
-                CircleObstacle(7.5, -1.60, 0.42, obstacle_id="bottom_3"),
-                CircleObstacle(9.4, -1.55, 0.42, obstacle_id="bottom_4"),
-                CircleObstacle(11.3, -1.60, 0.42, obstacle_id="bottom_5"),
-            ),
-            steps=650,
-        ),
-        "narrow_corridor_bias": SimCase(
-            name="narrow_corridor_bias",
-            start=Vec3(0.0, 0.0, -3.0),
-            goal=Vec3(13.0, 0.0, -3.0),
-            obstacles=(
-                # Harder corridor with a small center perturbation.  This should
-                # be tested only after narrow_corridor_easy and narrow_corridor pass.
-                CircleObstacle(2.8, 1.55, 0.42, obstacle_id="top_1"),
-                CircleObstacle(4.7, 1.55, 0.42, obstacle_id="top_2"),
-                CircleObstacle(6.6, 1.55, 0.42, obstacle_id="top_3"),
-                CircleObstacle(8.5, 1.55, 0.42, obstacle_id="top_4"),
-                CircleObstacle(10.4, 1.55, 0.42, obstacle_id="top_5"),
-                CircleObstacle(3.7, -1.55, 0.42, obstacle_id="bottom_1"),
-                CircleObstacle(5.6, -1.55, 0.42, obstacle_id="bottom_2"),
-                CircleObstacle(7.5, -1.55, 0.42, obstacle_id="bottom_3"),
-                CircleObstacle(9.4, -1.55, 0.42, obstacle_id="bottom_4"),
-                CircleObstacle(11.3, -1.55, 0.42, obstacle_id="bottom_5"),
-                CircleObstacle(6.4, 0.45, 0.20, obstacle_id="center_bias"),
-            ),
-            steps=700,
-        ),
-    }
-
-
-def make_perception(case: SimCase, stamp: float) -> PerceptionData:
-    obstacles = [
-        Obstacle(
-            position=Vec3(item.x, item.y, case.start.z),
-            radius=item.radius,
-            source=item.source,
-            obstacle_id=item.obstacle_id,
-        )
-        for item in case.obstacles
-    ]
-    return PerceptionData(
-        obstacles=obstacles,
-        nearest_distance=999.0,
-        near_field_danger=False,
-        frame_id="world",
-        stamp=stamp,
-    )
-
-
-def collision_margin(pos: Vec3, case: SimCase, drone_radius: float) -> float:
-    margin = 999.0
-    for obs in case.obstacles:
-        dist = math.hypot(pos.x - obs.x, pos.y - obs.y)
-        margin = min(margin, dist - (drone_radius + obs.radius))
-    return margin
+from offline_scenarios.base import SimCase, collision_margin, make_perception, obstacle_snapshots
+from offline_scenarios.registry import CASE_REGISTRY, get_case
+from xtd2_mission.planner_framework import EgoLikePlannerCore, PlannerConfig, PlannerState, Vec3
 
 
 def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[List[Dict[str, object]], str]:
@@ -186,20 +47,23 @@ def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[
 
     for step in range(case.steps):
         stamp = step * case.dt
+        next_stamp = (step + 1) * case.dt
         state = PlannerState(drone_id=1, position=pos, velocity=vel, stamp=stamp, heading=heading)
         report = planner.plan(state, case.goal, make_perception(case, stamp))
         cmd = report["command"]
         cmd_vel = Vec3.from_mapping(cmd.get("velocity", {}))
 
+        # Minimal kinematic closed loop: apply the command for one offline step.
+        # A later dynamics test can replace this with an acceleration-limited model.
         pos = Vec3(pos.x + cmd_vel.x * case.dt, pos.y + cmd_vel.y * case.dt, pos.z + cmd_vel.z * case.dt)
         vel = cmd_vel
         if math.hypot(vel.x, vel.y) > 0.03:
             heading = math.atan2(vel.y, vel.x)
 
-        margin = collision_margin(pos, case, config.drone_radius)
+        margin = collision_margin(pos, case, config.drone_radius, next_stamp)
         row = {
             "step": step,
-            "t": stamp,
+            "t": next_stamp,
             "x": pos.x,
             "y": pos.y,
             "z": pos.z,
@@ -210,6 +74,7 @@ def simulate(case: SimCase, config: PlannerConfig, verbose_every: int) -> Tuple[
             "reason": cmd.get("reason", ""),
             "safe_count": report.get("safe_count", 0),
             "feasible_count": report.get("feasible_count", 0),
+            "candidate_count": report.get("candidate_count", 0),
             "collision_margin": margin,
             "distance_to_goal": pos.distance_to(case.goal),
         }
@@ -256,10 +121,22 @@ def plot_case(path: str, case: SimCase, history: List[Dict[str, object]], config
     ax.plot([case.goal.x], [case.goal.y], "r*", markersize=12, label="goal")
     if history:
         ax.plot([float(r["x"]) for r in history], [float(r["y"]) for r in history], "b-", linewidth=2, label="trajectory")
-    for obs in case.obstacles:
-        circle = plt.Circle((obs.x, obs.y), obs.radius + config.drone_radius, color="tab:gray", alpha=0.25)
+
+    final_t = float(history[-1]["t"]) if history else 0.0
+    for x, y, radius, obs_id in obstacle_snapshots(case, 0.0):
+        circle = plt.Circle((x, y), radius + config.drone_radius, color="tab:gray", alpha=0.25)
         ax.add_patch(circle)
-        ax.plot(obs.x, obs.y, "ko", markersize=3)
+        ax.plot(x, y, "ko", markersize=3)
+        if obs_id:
+            ax.text(x, y, obs_id, fontsize=7)
+    if case.dynamic_obstacles and final_t > 0.0:
+        for x, y, radius, obs_id in obstacle_snapshots(case, final_t):
+            circle = plt.Circle((x, y), radius + config.drone_radius, color="tab:orange", alpha=0.18)
+            ax.add_patch(circle)
+            ax.plot(x, y, "kx", markersize=4)
+            if obs_id:
+                ax.text(x, y, f"{obs_id}@end", fontsize=7)
+
     ax.set_title(case.name)
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, linewidth=0.4)
@@ -270,9 +147,8 @@ def plot_case(path: str, case: SimCase, history: List[Dict[str, object]], config
 
 
 def main() -> int:
-    cases = build_cases()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=sorted(cases), default="single_pillar")
+    parser.add_argument("--case", choices=sorted(CASE_REGISTRY), default="single_pillar")
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--dt", type=float, default=None)
     parser.add_argument("--csv", default="")
@@ -282,13 +158,10 @@ def main() -> int:
     parser.add_argument("--verbose-every", type=int, default=20)
     args = parser.parse_args()
 
-    case = cases[args.case]
+    case = get_case(args.case)
     if args.steps is not None or args.dt is not None:
-        case = SimCase(
-            name=case.name,
-            start=case.start,
-            goal=case.goal,
-            obstacles=case.obstacles,
+        case = replace(
+            case,
             steps=args.steps if args.steps is not None else case.steps,
             dt=args.dt if args.dt is not None else case.dt,
         )
