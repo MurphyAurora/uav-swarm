@@ -3,11 +3,11 @@ from __future__ import annotations
 import random
 from typing import List
 
-from .base import CircleObstacle, SimCase, v3
+from .base import CircleObstacle, SimCase, default_bounds, v3
 
 
 def random_forest(seed: int = 0, n: int = 18, length: float = 16.0, width: float = 6.0, min_start_clear: float = 1.6) -> SimCase:
-    """Generate a reproducible 2D cylinder forest for offline planner evaluation."""
+    """Generate a reproducible bounded 2D cylinder forest for offline planner evaluation."""
 
     rng = random.Random(seed)
     obstacles: List[CircleObstacle] = []
@@ -36,6 +36,7 @@ def random_forest(seed: int = 0, n: int = 18, length: float = 16.0, width: float
         start=v3(0.0, 0.0),
         goal=v3(length, 0.0),
         obstacles=tuple(obstacles),
+        bounds=default_bounds(length + 0.5, half_width=width * 0.5),
         steps=800,
     )
 
