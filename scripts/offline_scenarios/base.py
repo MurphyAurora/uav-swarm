@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from xtd2_mission.planner_framework import Obstacle, PerceptionData, Vec3
 
@@ -49,6 +49,30 @@ class MovingCircleObstacle:
 
 
 @dataclass(frozen=True)
+class Bounds2D:
+    """Finite test-area boundary for offline planner benchmarks."""
+
+    xmin: float
+    xmax: float
+    ymin: float
+    ymax: float
+
+    def contains(self, pos: Vec3, margin: float = 0.0) -> bool:
+        return (
+            self.xmin + margin <= pos.x <= self.xmax - margin
+            and self.ymin + margin <= pos.y <= self.ymax - margin
+        )
+
+    def signed_margin(self, pos: Vec3, margin: float = 0.0) -> float:
+        return min(
+            pos.x - (self.xmin + margin),
+            (self.xmax - margin) - pos.x,
+            pos.y - (self.ymin + margin),
+            (self.ymax - margin) - pos.y,
+        )
+
+
+@dataclass(frozen=True)
 class SimCase:
     """Complete offline scenario definition.
 
@@ -62,6 +86,7 @@ class SimCase:
     goal: Vec3
     obstacles: Tuple[CircleObstacle, ...] = field(default_factory=tuple)
     dynamic_obstacles: Tuple[MovingCircleObstacle, ...] = field(default_factory=tuple)
+    bounds: Optional[Bounds2D] = None
     steps: int = 500
     dt: float = 0.2
 
@@ -72,6 +97,10 @@ class SimCase:
 
 def v3(x: float, y: float, z: float = -3.0) -> Vec3:
     return Vec3(float(x), float(y), float(z))
+
+
+def default_bounds(length: float, half_width: float = 3.0, back: float = 0.6) -> Bounds2D:
+    return Bounds2D(xmin=-back, xmax=float(length), ymin=-half_width, ymax=half_width)
 
 
 def make_perception(case: SimCase, stamp: float) -> PerceptionData:
@@ -124,3 +153,9 @@ def collision_margin(pos: Vec3, case: SimCase, drone_radius: float, stamp: float
         dist = math.hypot(pos.x - x, pos.y - y)
         margin = min(margin, dist - (drone_radius + radius))
     return margin
+
+
+def bounds_margin(pos: Vec3, case: SimCase, drone_radius: float) -> float:
+    if case.bounds is None:
+        return 999.0
+    return case.bounds.signed_margin(pos, margin=drone_radius)
