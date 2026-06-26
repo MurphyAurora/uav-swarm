@@ -77,7 +77,9 @@ def s_curve_easy() -> SimCase:
             CircleObstacle(7.4, -0.55, 0.55, obstacle_id="s3"),
             CircleObstacle(9.6, 0.55, 0.55, obstacle_id="s4"),
         ),
-        bounds=default_bounds(13.5, half_width=2.6),
+        # The bounds are intentionally narrow: the planner must weave through the
+        # alternating gaps instead of going around the whole S pattern above/below.
+        bounds=default_bounds(13.5, half_width=2.05),
         steps=650,
     )
 
@@ -94,7 +96,7 @@ def s_curve_medium() -> SimCase:
             CircleObstacle(9.1, 0.55, 0.58, obstacle_id="s4"),
             CircleObstacle(11.2, -0.50, 0.58, obstacle_id="s5"),
         ),
-        bounds=default_bounds(14.5, half_width=2.5),
+        bounds=default_bounds(14.5, half_width=2.10),
         steps=750,
     )
 
