@@ -189,7 +189,6 @@ class MissionController(Node):
         if self._state == 'WARMUP' and elapsed >= self.warmup_sec:
             self.get_logger().info(f'Warmup done ({elapsed:.1f}s), starting ARM sequence')
             self._state = 'ARMING'
-            # self._warmup_timer.cancel()
             # Run ARM/OFFBOARD in a timer callback to avoid blocking
             self._arm_timer = self.create_timer(0.1, self._arming_step)
             self._arm_drone_idx = 0
@@ -226,7 +225,7 @@ class MissionController(Node):
             self._hold_start = time.time()
             return
 
-        ns = self.px4_namespaces[self._arm_drone_idx]  # service 在 /xtdrone2/px4_i/cmd
+        ns = self.px4_namespaces[self._arm_drone_idx]
         drone_id = self._arm_drone_idx + 1
 
         if self._arm_attempt == 0:
@@ -283,7 +282,6 @@ class MissionController(Node):
 
     def _send_offboard(self, drone_idx, arm_attempt):
         ns = self.px4_namespaces[drone_idx]
-        drone_id = drone_idx + 1
         client = self._get_cmd_client(ns)
 
         request = XTD2Cmd.Request()
@@ -294,7 +292,6 @@ class MissionController(Node):
         )
 
     def _offboard_done(self, future, drone_idx, arm_attempt):
-        ns = self.px4_namespaces[drone_idx]
         drone_id = drone_idx + 1
         try:
             result = future.result()
@@ -359,6 +356,7 @@ class MissionController(Node):
 
     def _start_mission(self):
         """Start the selected mission logic as an independent ROS process."""
+        command_arbiter_enable = os.environ.get('COMMAND_ARBITER_ENABLE', '0').strip().lower() in ('1', 'true', 'yes', 'on')
         use_static_planner = os.environ.get('STATIC_LOCAL_PLANNER', '0').strip().lower() in ('1', 'true', 'yes', 'on')
         if use_static_planner:
             planner_drone_id = int(os.environ.get('STATIC_PLANNER_DRONE_ID', '1'))
@@ -369,14 +367,11 @@ class MissionController(Node):
                 )
                 planner_drone_id = int(self.num_drones)
 
-            # By default each spawned UAV keeps the same target_x/target_z, while
-            # target_y follows the SANDO per-UAV target convention:
-            # target_y_base + (id-1)*y_spacing.  Override explicitly with
-            # STATIC_PLANNER_TARGET_X/Y/Z when testing custom target points.
             target_x = float(os.environ.get('STATIC_PLANNER_TARGET_X', str(self.target_x)))
             default_target_y = self.target_y + (planner_drone_id - 1) * self.y_spacing
             target_y = float(os.environ.get('STATIC_PLANNER_TARGET_Y', str(default_target_y)))
             target_z = float(os.environ.get('STATIC_PLANNER_TARGET_Z', str(self.mission_z)))
+            cmd_topic = f'/xtdrone2/x500_{planner_drone_id}/cruise_cmd_vel_ned' if command_arbiter_enable else f'/xtdrone2/x500_{planner_drone_id}/cmd_vel_ned'
 
             if self.num_drones != 1:
                 self.get_logger().warn(
@@ -384,7 +379,7 @@ class MissionController(Node):
                 )
             self.get_logger().info(
                 f'Starting mission via local_static_planner for x500_{planner_drone_id}: '
-                f'target=({target_x:.2f},{target_y:.2f},{target_z:.2f})'
+                f'target=({target_x:.2f},{target_y:.2f},{target_z:.2f}), cmd_topic={cmd_topic}'
             )
             mission_cmd = [
                 'ros2',
@@ -394,7 +389,7 @@ class MissionController(Node):
                 '--drone-id', str(planner_drone_id),
                 '--state-topic', '/xtdrone2/swarm/state_exchange',
                 '--lidar-topic', f'/x500_{planner_drone_id}/lidar/points_local',
-                '--cmd-topic', f'/xtdrone2/x500_{planner_drone_id}/cmd_vel_ned',
+                '--cmd-topic', cmd_topic,
                 '--target-x', str(target_x),
                 '--target-y', str(target_y),
                 '--target-z', str(target_z),
@@ -404,12 +399,16 @@ class MissionController(Node):
                 '--resolution', os.environ.get('STATIC_PLANNER_RESOLUTION', '0.25'),
             ]
         else:
-            self.get_logger().info('Starting mission via multi_waypoint2')
+            executable = 'multi_waypoint2_arbiter' if command_arbiter_enable else 'multi_waypoint2'
+            self.get_logger().info(
+                f'Starting mission via {executable} '
+                f'(command_arbiter_enable={int(command_arbiter_enable)})'
+            )
             mission_cmd = [
                 'ros2',
                 'run',
                 'xtd2_mission',
-                'multi_waypoint2',
+                executable,
                 str(self.num_drones),
                 str(self.duration),
                 str(self.leader_id),
