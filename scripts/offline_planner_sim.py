@@ -11,8 +11,8 @@ loads a scenario, executes the planner loop, and writes optional CSV/plot output
 
 On Windows from the repository root, if imports fail:
 
-    powershell: $env:PYTHONPATH="$PWD\\src\\xtd2_mission"
-    cmd.exe:    set PYTHONPATH=%CD%\\src\\xtd2_mission
+    powershell: $env:PYTHONPATH="$PWD\src\xtd2_mission"
+    cmd.exe:    set PYTHONPATH=%CD%\src\xtd2_mission
 """
 
 from __future__ import annotations
@@ -188,8 +188,13 @@ def main() -> int:
         horizon=3.0,
         dt=0.5,
         obstacle_margin=0.20,
+        hard_clearance=0.25,
         static_hard_clearance=0.25,
+        emergency_clearance=0.55,
         static_emergency_clearance=0.45,
+        recovery_clearance=0.40,
+        recoverable_rejoin_clearance=0.30,
+        dynamic_avoid_clearance=0.55,
         goal_weight=3.0,
         progress_weight=4.0,
         lateral_penalty=3.0,
@@ -197,6 +202,8 @@ def main() -> int:
         sampling_mpc_num_samples=args.sampling_mpc_num_samples,
         sampling_mpc_horizon_steps=args.sampling_mpc_horizon_steps,
         sampling_mpc_dt=args.sampling_mpc_dt,
+        sampling_mpc_soft_clearance=0.60,
+        sampling_mpc_side_hold_sec=2.2,
     )
     history, status = simulate(case, config, args.verbose_every)
     final = history[-1] if history else {}
