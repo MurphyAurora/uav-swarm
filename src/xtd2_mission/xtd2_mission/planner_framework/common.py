@@ -258,14 +258,41 @@ class PlannerConfig:
     astar_latch_clearance: float = 0.35
 
 
+def _prediction_time_and_position(prediction) -> Tuple[Optional[float], Optional[Vec3]]:
+    if isinstance(prediction, dict):
+        pred_t = prediction.get("t", prediction.get("time", prediction.get("stamp")))
+        pred_pos = prediction.get("position", prediction.get("pos"))
+        if pred_pos is None:
+            pred_pos = prediction
+        if not isinstance(pred_pos, Vec3):
+            try:
+                pred_pos = Vec3.from_mapping(pred_pos, prefer_world=True)
+            except Exception:
+                return None, None
+        return pred_t, pred_pos
+
+    try:
+        if len(prediction) < 2:
+            return None, None
+        pred_t = prediction[0]
+        pred_pos = prediction[1]
+        if not isinstance(pred_pos, Vec3):
+            if isinstance(pred_pos, dict):
+                pred_pos = Vec3.from_mapping(pred_pos, prefer_world=True)
+            else:
+                return None, None
+        return pred_t, pred_pos
+    except (TypeError, KeyError, IndexError, ValueError):
+        return None, None
+
+
 def nearest_prediction(predictions: Iterable[Tuple[float, Vec3]], t: float) -> Vec3:
     best_err = None
     best_pos = None
     for prediction in predictions:
-        if len(prediction) < 2:
+        pred_t, pred_pos = _prediction_time_and_position(prediction)
+        if pred_t is None or pred_pos is None:
             continue
-        pred_t = prediction[0]
-        pred_pos = prediction[1]
         err = abs(float(pred_t) - float(t))
         if best_err is None or err < best_err:
             best_err = err
