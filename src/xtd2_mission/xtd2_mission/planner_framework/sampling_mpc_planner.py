@@ -13,6 +13,7 @@ import random
 from typing import List, Optional, Sequence, Tuple
 
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
+from .dynamic_safety import dynamic_trajectory_risk
 from .reference_generator import LocalAStarReferenceGenerator, ReferenceGenerator
 
 
@@ -113,6 +114,9 @@ class SamplingMPCPlanner:
                     "reference_reason": reference.reason,
                     "reference_progress": float(breakdown.get("reference_progress", 0.0)),
                     "soft_clearance": float(breakdown.get("min_soft_clearance", 999.0)),
+                    "dynamic_min_ttc": float(breakdown.get("dynamic_min_ttc", 999.0)),
+                    "dynamic_closing_speed": float(breakdown.get("dynamic_closing_speed", 0.0)),
+                    "dynamic_min_clearance": float(breakdown.get("dynamic_min_clearance", 999.0)),
                     "committed_side": float(self._committed_side),
                     "candidate_side": float(candidate_side),
                     "commitment_penalty": float(commitment_penalty),
@@ -256,6 +260,7 @@ class SamplingMPCPlanner:
         goal_progress = max(0.0, start.distance_to(local_goal) - final.distance_to(local_goal))
         reference_progress = max(0.0, self._path_progress(reference_points, final, local_goal) - ref_progress_now)
         obstacle_cost, min_soft_clearance = self._soft_obstacle_cost(points, perception)
+        dynamic_cost, dynamic_min_ttc, dynamic_closing, dynamic_min_clearance = dynamic_trajectory_risk(points, controls, perception, self.config)
         side_cost = self._side_commitment_cost(points, start, left)
         smooth = 0.0
         effort = 0.0
@@ -273,6 +278,7 @@ class SamplingMPCPlanner:
             goal_cost * 1.6
             + reference_cost * 1.25
             + obstacle_cost * 3.2
+            + dynamic_cost * 5.0
             + side_cost * 0.35
             + smooth * 0.35
             + effort * 0.06
@@ -287,6 +293,10 @@ class SamplingMPCPlanner:
             "goal_progress": float(goal_progress),
             "reference_progress": float(reference_progress),
             "obstacle_cost": float(obstacle_cost),
+            "dynamic_cost": float(dynamic_cost),
+            "dynamic_min_ttc": float(dynamic_min_ttc),
+            "dynamic_closing_speed": float(dynamic_closing),
+            "dynamic_min_clearance": float(dynamic_min_clearance),
             "side_cost": float(side_cost),
             "smooth": float(smooth),
             "effort": float(effort),
