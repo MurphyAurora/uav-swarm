@@ -200,6 +200,16 @@ class PlannerConfig:
     vertical_speed: float = 0.35
     max_speed: float = 0.75
     max_accel: float = 0.6
+    sampling_mpc_num_samples: int = 200
+    sampling_mpc_horizon_steps: int = 12
+    sampling_mpc_dt: float = 0.2
+    sampling_mpc_max_accel: float = 1.1
+    sampling_mpc_soft_clearance: float = 0.35
+    sampling_mpc_commit_clearance: float = 0.85
+    sampling_mpc_side_hold_sec: float = 0.9
+    recovery_hold_sec: float = 0.65
+    recovery_safe_frames: int = 2
+    recovery_clearance: float = 0.58
     drone_radius: float = 0.35
     obstacle_margin: float = 0.45
     hard_clearance: float = 0.25

@@ -105,9 +105,8 @@ class FallbackManager:
             else:
                 self._escape_side = -1.0 if obs_y > 0.0 else 1.0
 
-        lateral = left * self._escape_side
-        if self._escape_direction.norm() <= 1.0e-6:
-            self._escape_direction = lateral.normalized(Vec3())
+        self._refresh_escape_direction_from_clearance(state, perception, forward, left)
+        lateral = self._escape_direction.limit_norm(1.0) if self._escape_direction.norm() > 1.0e-6 else (left * self._escape_side)
 
         # Distance-based unstick:
         # - far from the obstacle: pure lateral motion to change the viewpoint;
@@ -115,11 +114,41 @@ class FallbackManager:
         # - close: no command, handled by the hover branch above.
         if clearance > 0.90:
             lateral_speed = min(0.20, max(0.14, self.config.max_speed * 0.28))
-            back_speed = 0.0
         else:
             lateral_speed = min(0.18, max(0.12, self.config.max_speed * 0.24))
-            back_speed = min(0.025, max(0.0, self.config.max_speed * 0.035))
-        return lateral * lateral_speed - forward * back_speed
+        return lateral.limit_norm(1.0) * lateral_speed
+
+    def _refresh_escape_direction_from_clearance(self, state: PlannerState, perception: PerceptionData, forward: Vec3, left: Vec3) -> None:
+        candidates = []
+        for side in (-1.0, 1.0):
+            for forward_gain in (0.0, 0.35):
+                direction = (left * side + forward * forward_gain).normalized(Vec3())
+                score = self._short_escape_clearance(state, perception, direction) + 0.03 * forward_gain
+                candidates.append((score, side, direction))
+        if not candidates:
+            return
+        best_score, best_side, best_direction = max(candidates, key=lambda item: item[0])
+        current_direction = self._escape_direction.normalized(Vec3()) if self._escape_direction.norm() > 1.0e-6 else Vec3()
+        current_score = self._short_escape_clearance(state, perception, current_direction) if current_direction.norm() > 1.0e-6 else -999.0
+        if self._escape_direction.norm() <= 1.0e-6 or current_score < 0.42 or best_score > current_score + 0.08:
+            self._escape_side = best_side
+            self._escape_direction = best_direction
+
+    def _short_escape_clearance(self, state: PlannerState, perception: PerceptionData, direction: Vec3) -> float:
+        if direction.norm() <= 1.0e-6:
+            return -999.0
+        min_clearance = 999.0
+        speed = min(0.18, max(0.12, self.config.max_speed * 0.24))
+        for step in range(1, 7):
+            t = step * 0.25
+            probe = state.position + direction * (speed * t)
+            for obs in perception.obstacles:
+                rel = obs.position_at(t) - probe
+                clearance = math.hypot(rel.x, rel.y) - (self.config.drone_radius + float(obs.radius))
+                if getattr(obs, "source", "") == "boundary" and clearance < 0.75:
+                    clearance -= (0.75 - clearance) * 2.0
+                min_clearance = min(min_clearance, clearance)
+        return float(min_clearance)
 
     def _nearest_obstacle_body(self, state: PlannerState, perception: PerceptionData) -> Optional[Tuple[float, float, float, float, float]]:
         nearest = None

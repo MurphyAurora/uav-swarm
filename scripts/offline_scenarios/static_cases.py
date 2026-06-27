@@ -72,10 +72,10 @@ def s_curve_easy() -> SimCase:
         goal=v3(13.0, 0.0),
         obstacles=(
             # Tightened toward the centerline so straight tracking is no longer a pass.
-            CircleObstacle(3.0, -0.55, 0.55, obstacle_id="s1"),
-            CircleObstacle(5.2, 0.55, 0.55, obstacle_id="s2"),
-            CircleObstacle(7.4, -0.55, 0.55, obstacle_id="s3"),
-            CircleObstacle(9.6, 0.55, 0.55, obstacle_id="s4"),
+            CircleObstacle(3.0, -0.75, 0.55, obstacle_id="s1"),
+            CircleObstacle(5.2, 0.75, 0.55, obstacle_id="s2"),
+            CircleObstacle(7.4, -0.75, 0.55, obstacle_id="s3"),
+            CircleObstacle(9.6, 0.75, 0.55, obstacle_id="s4"),
         ),
         # The bounds are intentionally narrow: the planner must weave through the
         # alternating gaps instead of going around the whole S pattern above/below.

@@ -38,6 +38,13 @@ class EgoLikePlannerCore:
         self.safe_streak = 0
         self.unsafe_streak = 0
         self.last_mode_reason = "init"
+        self._last_recovery_choice = {
+            "type": "none",
+            "name": "",
+            "reason": "",
+            "min_clearance": 999.0,
+            "min_static_clearance": 999.0,
+        }
 
     @staticmethod
     def _planner_now(state: PlannerState) -> float:
@@ -80,7 +87,7 @@ class EgoLikePlannerCore:
         elif mode == self.DYNAMIC_AVOID:
             selected = self._select_dynamic_avoid_candidate(evaluations)
             if selected is None:
-                command = self.fallback.command(state, perception, evaluations)
+                command = self.fallback.command(state, perception, self._non_stop_evaluations(evaluations))
             else:
                 command = PlannerCommand(
                     selected.trajectory.velocity.limit_norm(min(0.22, self.config.max_speed)),
@@ -95,14 +102,20 @@ class EgoLikePlannerCore:
         elif mode == self.RECOVERY:
             selected = self._select_recovery_candidate(evaluations, float(risk.get("min_clearance", 999.0)))
             if selected is None:
-                command = self.fallback.command(state, perception, evaluations)
+                command = self.fallback.command(state, perception, self._non_stop_evaluations(evaluations))
             else:
-                command = PlannerCommand(
-                    selected.trajectory.velocity.limit_norm(min(0.15, self.config.max_speed)),
-                    "planner",
-                    selected.trajectory.name,
-                    f"{selected.safety.reason}|fsm:recovery",
-                )
+                fallback_command = None
+                if self._last_recovery_choice.get("type") == "recoverable_rejoin":
+                    fallback_command = self.fallback.command(state, perception, evaluations)
+                if fallback_command is not None and fallback_command.mode == "fallback_escape":
+                    command = fallback_command
+                else:
+                    command = PlannerCommand(
+                        selected.trajectory.velocity.limit_norm(min(0.15, self.config.max_speed)),
+                        "planner",
+                        selected.trajectory.name,
+                        f"{selected.safety.reason}|fsm:recovery",
+                    )
         else:
             command = self.fallback.command(state, perception, evaluations)
 
@@ -163,6 +176,7 @@ class EgoLikePlannerCore:
                 "unsafe_streak": self.unsafe_streak,
                 "reason": self.last_mode_reason,
                 "risk": risk,
+                "recovery_choice": dict(self._last_recovery_choice),
             },
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
@@ -295,55 +309,148 @@ class EgoLikePlannerCore:
         safe = [item for item in evaluations if item.safety.safe]
         if not safe:
             return None
+        moving = [item for item in safe if item.trajectory.velocity.norm() > 0.035]
+        moving_non_stop = [item for item in moving if not self._is_stop_like_candidate(item)]
+        if not moving_non_stop:
+            return None
         return min(
-            safe,
+            moving_non_stop,
             key=lambda item: (
-                0 if self._is_avoid_preferred_name(item.trajectory.name) else 1,
+                0 if self._is_dynamic_avoid_preferred(item) else 1,
                 item.costs.get("reverse", 999.0),
                 item.costs.get("progress", 999.0),
-                item.costs.get("goal", 999.0),
-                item.costs.get("lateral", 999.0),
                 -float(item.safety.min_clearance),
                 -float(item.safety.min_ttc),
+                float(item.trajectory.metadata.get("sample_cost", item.score)),
+                item.costs.get("goal", 999.0),
                 item.score,
             ),
         )
 
+    def _is_dynamic_avoid_preferred(self, item) -> bool:
+        if self._is_avoid_preferred_name(item.trajectory.name):
+            return True
+        if item.trajectory.metadata.get("planner") != "sampling_mpc":
+            return False
+        kind = str(item.trajectory.metadata.get("sample_kind", "")).lower()
+        return any(token in kind for token in ("side", "wide", "bias"))
+
+    @staticmethod
+    def _is_stop_like_candidate(item) -> bool:
+        kind = str(item.trajectory.metadata.get("sample_kind", "")).lower()
+        name = str(item.trajectory.name).lower()
+        return kind in {"stop", "brake"} or name.endswith(":stop") or name.endswith(":brake")
+
+    def _non_stop_evaluations(self, evaluations):
+        filtered = [item for item in evaluations if not self._is_stop_like_candidate(item)]
+        return filtered or list(evaluations)
+
     def _select_recovery_candidate(self, evaluations, current_clearance: float = 999.0):
         safe = [item for item in evaluations if item.safety.safe]
+        safe_bypass = [
+            item for item in safe
+            if self._is_recovery_preferred_name(item.trajectory.name)
+            or self._is_committed_astar(item)
+            or self._is_dynamic_avoid_preferred(item)
+        ]
+        if safe_bypass:
+            selected = min(safe_bypass, key=self._recovery_rank_key)
+            self._record_recovery_choice(selected, "safe_bypass")
+            return selected
+
         recoverable = [
             item for item in evaluations
             if self._is_recoverable_rejoin(item, current_clearance)
         ]
-        pool = safe or recoverable
-        if not pool:
-            return None
-        return min(
-            pool,
-            key=lambda item: (
-                0 if item.safety.safe else 1,
-                item.costs.get("reverse", 999.0),
-                item.costs.get("progress", 999.0),
-                item.costs.get("goal", 999.0),
-                item.costs.get("lateral", 999.0),
-                -float(item.safety.min_clearance),
-                -float(item.safety.min_ttc),
-                item.score,
-            ),
+        if recoverable:
+            selected = min(recoverable, key=self._recovery_rank_key)
+            self._record_recovery_choice(selected, "recoverable_rejoin")
+            return selected
+
+        safe_other = [item for item in safe if item not in safe_bypass]
+        if safe_other:
+            moving_other = [item for item in safe_other if item.trajectory.velocity.norm() > 0.035]
+            moving_non_stop = [item for item in moving_other if not self._is_stop_like_candidate(item)]
+            if moving_non_stop:
+                selected = min(moving_non_stop, key=self._recovery_rank_key)
+                self._record_recovery_choice(selected, "safe_other")
+                return selected
+
+        self._record_recovery_choice(None, "none")
+        return None
+
+    def _record_recovery_choice(self, item, choice_type: str) -> None:
+        if item is None:
+            self._last_recovery_choice = {
+                "type": choice_type,
+                "name": "",
+                "reason": "",
+                "min_clearance": 999.0,
+                "min_static_clearance": 999.0,
+            }
+            return
+        self._last_recovery_choice = {
+            "type": choice_type,
+            "name": str(item.trajectory.name),
+            "reason": str(item.safety.reason),
+            "min_clearance": float(item.safety.min_clearance),
+            "min_static_clearance": float(item.safety.min_static_clearance),
+        }
+
+    @staticmethod
+    def _is_recovery_preferred_name(name: str) -> bool:
+        lower = str(name).lower()
+        return bool(
+            lower.startswith("local_astar:")
+            or lower.startswith("corridor:")
+            or lower.startswith("local_escape:")
+            or "lateral" in lower
+            or "bypass" in lower
+            or "rejoin" in lower
+        )
+
+    @staticmethod
+    def _is_committed_astar(item) -> bool:
+        metadata = item.trajectory.metadata or {}
+        replan_reason = str(metadata.get("replan_reason", "")).lower()
+        label = str(metadata.get("label", "")).lower()
+        joined = f"{replan_reason} {label}"
+        return bool("committed" in joined or "bypass" in joined or "rejoin" in joined)
+
+    def _recovery_rank_key(self, item):
+        return (
+            0 if self._is_committed_astar(item) or self._is_dynamic_avoid_preferred(item) else 1,
+            1 if self._is_stop_like_candidate(item) else 0,
+            0 if item.trajectory.velocity.norm() > 0.035 else 1,
+            item.costs.get("reverse", 999.0),
+            item.costs.get("progress", 999.0),
+            -float(item.safety.min_clearance),
+            -float(item.safety.min_ttc),
+            float(item.trajectory.metadata.get("sample_cost", item.score)),
+            item.costs.get("goal", 999.0),
+            item.costs.get("lateral", 999.0),
+            item.score,
         )
 
     def _is_recoverable_rejoin(self, item, current_clearance: float) -> bool:
+        allowed_reasons = {"rejoining_corridor", "emergency_margin_violation"}
         default_clearance = max(float(getattr(self.config, "static_hard_clearance", 0.25)), self.config.hard_clearance) + 0.01
         rejoin_clearance = float(getattr(self.config, "recoverable_rejoin_clearance", default_clearance))
+        static_floor = max(0.28, float(getattr(self.config, "static_hard_clearance", 0.28)))
+        name = str(item.trajectory.name)
         if current_clearance < rejoin_clearance:
             return False
+        if self._is_goal_directed_name(name):
+            return False
+
         return bool(
             item.safety.feasible
             and not item.safety.safe
-            and item.safety.reason == "rejoining_corridor"
-            and item.trajectory.name.startswith("local_astar:")
-            and item.safety.min_static_clearance >= 0.28
-            and item.trajectory.velocity.norm() <= 0.45
+            and item.safety.reason in allowed_reasons
+            and name.startswith("local_astar:")
+            and item.safety.min_static_clearance >= static_floor
+            and item.safety.min_clearance >= -0.02
+            and item.trajectory.velocity.norm() <= 0.40
         )
 
     @staticmethod
@@ -535,3 +642,5 @@ class EgoLikePlannerCore:
 
     def reset_output_filter(self) -> None:
         self.output.reset()
+
+

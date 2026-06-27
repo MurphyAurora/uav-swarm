@@ -15,12 +15,14 @@ from typing import Iterable, List, Optional, Tuple
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
 from .corridor_selector import CorridorSelector
 from .local_astar_passable import LocalAStarPlanner
+from .sampling_mpc_planner import SamplingMPCPlanner
 
 
 class FrontendPlanner:
     def __init__(self, config: Optional[PlannerConfig] = None):
         self.config = config or PlannerConfig()
         self.local_astar = LocalAStarPlanner(self.config)
+        self.sampling_mpc = SamplingMPCPlanner(self.config)
         self.corridor_selector = CorridorSelector(self.config)
         self.diagnostics = {}
         self._escape_side = 0.0
@@ -36,7 +38,17 @@ class FrontendPlanner:
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         candidates: List[CandidateTrajectory] = []
         mode = str(self.config.frontend_mode or "local_astar").lower()
-        if perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
+        if mode in ("sampling_mpc", "mpc", "sampling"):
+            candidates = self.sampling_mpc.generate(state, local_goal, perception)
+            self.diagnostics = dict(self.sampling_mpc.diagnostics)
+            self._escape_side = 0.0
+            self._avoid_active = False
+            self._avoid_side = 0.0
+            self._corridor_lock_active = False
+            self._corridor_lock_until = 0.0
+            self._escape_hold_until = 0.0
+            self.corridor_selector.reset()
+        elif perception is not None and mode in ("local_astar", "astar", "hybrid_astar", "hybrid"):
             risk = self._update_risk_memory(state, local_goal, perception)
 
             # Corridor selection is only a hint for local A* in multi-obstacle scenes.

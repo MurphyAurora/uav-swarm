@@ -168,6 +168,10 @@ def main() -> int:
     parser.add_argument("--plot-path", default="")
     parser.add_argument("--strict", action="store_true", help="return a non-zero exit code when the case is not reached")
     parser.add_argument("--verbose-every", type=int, default=20)
+    parser.add_argument("--frontend-mode", default="sampling_mpc")
+    parser.add_argument("--sampling-mpc-num-samples", type=int, default=120)
+    parser.add_argument("--sampling-mpc-horizon-steps", type=int, default=12)
+    parser.add_argument("--sampling-mpc-dt", type=float, default=0.2)
     args = parser.parse_args()
 
     case = get_case(args.case)
@@ -179,6 +183,7 @@ def main() -> int:
         )
 
     config = PlannerConfig(
+        frontend_mode=args.frontend_mode,
         local_goal_distance=2.2,
         horizon=3.0,
         dt=0.5,
@@ -189,6 +194,9 @@ def main() -> int:
         progress_weight=4.0,
         lateral_penalty=3.0,
         reverse_penalty=8.0,
+        sampling_mpc_num_samples=args.sampling_mpc_num_samples,
+        sampling_mpc_horizon_steps=args.sampling_mpc_horizon_steps,
+        sampling_mpc_dt=args.sampling_mpc_dt,
     )
     history, status = simulate(case, config, args.verbose_every)
     final = history[-1] if history else {}
