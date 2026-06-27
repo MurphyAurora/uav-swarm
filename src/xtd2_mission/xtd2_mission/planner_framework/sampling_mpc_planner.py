@@ -26,6 +26,8 @@ class SamplingMPCPlanner:
         self._committed_side = 0.0
         self._committed_until = 0.0
         self._last_min_soft_clearance = 999.0
+        self._last_commit_reason = "none"
+        self._last_commit_age = 0.0
 
     def generate(self, state: PlannerState, local_goal: Vec3, perception: Optional[PerceptionData] = None) -> List[CandidateTrajectory]:
         num_samples = max(1, int(getattr(self.config, "sampling_mpc_num_samples", 200)))
@@ -63,6 +65,7 @@ class SamplingMPCPlanner:
         best_breakdown = {}
         stop_count = 0
         moving_count = 0
+        opposite_count = 0
 
         for idx, spec in enumerate(specs[:num_samples]):
             controls = self._controls_from_spec(spec, current, nominal, ref_dir, left, horizon_steps, dt, max_speed, max_accel)
@@ -80,6 +83,17 @@ class SamplingMPCPlanner:
                 left,
             )
             kind = str(spec["kind"])
+            candidate_side = self._candidate_side_from_spec(spec)
+            commitment_penalty = self._commitment_penalty(candidate_side, kind)
+            if commitment_penalty > 0.0:
+                opposite_count += 1
+                cost += commitment_penalty
+                breakdown["commitment_penalty"] = float(commitment_penalty)
+            else:
+                breakdown["commitment_penalty"] = 0.0
+            breakdown["candidate_side"] = float(candidate_side)
+            breakdown["committed_side"] = float(self._committed_side)
+
             is_stop = kind == "stop"
             if is_stop:
                 stop_count += 1
@@ -100,6 +114,9 @@ class SamplingMPCPlanner:
                     "reference_progress": float(breakdown.get("reference_progress", 0.0)),
                     "soft_clearance": float(breakdown.get("min_soft_clearance", 999.0)),
                     "committed_side": float(self._committed_side),
+                    "candidate_side": float(candidate_side),
+                    "commitment_penalty": float(commitment_penalty),
+                    "commit_reason": str(self._last_commit_reason),
                     "is_stop": bool(is_stop),
                     "emergency_only": bool(is_stop),
                     "reference_tracking_target": breakdown.get("tracking_target", {}),
@@ -126,6 +143,9 @@ class SamplingMPCPlanner:
             "perception_obstacles": len(perception.obstacles) if perception is not None else 0,
             "committed_side": float(self._committed_side),
             "committed_until": float(self._committed_until),
+            "commit_reason": str(self._last_commit_reason),
+            "commit_age": float(self._last_commit_age),
+            "opposite_side_penalized": int(opposite_count),
             "moving_samples": int(moving_count),
             "stop_samples": int(stop_count),
             "reference": {
@@ -309,19 +329,52 @@ class SamplingMPCPlanner:
     def _update_side_commitment(self, state: PlannerState, ref_dir: Vec3, reference_side: float, perception: Optional[PerceptionData]) -> None:
         now = float(getattr(state, "stamp", 0.0))
         if now < self._committed_until and abs(self._committed_side) > 0.5:
+            self._last_commit_age = max(0.0, self._committed_until - now)
             return
         side = self._sign(reference_side)
+        reason = "reference_side" if abs(side) > 0.5 else "none"
         nearest = self._nearest_front_obstacle(state, ref_dir, perception)
         if nearest is not None:
             obs_forward, obs_lateral, clearance = nearest
             if 0.0 <= obs_forward <= 4.2 and clearance < float(getattr(self.config, "sampling_mpc_commit_clearance", 1.05)):
                 side = -1.0 if obs_lateral > 0.0 else 1.0
+                reason = "front_obstacle_left_go_right" if side < 0.0 else "front_obstacle_right_go_left"
         if abs(side) > 0.5:
-            hold = float(getattr(self.config, "sampling_mpc_side_hold_sec", 1.6))
+            hold = max(2.2, float(getattr(self.config, "sampling_mpc_side_hold_sec", 2.2)))
             self._committed_side = side
-            self._committed_until = now + max(0.2, hold)
+            self._committed_until = now + hold
+            self._last_commit_reason = reason
+            self._last_commit_age = hold
         elif now >= self._committed_until:
             self._committed_side = 0.0
+            self._last_commit_reason = "released"
+            self._last_commit_age = 0.0
+
+    def _commitment_penalty(self, candidate_side: float, kind: str) -> float:
+        committed = self._sign(self._committed_side)
+        candidate_side = self._sign(candidate_side)
+        if abs(committed) < 0.5 or abs(candidate_side) < 0.5:
+            return 0.0
+        if candidate_side * committed >= 0.0:
+            return 0.0
+        lower = str(kind).lower()
+        if "wide" in lower or "bias" in lower or "side" in lower or "sample" in lower or "slow" in lower:
+            return float(getattr(self.config, "sampling_mpc_opposite_side_penalty", 850.0))
+        return 250.0
+
+    @staticmethod
+    def _candidate_side_from_spec(spec: dict) -> float:
+        kind = str(spec.get("kind", "")).lower()
+        if "left" in kind:
+            return 1.0
+        if "right" in kind:
+            return -1.0
+        lateral = float(spec.get("lateral", 0.0) or 0.0)
+        if lateral > 0.08:
+            return 1.0
+        if lateral < -0.08:
+            return -1.0
+        return 0.0
 
     def _nearest_front_obstacle(self, state: PlannerState, ref_dir: Vec3, perception: Optional[PerceptionData]):
         if perception is None:
