@@ -261,7 +261,11 @@ class PlannerConfig:
 def nearest_prediction(predictions: Iterable[Tuple[float, Vec3]], t: float) -> Vec3:
     best_err = None
     best_pos = None
-    for pred_t, pred_pos in predictions:
+    for prediction in predictions:
+        if len(prediction) < 2:
+            continue
+        pred_t = prediction[0]
+        pred_pos = prediction[1]
         err = abs(float(pred_t) - float(t))
         if best_err is None or err < best_err:
             best_err = err
