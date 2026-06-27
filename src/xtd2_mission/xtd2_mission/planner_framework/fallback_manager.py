@@ -226,10 +226,14 @@ class FallbackManager:
                 continue
             if item.safety.min_ttc < 0.80:
                 continue
-            if item.safety.min_clearance < 0.20 or item.safety.min_static_clearance < 0.20:
+            if item.safety.min_clearance < 0.18 or item.safety.min_static_clearance < 0.18:
                 continue
             reason = str(item.safety.reason)
-            if "mpc_feasible_motion" not in reason and reason != "emergency_margin_violation":
+            allowed_reason = (
+                "mpc_feasible_motion" in reason
+                or reason in {"emergency_margin_violation", "escaping_hard_zone", "rejoining_corridor"}
+            )
+            if not allowed_reason:
                 continue
             allowed.append(item)
         if not allowed:
@@ -237,6 +241,7 @@ class FallbackManager:
         return min(
             allowed,
             key=lambda item: (
+                0 if str(item.safety.reason) == "escaping_hard_zone" else 1,
                 float(item.trajectory.metadata.get("sample_cost", item.score)),
                 item.costs.get("reverse", 999.0),
                 item.costs.get("progress", 999.0),
