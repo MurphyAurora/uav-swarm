@@ -147,6 +147,8 @@ def narrow_corridor_easy() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(13.0, 0.0),
         obstacles=(
+            # Wide baseline corridor: this should be almost straight and verifies
+            # that side obstacles do not create false stops or oscillation.
             CircleObstacle(2.8, 1.75, 0.40, obstacle_id="top_1"),
             CircleObstacle(4.8, 1.75, 0.40, obstacle_id="top_2"),
             CircleObstacle(6.8, 1.75, 0.40, obstacle_id="top_3"),
@@ -163,25 +165,65 @@ def narrow_corridor_easy() -> SimCase:
     )
 
 
-def narrow_corridor() -> SimCase:
+def narrow_corridor_medium() -> SimCase:
     return SimCase(
-        name="narrow_corridor",
+        name="narrow_corridor_medium",
         start=v3(0.0, 0.0),
         goal=v3(13.0, 0.0),
         obstacles=(
-            CircleObstacle(2.8, 1.60, 0.42, obstacle_id="top_1"),
-            CircleObstacle(4.7, 1.55, 0.42, obstacle_id="top_2"),
-            CircleObstacle(6.6, 1.60, 0.42, obstacle_id="top_3"),
-            CircleObstacle(8.5, 1.55, 0.42, obstacle_id="top_4"),
-            CircleObstacle(10.4, 1.60, 0.42, obstacle_id="top_5"),
-            CircleObstacle(3.7, -1.60, 0.42, obstacle_id="bottom_1"),
-            CircleObstacle(5.6, -1.55, 0.42, obstacle_id="bottom_2"),
-            CircleObstacle(7.5, -1.60, 0.42, obstacle_id="bottom_3"),
-            CircleObstacle(9.4, -1.55, 0.42, obstacle_id="bottom_4"),
-            CircleObstacle(11.3, -1.60, 0.42, obstacle_id="bottom_5"),
+            # True narrow corridor: the centerline is still feasible, but the
+            # planner must keep clearance and avoid overreacting to both walls.
+            CircleObstacle(2.8, 1.40, 0.40, obstacle_id="top_1"),
+            CircleObstacle(4.8, 1.40, 0.40, obstacle_id="top_2"),
+            CircleObstacle(6.8, 1.40, 0.40, obstacle_id="top_3"),
+            CircleObstacle(8.8, 1.40, 0.40, obstacle_id="top_4"),
+            CircleObstacle(10.8, 1.40, 0.40, obstacle_id="top_5"),
+            CircleObstacle(2.8, -1.40, 0.40, obstacle_id="bottom_1"),
+            CircleObstacle(4.8, -1.40, 0.40, obstacle_id="bottom_2"),
+            CircleObstacle(6.8, -1.40, 0.40, obstacle_id="bottom_3"),
+            CircleObstacle(8.8, -1.40, 0.40, obstacle_id="bottom_4"),
+            CircleObstacle(10.8, -1.40, 0.40, obstacle_id="bottom_5"),
         ),
         bounds=default_bounds(13.5, half_width=2.7),
-        steps=650,
+        steps=700,
+    )
+
+
+def narrow_corridor_hard() -> SimCase:
+    return SimCase(
+        name="narrow_corridor_hard",
+        start=v3(0.0, 0.0),
+        goal=v3(13.0, 0.0),
+        obstacles=(
+            # Near-limit corridor for stress testing only.  It is expected to be
+            # slow and may require relaxed offline safety margins to pass.
+            CircleObstacle(2.8, 1.22, 0.42, obstacle_id="top_1"),
+            CircleObstacle(4.8, 1.22, 0.42, obstacle_id="top_2"),
+            CircleObstacle(6.8, 1.22, 0.42, obstacle_id="top_3"),
+            CircleObstacle(8.8, 1.22, 0.42, obstacle_id="top_4"),
+            CircleObstacle(10.8, 1.22, 0.42, obstacle_id="top_5"),
+            CircleObstacle(2.8, -1.22, 0.42, obstacle_id="bottom_1"),
+            CircleObstacle(4.8, -1.22, 0.42, obstacle_id="bottom_2"),
+            CircleObstacle(6.8, -1.22, 0.42, obstacle_id="bottom_3"),
+            CircleObstacle(8.8, -1.22, 0.42, obstacle_id="bottom_4"),
+            CircleObstacle(10.8, -1.22, 0.42, obstacle_id="bottom_5"),
+        ),
+        bounds=default_bounds(13.5, half_width=2.55),
+        steps=800,
+    )
+
+
+def narrow_corridor() -> SimCase:
+    # Backward-compatible alias for the medium corridor.
+    case = narrow_corridor_medium()
+    return SimCase(
+        name="narrow_corridor",
+        start=case.start,
+        goal=case.goal,
+        obstacles=case.obstacles,
+        bounds=case.bounds,
+        steps=case.steps,
+        dt=case.dt,
     )
 
 
