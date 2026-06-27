@@ -39,14 +39,17 @@ def forest_gap() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(16.0, 0.0),
         obstacles=(
-            CircleObstacle(3.5, -0.9, 0.45, obstacle_id="p1"),
-            CircleObstacle(4.4, 0.8, 0.45, obstacle_id="p2"),
-            CircleObstacle(6.2, -0.2, 0.50, obstacle_id="p3"),
-            CircleObstacle(8.0, 1.0, 0.50, obstacle_id="p4"),
-            CircleObstacle(9.0, -1.0, 0.50, obstacle_id="p5"),
-            CircleObstacle(11.0, 0.4, 0.45, obstacle_id="p6"),
+            # Sparse forest: scattered trunks with several valid gaps.  This case
+            # should test multi-obstacle gap selection and rejoin-to-goal behavior,
+            # not force a single S-curve or a boundary-hugging solution.
+            CircleObstacle(3.0, -1.25, 0.36, obstacle_id="p1"),
+            CircleObstacle(4.6, 1.35, 0.36, obstacle_id="p2"),
+            CircleObstacle(6.3, 0.30, 0.40, obstacle_id="p3"),
+            CircleObstacle(8.3, -1.35, 0.38, obstacle_id="p4"),
+            CircleObstacle(10.0, 1.25, 0.38, obstacle_id="p5"),
+            CircleObstacle(11.8, 0.15, 0.36, obstacle_id="p6"),
         ),
-        bounds=default_bounds(16.5, half_width=3.0),
+        bounds=default_bounds(16.5, half_width=3.4),
         steps=700,
     )
 
