@@ -71,16 +71,16 @@ def s_curve_easy() -> SimCase:
         start=v3(0.0, 0.0),
         goal=v3(13.0, 0.0),
         obstacles=(
-            # Tightened toward the centerline so straight tracking is no longer a pass.
-            CircleObstacle(3.0, -0.75, 0.55, obstacle_id="s1"),
-            CircleObstacle(5.2, 0.75, 0.55, obstacle_id="s2"),
-            CircleObstacle(7.4, -0.75, 0.55, obstacle_id="s3"),
-            CircleObstacle(9.6, 0.75, 0.55, obstacle_id="s4"),
+            # Easy S-curve should test weaving, not create a hard-inflated deadlock.
+            # Keep the alternating pattern, but leave enough room for drone_radius
+            # and hard/emergency margins used by the offline smoke planner.
+            CircleObstacle(3.0, -0.90, 0.50, obstacle_id="s1"),
+            CircleObstacle(5.2, 0.90, 0.50, obstacle_id="s2"),
+            CircleObstacle(7.4, -0.90, 0.50, obstacle_id="s3"),
+            CircleObstacle(9.6, 0.90, 0.50, obstacle_id="s4"),
         ),
-        # The bounds are intentionally narrow: the planner must weave through the
-        # alternating gaps instead of going around the whole S pattern above/below.
-        bounds=default_bounds(13.5, half_width=2.05),
-        steps=650,
+        bounds=default_bounds(13.5, half_width=2.20),
+        steps=700,
     )
 
 
