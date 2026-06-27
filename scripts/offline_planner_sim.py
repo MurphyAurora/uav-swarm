@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline 2D planner smoke simulator.
+r"""Offline 2D planner smoke simulator.
 
 This script runs the pure-Python planner framework without ROS, PX4, Gazebo, or
 RViz.  It is intended for quick logic checks on Linux or Windows:
