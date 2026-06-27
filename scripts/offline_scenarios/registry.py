@@ -16,6 +16,8 @@ from .static_cases import (
     narrow_corridor,
     narrow_corridor_bias,
     narrow_corridor_easy,
+    narrow_corridor_hard,
+    narrow_corridor_medium,
     rejoin_shell,
     s_curve_easy,
     s_curve_medium,
@@ -32,6 +34,8 @@ CASE_REGISTRY: Dict[str, Callable[[], SimCase]] = {
     "forest_gap": forest_gap,
     "rejoin_shell": rejoin_shell,
     "narrow_corridor_easy": narrow_corridor_easy,
+    "narrow_corridor_medium": narrow_corridor_medium,
+    "narrow_corridor_hard": narrow_corridor_hard,
     "narrow_corridor": narrow_corridor,
     "narrow_corridor_bias": narrow_corridor_bias,
     # Extra static cases for diagnosing planner behavior beyond corridors.
