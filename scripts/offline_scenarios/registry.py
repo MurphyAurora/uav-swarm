@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, Dict
 
 from .base import SimCase
+from .constraint_cases import boundary_pressure_gap, corridor_bottleneck, narrow_corridor_offset
 from .dynamic_cases import (
     dynamic_crossing_fast,
     dynamic_crossing_slow,
@@ -39,6 +40,9 @@ CASE_REGISTRY: Dict[str, Callable[[], SimCase]] = {
     "narrow_corridor": narrow_corridor,
     "narrow_corridor_bias": narrow_corridor_bias,
     # Extra static cases for diagnosing planner behavior beyond corridors.
+    "boundary_pressure_gap": boundary_pressure_gap,
+    "corridor_bottleneck": corridor_bottleneck,
+    "narrow_corridor_offset": narrow_corridor_offset,
     "single_pillar_left_bias": single_pillar_left_bias,
     "single_pillar_right_bias": single_pillar_right_bias,
     "s_curve_easy": s_curve_easy,
