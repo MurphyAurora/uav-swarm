@@ -5,6 +5,7 @@ import math
 from typing import Optional, Sequence, Tuple
 
 from .common import CandidateEvaluation, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
+from .dynamic_safety import dynamic_escape_command, dynamic_ttc_snapshot
 
 
 class FallbackManager:
@@ -24,16 +25,30 @@ class FallbackManager:
     def command(self, state: PlannerState, perception: PerceptionData, evaluations: Sequence[CandidateEvaluation]) -> PlannerCommand:
         """Fallback used when the normal planner has no safely executable command.
 
-        Pure hover is safe, but it creates a deadlock in narrow passages.  Before
-        using hover, prefer explicit escape candidates and hard-feasible Sampling
-        MPC recovery motions.  Hard violations and TTC violations still stop.
+        Static scenes can often use hover as a final fallback.  Dynamic scenes
+        cannot: if an obstacle is still approaching, hover may keep the drone in
+        the collision corridor.  Therefore dynamic TTC escape is checked before
+        static unstick and hover.
         """
         best = self._best_escape(evaluations)
         if perception.near_field_danger:
+            dynamic_escape = dynamic_escape_command(state, perception, self.config)
+            if dynamic_escape is not None:
+                return PlannerCommand(dynamic_escape, "fallback_escape", "dynamic_ttc_escape", "near_field_dynamic_escape")
             self._escape_side = 0.0
             self._escape_direction = Vec3()
             self._escape_forward = Vec3()
             return PlannerCommand(Vec3(), "fallback_hover", "hover", "near_field_lidar_stop")
+
+        dynamic_escape = dynamic_escape_command(state, perception, self.config)
+        if dynamic_escape is not None:
+            min_ttc, closing, clearance, _ = dynamic_ttc_snapshot(state, perception, self.config)
+            return PlannerCommand(
+                dynamic_escape,
+                "fallback_escape",
+                "dynamic_ttc_escape",
+                f"dynamic_ttc_escape:ttc={min_ttc:.2f}:closing={closing:.2f}:clearance={clearance:.2f}",
+            )
 
         explicit = self._best_explicit_escape(evaluations)
         if explicit is not None:
@@ -81,7 +96,8 @@ class FallbackManager:
         obs_x, obs_y, clearance, away_x, away_y = nearest
 
         # Only unstick when the obstacle is in front and there is still enough
-        # physical room.  If we are near contact, hover wins.
+        # physical room.  If we are near contact, hover wins for static scenes;
+        # dynamic scenes were handled by dynamic_ttc_escape above.
         if not (0.25 <= obs_x <= 4.5 and abs(obs_y) <= 1.8):
             if self._escape_direction.norm() > 1.0e-6 and clearance > 0.52 and best is not None and not best.safety.safe:
                 lateral_speed = min(0.18, max(0.12, self.config.max_speed * 0.24))
@@ -116,10 +132,6 @@ class FallbackManager:
         self._refresh_escape_direction_from_clearance(state, perception, forward, left)
         lateral = self._escape_direction.limit_norm(1.0) if self._escape_direction.norm() > 1.0e-6 else (left * self._escape_side)
 
-        # Distance-based unstick:
-        # - far from the obstacle: pure lateral motion to change the viewpoint;
-        # - medium distance: lateral plus a tiny backward component;
-        # - close: no command, handled by the hover branch above.
         if clearance > 0.90:
             lateral_speed = min(0.20, max(0.14, self.config.max_speed * 0.28))
         else:
