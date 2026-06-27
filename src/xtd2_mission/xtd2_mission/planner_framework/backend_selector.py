@@ -62,22 +62,23 @@ class BackendSelector:
         reverse_cost = max(0.0, -progress)
         moving = self._is_moving_candidate_obj(candidate)
         stop_like = self._is_stop_candidate_obj(candidate)
+        selection_safety = self._selection_safety_for_sampling_mpc(candidate, safety)
 
         # Sampling MPC already evaluates full-horizon objective terms.  The backend
-        # should only add hard-safety and selection-shape penalties, not overwrite
-        # the MPC objective with the legacy one-step candidate score.
+        # adds only hard-risk penalties and selection-shape penalties, instead of
+        # overwriting the MPC objective with the legacy one-step candidate score.
         score = sample_cost
         if not safety.feasible:
             score += 10000.0
         elif not safety.safe:
-            # Keep feasible moving trajectories alive in dynamic-avoid/recovery.
-            # A large legacy +1000 penalty makes safe stop dominate every time.
-            score += 250.0 if moving and not stop_like else 800.0
+            # Keep hard-feasible moving rollouts alive.  The layered selector still
+            # prefers originally safe moving rollouts before these candidates.
+            score += 180.0 if moving and not stop_like else 800.0
         if stop_like:
             # Stop is a fallback, not a normal MPC solution when the goal is far.
             goal_dist = state.position.distance_to(local_goal)
             if goal_dist > self.config.local_goal_reached_radius:
-                score += 750.0
+                score += 850.0
         if reverse_cost > 0.05:
             score += 1200.0
 
@@ -91,9 +92,43 @@ class BackendSelector:
                 "lateral": abs(lateral),
                 "moving": 0.0 if moving else 1.0,
                 "stop_like": 1.0 if stop_like else 0.0,
+                "selection_safe_promoted": 1.0 if selection_safety is not safety else 0.0,
+                "raw_safe": 1.0 if safety.safe else 0.0,
+                "raw_feasible": 1.0 if safety.feasible else 0.0,
             }
         )
-        return CandidateEvaluation(candidate, safety, float(score), costs)
+        return CandidateEvaluation(candidate, selection_safety, float(score), costs)
+
+    def _selection_safety_for_sampling_mpc(self, candidate: CandidateTrajectory, safety: SafetyReport) -> SafetyReport:
+        if safety.safe:
+            return safety
+        if not self._is_mpc_motion_selectable(candidate, safety):
+            return safety
+        return SafetyReport(
+            True,
+            safety.feasible,
+            safety.min_clearance,
+            safety.min_clearance_source,
+            safety.min_static_clearance,
+            safety.min_ttc,
+            f"{safety.reason}|mpc_feasible_motion",
+        )
+
+    def _is_mpc_motion_selectable(self, candidate: CandidateTrajectory, safety: SafetyReport) -> bool:
+        if not safety.feasible:
+            return False
+        if self._is_stop_candidate_obj(candidate):
+            return False
+        if candidate.velocity.norm() <= 0.05:
+            return False
+        if safety.reason in {"hard_clearance_violation", "static_clearance_violation", "ttc_violation"}:
+            return False
+        if safety.min_ttc < 0.80:
+            return False
+        buffer = float(getattr(self.config, "sampling_mpc_selection_clearance_buffer", 0.04))
+        hard_floor = max(float(getattr(self.config, "hard_clearance", 0.25)), -0.02) + buffer
+        static_floor = max(min(float(getattr(self.config, "static_hard_clearance", 0.35)), 0.35), 0.28) + buffer
+        return bool(safety.min_clearance >= hard_floor and safety.min_static_clearance >= static_floor)
 
     def select_best(self, evaluations: Sequence[CandidateEvaluation], state: Optional[PlannerState] = None, local_goal: Optional[Vec3] = None) -> Optional[CandidateEvaluation]:
         if any(self._is_sampling_mpc_evaluation(item) for item in evaluations):
@@ -191,15 +226,18 @@ class BackendSelector:
             prefer_motion = state.position.distance_to(local_goal) > self.config.local_goal_reached_radius
 
         moving = [item for item in mpc_items if self._is_moving_evaluation(item) and not self._is_stop_evaluation(item)]
-        safe_moving = [item for item in moving if item.safety.safe]
+        originally_safe_moving = [item for item in moving if item.costs.get("raw_safe", 1.0 if item.safety.safe else 0.0) > 0.5]
+        selectable_moving = [item for item in moving if item.safety.safe]
         feasible_moving = [item for item in moving if item.safety.feasible]
         stop_like = [item for item in mpc_items if self._is_stop_evaluation(item)]
         safe_stop = [item for item in stop_like if item.safety.safe]
         feasible_stop = [item for item in stop_like if item.safety.feasible]
 
         if prefer_motion:
-            if safe_moving:
-                return min(safe_moving, key=lambda item: item.score)
+            if originally_safe_moving:
+                return min(originally_safe_moving, key=lambda item: item.score)
+            if selectable_moving:
+                return min(selectable_moving, key=lambda item: item.score)
             if feasible_moving:
                 return min(feasible_moving, key=lambda item: item.score)
             if safe_stop:
