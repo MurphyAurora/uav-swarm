@@ -153,22 +153,24 @@ class SamplingMPCPlanner:
             if abs(side) > 0.5:
                 specs.extend(
                     [
-                        {"kind": f"{source}_side", "forward": 0.02, "lateral": side * 0.46, "speed_scale": 0.95, "turn_rate": side * 0.10},
-                        {"kind": f"{source}_side_slow", "forward": -0.06, "lateral": side * 0.64, "speed_scale": 0.68, "turn_rate": side * 0.12},
-                        {"kind": f"{source}_wide", "forward": 0.00, "lateral": side * 0.92, "speed_scale": 0.82, "turn_rate": side * 0.16},
+                        {"kind": f"{source}_side", "forward": 0.02, "lateral": side * 0.58, "speed_scale": 0.95, "turn_rate": side * 0.10},
+                        {"kind": f"{source}_side_slow", "forward": -0.06, "lateral": side * 0.78, "speed_scale": 0.68, "turn_rate": side * 0.12},
+                        {"kind": f"{source}_wide", "forward": 0.00, "lateral": side * 1.15, "speed_scale": 0.82, "turn_rate": side * 0.16},
+                        {"kind": f"{source}_extra_wide", "forward": -0.04, "lateral": side * 1.35, "speed_scale": 0.72, "turn_rate": side * 0.20},
                     ]
                 )
         for side, label in ((1.0, "left"), (-1.0, "right")):
-            for gain in (0.28, 0.48, 0.70, 0.95):
-                specs.append({"kind": f"bias_{label}", "forward": 0.00, "lateral": side * gain, "speed_scale": 0.86, "turn_rate": side * gain * 0.18})
-            specs.append({"kind": f"slow_{label}", "forward": -0.08, "lateral": side * 0.55, "speed_scale": 0.55, "turn_rate": side * 0.10})
+            for gain in (0.32, 0.55, 0.82, 1.05, 1.25):
+                specs.append({"kind": f"bias_{label}", "forward": 0.00, "lateral": side * gain, "speed_scale": 0.84, "turn_rate": side * gain * 0.18})
+            specs.append({"kind": f"slow_{label}", "forward": -0.08, "lateral": side * 0.70, "speed_scale": 0.55, "turn_rate": side * 0.10})
+            specs.append({"kind": f"wide_{label}", "forward": -0.04, "lateral": side * 1.20, "speed_scale": 0.70, "turn_rate": side * 0.18})
 
         while len(specs) < num_samples:
-            lateral_mean = committed_side * 0.34 if abs(committed_side) > 0.5 else side_hint * 0.18
-            lateral = rng.gauss(lateral_mean, 0.50)
-            forward = rng.gauss(0.04, 0.18)
-            speed_scale = max(0.18, min(1.15, rng.gauss(0.90, 0.18)))
-            turn_rate = rng.gauss(committed_side * 0.04, 0.16)
+            lateral_mean = committed_side * 0.42 if abs(committed_side) > 0.5 else side_hint * 0.25
+            lateral = rng.gauss(lateral_mean, 0.65)
+            forward = rng.gauss(0.03, 0.18)
+            speed_scale = max(0.18, min(1.15, rng.gauss(0.88, 0.18)))
+            turn_rate = rng.gauss(committed_side * 0.05, 0.18)
             specs.append({"kind": "sample", "forward": forward, "lateral": lateral, "speed_scale": speed_scale, "turn_rate": turn_rate})
         return specs
 
@@ -249,15 +251,15 @@ class SamplingMPCPlanner:
             reverse_or_stall += 3.0
         cost = (
             goal_cost * 1.6
-            + reference_cost * 1.8
-            + obstacle_cost * 1.4
-            + side_cost * 0.45
+            + reference_cost * 1.25
+            + obstacle_cost * 3.2
+            + side_cost * 0.35
             + smooth * 0.35
             + effort * 0.06
             + first_error * 0.20
             + reverse_or_stall
             - goal_progress * 1.8
-            - reference_progress * 7.0
+            - reference_progress * 6.0
         )
         return cost, {
             "goal_cost": float(goal_cost),
@@ -277,7 +279,7 @@ class SamplingMPCPlanner:
     def _soft_obstacle_cost(self, points: Sequence[TrajectoryPoint], perception: Optional[PerceptionData]) -> Tuple[float, float]:
         if perception is None or not perception.obstacles:
             return 0.0, 999.0
-        soft_clearance = float(getattr(self.config, "sampling_mpc_soft_clearance", 0.35))
+        soft_clearance = max(0.65, float(getattr(self.config, "sampling_mpc_soft_clearance", 0.65)))
         cost = 0.0
         min_clearance = 999.0
         for point in points[1:]:
