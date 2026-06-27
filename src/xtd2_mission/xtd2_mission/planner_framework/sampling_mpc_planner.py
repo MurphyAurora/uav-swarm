@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Sampling-MPC frontend candidate generator.
 
 This module intentionally only proposes candidate rollouts. Collision, hard
@@ -61,6 +61,8 @@ class SamplingMPCPlanner:
         best_cost = 999999.0
         best_name = ""
         best_breakdown = {}
+        stop_count = 0
+        moving_count = 0
 
         for idx, spec in enumerate(specs[:num_samples]):
             controls = self._controls_from_spec(spec, current, nominal, ref_dir, left, horizon_steps, dt, max_speed, max_accel)
@@ -77,12 +79,19 @@ class SamplingMPCPlanner:
                 ref_progress_now,
                 left,
             )
+            kind = str(spec["kind"])
+            is_stop = kind == "stop"
+            if is_stop:
+                stop_count += 1
+            elif candidate.velocity.norm() > 0.05:
+                moving_count += 1
             candidate.metadata.update(
                 {
                     "planner": "sampling_mpc",
                     "controls_count": len(controls),
-                    "sample_kind": spec["kind"],
+                    "sample_kind": kind,
                     "sample_cost": float(cost),
+                    "sample_breakdown": dict(breakdown),
                     "horizon_steps": int(horizon_steps),
                     "dt": float(dt),
                     "reference_source": reference.source,
@@ -91,6 +100,9 @@ class SamplingMPCPlanner:
                     "reference_progress": float(breakdown.get("reference_progress", 0.0)),
                     "soft_clearance": float(breakdown.get("min_soft_clearance", 999.0)),
                     "committed_side": float(self._committed_side),
+                    "is_stop": bool(is_stop),
+                    "emergency_only": bool(is_stop),
+                    "reference_tracking_target": breakdown.get("tracking_target", {}),
                 }
             )
             if cost < best_cost:
@@ -114,6 +126,8 @@ class SamplingMPCPlanner:
             "perception_obstacles": len(perception.obstacles) if perception is not None else 0,
             "committed_side": float(self._committed_side),
             "committed_until": float(self._committed_until),
+            "moving_samples": int(moving_count),
+            "stop_samples": int(stop_count),
             "reference": {
                 "source": reference.source,
                 "confidence": float(reference.confidence),
@@ -214,7 +228,7 @@ class SamplingMPCPlanner:
         left: Vec3,
     ) -> Tuple[float, dict]:
         final = points[-1].position if points else start
-        tracking_target = self._tracking_target(reference_points, local_goal, final)
+        tracking_target = self._tracking_target(reference_points, local_goal, ref_progress_now, nominal.norm(), dt, len(controls))
         goal_cost = final.distance_to(local_goal)
         reference_cost = final.distance_to(tracking_target)
         goal_progress = max(0.0, start.distance_to(local_goal) - final.distance_to(local_goal))
@@ -257,6 +271,7 @@ class SamplingMPCPlanner:
             "first_error": float(first_error),
             "reverse_or_stall": float(reverse_or_stall),
             "min_soft_clearance": float(min_soft_clearance),
+            "tracking_target": tracking_target.to_dict(),
         }
 
     def _soft_obstacle_cost(self, points: Sequence[TrajectoryPoint], perception: Optional[PerceptionData]) -> Tuple[float, float]:
@@ -360,18 +375,39 @@ class SamplingMPCPlanner:
             cumulative += length
         return float(best_s)
 
-    @staticmethod
-    def _tracking_target(reference_points: Sequence[Vec3], local_goal: Vec3, final: Vec3) -> Vec3:
+    def _tracking_target(
+        self,
+        reference_points: Sequence[Vec3],
+        local_goal: Vec3,
+        ref_progress_now: float,
+        nominal_speed: float,
+        dt: float,
+        horizon_steps: int,
+    ) -> Vec3:
         if not reference_points:
             return local_goal
-        best = reference_points[-1]
-        best_dist = 999999.0
-        for point in reference_points:
-            dist = final.distance_to(point)
-            if dist < best_dist:
-                best = point
-                best_dist = dist
-        return best
+        if len(reference_points) < 2:
+            return reference_points[0]
+        lookahead = max(0.65, min(1.35, max(0.1, nominal_speed) * dt * max(horizon_steps, 1) * 0.65))
+        return self._point_at_reference_progress(reference_points, ref_progress_now + lookahead)
+
+    @staticmethod
+    def _point_at_reference_progress(reference_points: Sequence[Vec3], target_s: float) -> Vec3:
+        if not reference_points:
+            return Vec3()
+        if len(reference_points) == 1:
+            return reference_points[0]
+        cumulative = 0.0
+        for a, b in zip(reference_points[:-1], reference_points[1:]):
+            segment = Vec3(b.x - a.x, b.y - a.y, b.z - a.z)
+            length = segment.norm()
+            if length <= 1.0e-6:
+                continue
+            if cumulative + length >= target_s:
+                u = max(0.0, min(1.0, (target_s - cumulative) / length))
+                return Vec3(a.x + segment.x * u, a.y + segment.y * u, a.z + segment.z * u)
+            cumulative += length
+        return reference_points[-1]
 
     @staticmethod
     def _accel_limited(prev: Vec3, target: Vec3, max_delta: float) -> Vec3:
