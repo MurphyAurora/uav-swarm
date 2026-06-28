@@ -116,6 +116,8 @@ def write_csv(path: str, history: Iterable[Dict[str, object]]) -> None:
 
 
 def _plot_dynamic_obstacle_motion(ax, case: SimCase, config: PlannerConfig, final_t: float) -> None:
+    import matplotlib.pyplot as plt
+
     if not case.dynamic_obstacles or final_t <= 0.0:
         return
     samples = max(3, min(80, int(math.ceil(final_t / max(case.dt * 2.0, 1.0e-6))) + 1))
