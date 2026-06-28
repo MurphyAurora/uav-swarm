@@ -80,6 +80,39 @@ def dynamic_ttc_snapshot(
     return float(min_ttc), float(max_closing), float(min_clearance), worst
 
 
+def dynamic_side_hint(
+    state: PlannerState,
+    perception: Optional[PerceptionData],
+    config: PlannerConfig,
+    ref_dir: Optional[Vec3] = None,
+) -> float:
+    """Return preferred escape side for approaching dynamic obstacles.
+
+    Positive means left of ref_dir/heading, negative means right.  Zero means no
+    urgent dynamic side preference.
+    """
+    min_ttc, closing, clearance, obs = dynamic_ttc_snapshot(state, perception, config)
+    if obs is None:
+        return 0.0
+    ttc_trigger = float(getattr(config, "dynamic_escape_ttc", 1.8))
+    clearance_trigger = float(getattr(config, "dynamic_escape_clearance", 1.15))
+    if min_ttc > ttc_trigger and clearance > clearance_trigger and closing < 0.05:
+        return 0.0
+    base = ref_dir.normalized(Vec3()) if ref_dir is not None else Vec3()
+    if base.norm() <= 1.0e-6:
+        heading = float(getattr(state, "heading", 0.0))
+        base = Vec3(math.cos(heading), math.sin(heading), 0.0).normalized(Vec3(1.0, 0.0, 0.0))
+    left = Vec3(-base.y, base.x, 0.0)
+    obs_pos = obs.position_at(0.0)
+    rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
+    lateral = rel.x * left.x + rel.y * left.y
+    if abs(lateral) >= 0.10:
+        return -1.0 if lateral > 0.0 else 1.0
+    rel_vel = obstacle_velocity(obs) - Vec3(state.velocity.x, state.velocity.y, 0.0)
+    cross = base.x * rel_vel.y - base.y * rel_vel.x
+    return -1.0 if cross > 0.0 else 1.0
+
+
 def dynamic_escape_command(
     state: PlannerState,
     perception: Optional[PerceptionData],
@@ -123,23 +156,15 @@ def dynamic_escape_command(
     if best_obs is None:
         return None
 
-    obs_pos = best_obs.position_at(0.0)
-    rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
-    rel_vel = obstacle_velocity(best_obs) - ego_vel
-    # Escape mostly perpendicular to the line of approach.  Pick the side that
-    # moves away from the obstacle's current lateral side in the body frame.
     heading = float(getattr(state, "heading", 0.0))
     forward = Vec3(math.cos(heading), math.sin(heading), 0.0).normalized(Vec3(1.0, 0.0, 0.0))
     left = Vec3(-forward.y, forward.x, 0.0)
-    rel_lateral = rel.x * left.x + rel.y * left.y
-    side = -1.0 if rel_lateral > 0.0 else 1.0
-    if abs(rel_lateral) < 0.10:
-        # Head-on: use the side that is most perpendicular to the relative motion.
-        cross = forward.x * rel_vel.y - forward.y * rel_vel.x
-        side = -1.0 if cross > 0.0 else 1.0
+    side = dynamic_side_hint(state, perception, config, forward)
+    if abs(side) < 0.5:
+        side = 1.0
     lateral = left * side
     back = forward * -0.35
-    speed = min(float(getattr(config, "max_speed", 0.75)), max(0.22, float(getattr(config, "dynamic_escape_speed", 0.32))))
+    speed = min(float(getattr(config, "max_speed", 0.75)), max(0.28, float(getattr(config, "dynamic_escape_speed", 0.36))))
     return (lateral + back).normalized(lateral) * speed
 
 
@@ -149,18 +174,21 @@ def dynamic_trajectory_risk(
     perception: Optional[PerceptionData],
     config: PlannerConfig,
 ) -> Tuple[float, float, float, float]:
-    """Soft dynamic risk for MPC candidate scoring.
+    """Dynamic risk for MPC candidate scoring.
 
     Returns: cost, min_ttc, max_closing_speed, min_dynamic_clearance.
-    This is a soft cost, not a hard filter.  SafetyChecker still owns hard
-    feasibility; this only makes MPC prefer trajectories that increase TTC and
-    leave the collision cone earlier.
+    This is still returned as a cost so it can be used by Sampling MPC, but the
+    cost includes a large barrier-like term for future dynamic collisions.  In
+    practice this acts like a hard preference against trajectories that remain in
+    the dynamic collision cone.
     """
     if perception is None or not perception.obstacles or not points:
         return 0.0, 999.0, 0.0, 999.0
     radius_base = float(getattr(config, "drone_radius", 0.35))
     ttc_soft = float(getattr(config, "dynamic_ttc_soft", 2.2))
+    ttc_hard = float(getattr(config, "dynamic_ttc_hard", 1.05))
     clearance_soft = float(getattr(config, "dynamic_clearance_soft", 0.80))
+    clearance_hard = float(getattr(config, "dynamic_clearance_hard", 0.18))
     cost = 0.0
     samples = 0
     min_ttc = 999.0
@@ -187,8 +215,15 @@ def dynamic_trajectory_risk(
             if closing > 0.0 and ttc < ttc_soft:
                 gap = ttc_soft - ttc
                 cost += gap * gap * (1.0 + 0.8 * closing)
+            if closing > 0.0 and ttc < ttc_hard:
+                # Barrier-like penalty: these trajectories are not literally
+                # removed here, but backend selection will almost never prefer
+                # them over a feasible escape sample.
+                cost += 80.0 + 60.0 * (ttc_hard - ttc)
             if clearance < clearance_soft:
                 gap = clearance_soft - clearance
                 cost += 0.75 * gap * gap
+            if clearance < clearance_hard:
+                cost += 45.0 + 80.0 * (clearance_hard - clearance)
             samples += 1
     return cost / max(1, samples), float(min_ttc), float(max_closing), float(min_clearance)
