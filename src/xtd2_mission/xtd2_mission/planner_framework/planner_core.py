@@ -8,6 +8,7 @@ from typing import Dict, Optional, Sequence
 from .backend_selector import BackendSelector
 from .command_output import CommandOutput
 from .common import PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
+from .dynamic_safety import dynamic_ttc_snapshot
 from .fallback_manager import FallbackManager
 from .frontend_planner import FrontendPlanner
 from .goal_manager import LocalGoalManager
@@ -89,8 +90,9 @@ class EgoLikePlannerCore:
             if selected is None:
                 command = self.fallback.command(state, perception, self._non_stop_evaluations(evaluations))
             else:
+                cap = min(0.32 if self._is_dynamic_avoid_preferred(selected) else 0.22, self.config.max_speed)
                 command = PlannerCommand(
-                    selected.trajectory.velocity.limit_norm(min(0.22, self.config.max_speed)),
+                    selected.trajectory.velocity.limit_norm(cap),
                     "planner",
                     selected.trajectory.name,
                     f"{selected.safety.reason}|fsm:dynamic_avoid",
@@ -98,7 +100,17 @@ class EgoLikePlannerCore:
         elif mode == self.ESCAPE:
             command = self.fallback.command(state, perception, evaluations)
         elif mode == self.EMERGENCY_STOP:
-            command = PlannerCommand(Vec3(), "fallback_hover", "hover", "emergency_stop")
+            # Static emergency stop can hover, but dynamic obstacles keep moving.
+            # Mature dynamic MPC/safety layers treat hover as another candidate and
+            # reject it when it remains in the collision corridor.  Therefore the
+            # emergency state first asks FallbackManager for a dynamic TTC escape or
+            # latched escape, and only falls back to hover when no dynamic escape is
+            # available.
+            emergency_command = self.fallback.command(state, perception, self._non_stop_evaluations(evaluations))
+            if emergency_command.mode == "fallback_escape" and str(emergency_command.source_trajectory).startswith("dynamic_ttc_escape"):
+                command = emergency_command
+            else:
+                command = PlannerCommand(Vec3(), "fallback_hover", "hover", "emergency_stop")
         elif mode == self.RECOVERY:
             selected = self._select_recovery_candidate(evaluations, float(risk.get("min_clearance", 999.0)))
             if selected is None:
@@ -123,8 +135,9 @@ class EgoLikePlannerCore:
             command = PlannerCommand(Vec3(), "fallback_hover", "hover", "escape_blocked_goal_directed")
 
         if mode == self.DYNAMIC_AVOID and command.velocity.norm() > 0.20:
+            cap = min(0.32 if str(command.source_trajectory).startswith("sampling_mpc") and "dynamic_" in str(command.source_trajectory) else 0.22, self.config.max_speed)
             command = PlannerCommand(
-                command.velocity.limit_norm(min(0.22, self.config.max_speed)),
+                command.velocity.limit_norm(cap),
                 command.mode,
                 command.source_trajectory,
                 command.reason,
@@ -189,6 +202,9 @@ class EgoLikePlannerCore:
         min_clearance = self._current_min_clearance(state, perception)
         recoverable_count = sum(1 for item in evaluations if self._is_recoverable_rejoin(item, min_clearance))
         min_ttc = min((item.safety.min_ttc for item in evaluations), default=999.0)
+        dynamic_ttc, dynamic_closing, dynamic_clearance, dynamic_obs = dynamic_ttc_snapshot(state, perception, self.config)
+        if dynamic_closing > 0.02:
+            min_ttc = min(min_ttc, dynamic_ttc)
         best_name = best.trajectory.name if best is not None else None
         return {
             "safe_count": int(safe_count),
@@ -197,6 +213,10 @@ class EgoLikePlannerCore:
             "min_clearance": float(min_clearance),
             "candidate_min_clearance": float(candidate_min_clearance),
             "min_ttc": float(min_ttc),
+            "dynamic_ttc": float(dynamic_ttc),
+            "dynamic_closing": float(dynamic_closing),
+            "dynamic_clearance": float(dynamic_clearance),
+            "dynamic_obstacle": getattr(dynamic_obs, "obstacle_id", "") if dynamic_obs is not None else "",
             "near_field_danger": bool(perception.near_field_danger),
             "best_name": best_name,
             "best_safe": bool(best.safety.safe) if best is not None else False,
@@ -306,23 +326,34 @@ class EgoLikePlannerCore:
         return min(safe, key=lambda item: item.score) if safe else None
 
     def _select_dynamic_avoid_candidate(self, evaluations):
-        safe = [item for item in evaluations if item.safety.safe]
-        if not safe:
-            return None
-        moving = [item for item in safe if item.trajectory.velocity.norm() > 0.035]
-        moving_non_stop = [item for item in moving if not self._is_stop_like_candidate(item)]
-        if not moving_non_stop:
+        pool = []
+        for item in evaluations:
+            if self._is_stop_like_candidate(item):
+                continue
+            if item.trajectory.velocity.norm() <= 0.035:
+                continue
+            if item.safety.reason in {"hard_clearance_violation", "static_clearance_violation", "ttc_violation"}:
+                continue
+            if not item.safety.feasible:
+                continue
+            if item.safety.min_clearance < 0.12 or item.safety.min_static_clearance < 0.12:
+                continue
+            if item.safety.min_ttc < 0.45:
+                continue
+            if item.safety.safe or self._is_dynamic_avoid_preferred(item) or "mpc_feasible_motion" in str(item.safety.reason):
+                pool.append(item)
+        if not pool:
             return None
         return min(
-            moving_non_stop,
+            pool,
             key=lambda item: (
                 0 if self._is_dynamic_avoid_preferred(item) else 1,
+                0 if item.safety.safe else 1,
+                float(item.trajectory.metadata.get("dynamic_min_ttc", item.safety.min_ttc)) * -1.0,
+                -float(item.safety.min_clearance),
+                float(item.trajectory.metadata.get("sample_cost", item.score)),
                 item.costs.get("reverse", 999.0),
                 item.costs.get("progress", 999.0),
-                -float(item.safety.min_clearance),
-                -float(item.safety.min_ttc),
-                float(item.trajectory.metadata.get("sample_cost", item.score)),
-                item.costs.get("goal", 999.0),
                 item.score,
             ),
         )
@@ -333,7 +364,7 @@ class EgoLikePlannerCore:
         if item.trajectory.metadata.get("planner") != "sampling_mpc":
             return False
         kind = str(item.trajectory.metadata.get("sample_kind", "")).lower()
-        return any(token in kind for token in ("side", "wide", "bias"))
+        return any(token in kind for token in ("dynamic", "side", "wide", "bias"))
 
     @staticmethod
     def _is_stop_like_candidate(item) -> bool:
@@ -642,5 +673,3 @@ class EgoLikePlannerCore:
 
     def reset_output_filter(self) -> None:
         self.output.reset()
-
-
