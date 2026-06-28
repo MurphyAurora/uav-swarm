@@ -14,6 +14,8 @@ class FallbackManager:
         self._escape_side = 0.0
         self._escape_direction = Vec3()
         self._escape_forward = Vec3()
+        self._dynamic_escape_until = 0.0
+        self._dynamic_escape_cmd = Vec3()
 
     def should_fallback(self, best: Optional[CandidateEvaluation], evaluations: Sequence[CandidateEvaluation], perception: PerceptionData) -> bool:
         if best is None:
@@ -27,21 +29,18 @@ class FallbackManager:
 
         Static scenes can often use hover as a final fallback.  Dynamic scenes
         cannot: if an obstacle is still approaching, hover may keep the drone in
-        the collision corridor.  Therefore dynamic TTC escape is checked before
-        static unstick and hover.
+        the collision corridor.  Dynamic TTC escape is therefore checked before
+        static recovery and is latched for a short time to avoid the pattern
+        "escape two steps -> hover -> get hit".
         """
         best = self._best_escape(evaluations)
-        if perception.near_field_danger:
-            dynamic_escape = dynamic_escape_command(state, perception, self.config)
-            if dynamic_escape is not None:
-                return PlannerCommand(dynamic_escape, "fallback_escape", "dynamic_ttc_escape", "near_field_dynamic_escape")
-            self._escape_side = 0.0
-            self._escape_direction = Vec3()
-            self._escape_forward = Vec3()
-            return PlannerCommand(Vec3(), "fallback_hover", "hover", "near_field_lidar_stop")
+        now = float(getattr(state, "stamp", 0.0))
 
         dynamic_escape = dynamic_escape_command(state, perception, self.config)
         if dynamic_escape is not None:
+            hold = max(0.9, float(getattr(self.config, "dynamic_escape_hold_sec", 1.35)))
+            self._dynamic_escape_until = max(self._dynamic_escape_until, now + hold)
+            self._dynamic_escape_cmd = dynamic_escape
             min_ttc, closing, clearance, _ = dynamic_ttc_snapshot(state, perception, self.config)
             return PlannerCommand(
                 dynamic_escape,
@@ -49,6 +48,22 @@ class FallbackManager:
                 "dynamic_ttc_escape",
                 f"dynamic_ttc_escape:ttc={min_ttc:.2f}:closing={closing:.2f}:clearance={clearance:.2f}",
             )
+
+        latched = self._latched_dynamic_escape(state, perception, now)
+        if latched is not None:
+            min_ttc, closing, clearance, _ = dynamic_ttc_snapshot(state, perception, self.config)
+            return PlannerCommand(
+                latched,
+                "fallback_escape",
+                "dynamic_ttc_escape_latched",
+                f"dynamic_ttc_escape_latched:ttc={min_ttc:.2f}:closing={closing:.2f}:clearance={clearance:.2f}",
+            )
+
+        if perception.near_field_danger:
+            self._escape_side = 0.0
+            self._escape_direction = Vec3()
+            self._escape_forward = Vec3()
+            return PlannerCommand(Vec3(), "fallback_hover", "hover", "near_field_lidar_stop")
 
         explicit = self._best_explicit_escape(evaluations)
         if explicit is not None:
@@ -78,6 +93,21 @@ class FallbackManager:
         if best is not None:
             return PlannerCommand(Vec3(), "fallback_hover", "hover", f"fallback_stop:{best.safety.reason}")
         return PlannerCommand(Vec3(), "fallback_hover", "hover", "no_safe_candidate")
+
+    def _latched_dynamic_escape(self, state: PlannerState, perception: PerceptionData, now: float) -> Optional[Vec3]:
+        if now >= self._dynamic_escape_until or self._dynamic_escape_cmd.norm() <= 1.0e-6:
+            self._dynamic_escape_cmd = Vec3()
+            self._dynamic_escape_until = 0.0
+            return None
+        direction = self._dynamic_escape_cmd.normalized(Vec3())
+        # Do not keep a latched escape if it immediately runs into a static wall.
+        # This is a lightweight joint static/dynamic safety check for the fallback
+        # command; MPC/SafetyChecker still handle normal candidate safety.
+        if self._short_escape_clearance(state, perception, direction) < 0.14:
+            self._dynamic_escape_cmd = Vec3()
+            self._dynamic_escape_until = 0.0
+            return None
+        return self._dynamic_escape_cmd.limit_norm(min(float(getattr(self.config, "max_speed", 0.75)), 0.38))
 
     def _lateral_unstick_command(
         self,
