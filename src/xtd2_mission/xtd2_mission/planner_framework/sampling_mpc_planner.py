@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Sampling-MPC frontend candidate generator.
 
-This module intentionally only proposes candidate rollouts. Collision, hard
-clearance, and final command arbitration remain owned by SafetyChecker,
-BackendSelector, and PlannerCore's FSM.
+The planner follows a unified local MPC structure:
+
+1. generate candidate control sequences,
+2. rollout candidate UAV trajectories,
+3. score static clearance, dynamic moving-obstacle metrics, reference tracking,
+   smoothness, and progress,
+4. return sorted candidates to SafetyChecker / BackendSelector / PlannerCore.
+
+This file does not own final command arbitration.  It only proposes and ranks
+candidate trajectories.
 """
 
 from __future__ import annotations
@@ -13,12 +20,13 @@ import random
 from typing import List, Optional, Sequence, Tuple
 
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
+from .dynamic_mpc_metrics import evaluate_dynamic_mpc_metrics
 from .dynamic_safety import dynamic_side_hint, dynamic_trajectory_risk
 from .reference_generator import LocalAStarReferenceGenerator, ReferenceGenerator
 
 
 class SamplingMPCPlanner:
-    """Argmin sampling MPC frontend with reference tracking and soft risk costs."""
+    """Argmin sampling MPC frontend with reference tracking and dynamic metrics."""
 
     def __init__(self, config: Optional[PlannerConfig] = None, reference_generator: Optional[ReferenceGenerator] = None):
         self.config = config or PlannerConfig()
@@ -69,6 +77,8 @@ class SamplingMPCPlanner:
         moving_count = 0
         opposite_count = 0
         dynamic_count = 0
+        dynamic_risk_count = 0
+        dynamic_corridor_count = 0
 
         for idx, spec in enumerate(specs[:num_samples]):
             controls = self._controls_from_spec(spec, current, nominal, ref_dir, left, horizon_steps, dt, max_speed, max_accel)
@@ -97,9 +107,28 @@ class SamplingMPCPlanner:
             breakdown["candidate_side"] = float(candidate_side)
             breakdown["committed_side"] = float(self._committed_side)
 
-            is_stop = kind == "stop"
+            # Selection-level shaping for dynamic candidates.  This is not a final
+            # safety decision; SafetyChecker / BackendSelector still arbitrate. It
+            # makes the sampling MPC prefer candidates that actually leave the
+            # moving-obstacle corridor rather than merely moving slowly.
             if kind.startswith("dynamic_"):
                 dynamic_count += 1
+                if bool(breakdown.get("dynamic_corridor_flag", False)):
+                    dynamic_corridor_count += 1
+                if bool(breakdown.get("dynamic_risk_flag", False)):
+                    dynamic_risk_count += 1
+                    cost += 120.0
+                required = float(breakdown.get("dynamic_required_lateral_separation", 0.0))
+                min_lat = float(breakdown.get("dynamic_min_lateral_separation", 999.0))
+                lat_progress = float(breakdown.get("dynamic_lateral_progress", 0.0))
+                if required > 0.0 and min_lat >= required:
+                    cost -= 16.0
+                if lat_progress > 0.18:
+                    cost -= 8.0
+                if lat_progress < 0.02 and bool(breakdown.get("dynamic_corridor_flag", False)):
+                    cost += 40.0
+
+            is_stop = kind == "stop"
             if is_stop:
                 stop_count += 1
             elif candidate.velocity.norm() > 0.05:
@@ -121,6 +150,11 @@ class SamplingMPCPlanner:
                     "dynamic_min_ttc": float(breakdown.get("dynamic_min_ttc", 999.0)),
                     "dynamic_closing_speed": float(breakdown.get("dynamic_closing_speed", 0.0)),
                     "dynamic_min_clearance": float(breakdown.get("dynamic_min_clearance", 999.0)),
+                    "dynamic_min_lateral_separation": float(breakdown.get("dynamic_min_lateral_separation", 999.0)),
+                    "dynamic_required_lateral_separation": float(breakdown.get("dynamic_required_lateral_separation", 0.0)),
+                    "dynamic_lateral_progress": float(breakdown.get("dynamic_lateral_progress", 0.0)),
+                    "dynamic_corridor_flag": bool(breakdown.get("dynamic_corridor_flag", False)),
+                    "dynamic_risk_flag": bool(breakdown.get("dynamic_risk_flag", False)),
                     "dynamic_side_hint": float(dynamic_side),
                     "committed_side": float(self._committed_side),
                     "candidate_side": float(candidate_side),
@@ -156,6 +190,8 @@ class SamplingMPCPlanner:
             "commit_age": float(self._last_commit_age),
             "dynamic_side_hint": float(dynamic_side),
             "dynamic_samples": int(dynamic_count),
+            "dynamic_risk_samples": int(dynamic_risk_count),
+            "dynamic_corridor_samples": int(dynamic_corridor_count),
             "opposite_side_penalized": int(opposite_count),
             "moving_samples": int(moving_count),
             "stop_samples": int(stop_count),
@@ -192,13 +228,16 @@ class SamplingMPCPlanner:
             opp = -dynamic_side
             specs.extend(
                 [
-                    {"kind": "dynamic_escape", "forward": -0.18, "lateral": dynamic_side * 1.45, "speed_scale": 0.78, "turn_rate": dynamic_side * 0.22},
-                    {"kind": "dynamic_escape_wide", "forward": -0.25, "lateral": dynamic_side * 1.75, "speed_scale": 0.72, "turn_rate": dynamic_side * 0.26},
-                    {"kind": "dynamic_back_side", "forward": -0.42, "lateral": dynamic_side * 1.30, "speed_scale": 0.58, "turn_rate": dynamic_side * 0.18},
-                    {"kind": "dynamic_yield_side", "forward": -0.32, "lateral": dynamic_side * 0.95, "speed_scale": 0.45, "turn_rate": dynamic_side * 0.12},
-                    # Keep one opposite-side option for mixed static/dynamic cases
-                    # where the preferred side is blocked by a static obstacle.
-                    {"kind": "dynamic_alt_side", "forward": -0.22, "lateral": opp * 1.20, "speed_scale": 0.58, "turn_rate": opp * 0.16},
+                    {"kind": "dynamic_pure_lateral", "forward": -0.92, "lateral": dynamic_side * 2.80, "speed_scale": 1.00, "turn_rate": dynamic_side * 0.08},
+                    {"kind": "dynamic_strong_lateral", "forward": -0.70, "lateral": dynamic_side * 2.40, "speed_scale": 0.96, "turn_rate": dynamic_side * 0.12},
+                    {"kind": "dynamic_lateral_hold", "forward": -0.85, "lateral": dynamic_side * 2.10, "speed_scale": 0.82, "turn_rate": dynamic_side * 0.06},
+                    {"kind": "dynamic_escape", "forward": -0.35, "lateral": dynamic_side * 1.85, "speed_scale": 0.86, "turn_rate": dynamic_side * 0.16},
+                    {"kind": "dynamic_escape_wide", "forward": -0.45, "lateral": dynamic_side * 2.15, "speed_scale": 0.82, "turn_rate": dynamic_side * 0.18},
+                    {"kind": "dynamic_back_side", "forward": -0.55, "lateral": dynamic_side * 1.55, "speed_scale": 0.62, "turn_rate": dynamic_side * 0.12},
+                    {"kind": "dynamic_yield_side", "forward": -0.45, "lateral": dynamic_side * 1.25, "speed_scale": 0.50, "turn_rate": dynamic_side * 0.10},
+                    # Opposite-side alternatives for mixed static/dynamic scenes.
+                    {"kind": "dynamic_alt_strong", "forward": -0.70, "lateral": opp * 2.10, "speed_scale": 0.80, "turn_rate": opp * 0.12},
+                    {"kind": "dynamic_alt_side", "forward": -0.35, "lateral": opp * 1.35, "speed_scale": 0.62, "turn_rate": opp * 0.12},
                 ]
             )
         for source, side in (("committed", committed_side), ("reference", side_hint)):
@@ -219,15 +258,15 @@ class SamplingMPCPlanner:
 
         while len(specs) < num_samples:
             if abs(dynamic_side) > 0.5:
-                lateral_mean = dynamic_side * 0.95
-                forward_mean = -0.14
-                speed_mean = 0.68
+                lateral_mean = dynamic_side * 1.35
+                forward_mean = -0.36
+                speed_mean = 0.78
             else:
                 lateral_mean = committed_side * 0.42 if abs(committed_side) > 0.5 else side_hint * 0.25
                 forward_mean = 0.03
                 speed_mean = 0.88
-            lateral = rng.gauss(lateral_mean, 0.65)
-            forward = rng.gauss(forward_mean, 0.18)
+            lateral = rng.gauss(lateral_mean, 0.70)
+            forward = rng.gauss(forward_mean, 0.20)
             speed_scale = max(0.18, min(1.15, rng.gauss(speed_mean, 0.18)))
             turn_rate = rng.gauss((dynamic_side or committed_side) * 0.08, 0.18)
             specs.append({"kind": "sample", "forward": forward, "lateral": lateral, "speed_scale": speed_scale, "turn_rate": turn_rate})
@@ -248,17 +287,20 @@ class SamplingMPCPlanner:
         controls: List[Vec3] = []
         prev = current
         accel_step = max_accel * dt
+        kind = str(spec["kind"])
         for k in range(horizon_steps):
             alpha = k / max(horizon_steps - 1, 1)
             wobble = math.sin((alpha + 0.15) * math.pi)
-            forward_noise = float(spec["forward"]) * (1.0 - 0.25 * alpha)
+            forward_noise = float(spec["forward"]) * (1.0 - 0.20 * alpha)
             lateral_noise = float(spec["lateral"]) * wobble
             turn = float(spec["turn_rate"]) * (alpha - 0.35)
             direction = (ref_dir * (1.0 + forward_noise + turn) + left * lateral_noise).normalized(ref_dir)
             speed_scale = float(spec["speed_scale"])
             nominal_speed = nominal.norm()
             target_speed = min(max_speed, max(0.0, nominal_speed * speed_scale))
-            if spec["kind"] == "stop":
+            if kind.startswith("dynamic_"):
+                target_speed = min(max_speed, max(target_speed, 0.42))
+            if kind == "stop":
                 target_speed = 0.0
             target = (direction * target_speed).limit_norm(max_speed)
             control = self._accel_limited(prev, target, accel_step).limit_norm(max_speed)
@@ -295,7 +337,12 @@ class SamplingMPCPlanner:
         goal_progress = max(0.0, start.distance_to(local_goal) - final.distance_to(local_goal))
         reference_progress = max(0.0, self._path_progress(reference_points, final, local_goal) - ref_progress_now)
         obstacle_cost, min_soft_clearance = self._soft_obstacle_cost(points, perception)
-        dynamic_cost, dynamic_min_ttc, dynamic_closing, dynamic_min_clearance = dynamic_trajectory_risk(points, controls, perception, self.config)
+        legacy_dynamic_cost, legacy_min_ttc, legacy_closing, legacy_min_clearance = dynamic_trajectory_risk(points, controls, perception, self.config)
+        metrics = evaluate_dynamic_mpc_metrics(points, controls, perception, self.config)
+        dynamic_cost = legacy_dynamic_cost + metrics.total_cost
+        dynamic_min_ttc = min(legacy_min_ttc, metrics.min_ttc)
+        dynamic_closing = max(legacy_closing, metrics.max_closing_speed)
+        dynamic_min_clearance = min(legacy_min_clearance, metrics.min_clearance)
         side_cost = self._side_commitment_cost(points, start, left)
         smooth = 0.0
         effort = 0.0
@@ -309,11 +356,17 @@ class SamplingMPCPlanner:
         reverse_or_stall = 0.0 if reference_progress > 0.28 else (0.28 - reference_progress) * 8.0
         if controls and controls[0].norm() < 0.04:
             reverse_or_stall += 3.0
+        dynamic_gate = 0.0
+        if metrics.risk_flag:
+            dynamic_gate += 180.0
+        if metrics.corridor_flag and metrics.lateral_progress < 0.08:
+            dynamic_gate += 55.0
         cost = (
             goal_cost * 1.6
             + reference_cost * 1.25
             + obstacle_cost * 3.2
-            + dynamic_cost * 5.0
+            + dynamic_cost * 6.5
+            + dynamic_gate
             + side_cost * 0.35
             + smooth * 0.35
             + effort * 0.06
@@ -322,7 +375,7 @@ class SamplingMPCPlanner:
             - goal_progress * 1.8
             - reference_progress * 6.0
         )
-        return cost, {
+        breakdown = {
             "goal_cost": float(goal_cost),
             "reference_cost": float(reference_cost),
             "goal_progress": float(goal_progress),
@@ -332,6 +385,7 @@ class SamplingMPCPlanner:
             "dynamic_min_ttc": float(dynamic_min_ttc),
             "dynamic_closing_speed": float(dynamic_closing),
             "dynamic_min_clearance": float(dynamic_min_clearance),
+            "dynamic_gate": float(dynamic_gate),
             "side_cost": float(side_cost),
             "smooth": float(smooth),
             "effort": float(effort),
@@ -340,6 +394,8 @@ class SamplingMPCPlanner:
             "min_soft_clearance": float(min_soft_clearance),
             "tracking_target": tracking_target.to_dict(),
         }
+        breakdown.update(metrics.to_dict())
+        return cost, breakdown
 
     def _soft_obstacle_cost(self, points: Sequence[TrajectoryPoint], perception: Optional[PerceptionData]) -> Tuple[float, float]:
         if perception is None or not perception.obstacles:
