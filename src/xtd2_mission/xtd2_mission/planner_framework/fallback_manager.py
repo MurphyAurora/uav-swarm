@@ -5,7 +5,7 @@ import math
 from typing import Optional, Sequence, Tuple
 
 from .common import CandidateEvaluation, PerceptionData, PlannerCommand, PlannerConfig, PlannerState, Vec3
-from .dynamic_safety import dynamic_escape_command, dynamic_ttc_snapshot
+from .dynamic_safety import dynamic_escape_command, dynamic_ttc_snapshot, is_dynamic_obstacle
 
 
 class FallbackManager:
@@ -100,10 +100,10 @@ class FallbackManager:
             self._dynamic_escape_until = 0.0
             return None
         direction = self._dynamic_escape_cmd.normalized(Vec3())
-        # Do not keep a latched escape if it immediately runs into a static wall.
-        # This is a lightweight joint static/dynamic safety check for the fallback
-        # command; MPC/SafetyChecker still handle normal candidate safety.
-        if self._short_escape_clearance(state, perception, direction) < 0.14:
+        # Only static obstacles and boundaries are allowed to break the latch.
+        # Dynamic obstacles should not release the latch simply because they are
+        # close; that was the cause of "dynamic_escape -> hover -> collision".
+        if self._short_static_escape_clearance(state, perception, direction) < 0.12:
             self._dynamic_escape_cmd = Vec3()
             self._dynamic_escape_until = 0.0
             return None
@@ -185,6 +185,12 @@ class FallbackManager:
             self._escape_direction = best_direction
 
     def _short_escape_clearance(self, state: PlannerState, perception: PerceptionData, direction: Vec3) -> float:
+        return self._short_clearance_for_direction(state, perception, direction, include_dynamic=True)
+
+    def _short_static_escape_clearance(self, state: PlannerState, perception: PerceptionData, direction: Vec3) -> float:
+        return self._short_clearance_for_direction(state, perception, direction, include_dynamic=False)
+
+    def _short_clearance_for_direction(self, state: PlannerState, perception: PerceptionData, direction: Vec3, include_dynamic: bool) -> float:
         if direction.norm() <= 1.0e-6:
             return -999.0
         min_clearance = 999.0
@@ -193,6 +199,8 @@ class FallbackManager:
             t = step * 0.25
             probe = state.position + direction * (speed * t)
             for obs in perception.obstacles:
+                if not include_dynamic and is_dynamic_obstacle(obs):
+                    continue
                 rel = obs.position_at(t) - probe
                 clearance = math.hypot(rel.x, rel.y) - (self.config.drone_radius + float(obs.radius))
                 if getattr(obs, "source", "") == "boundary" and clearance < 0.75:
