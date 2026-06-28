@@ -13,7 +13,7 @@ import random
 from typing import List, Optional, Sequence, Tuple
 
 from .common import CandidateTrajectory, PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
-from .dynamic_safety import dynamic_trajectory_risk
+from .dynamic_safety import dynamic_side_hint, dynamic_trajectory_risk
 from .reference_generator import LocalAStarReferenceGenerator, ReferenceGenerator
 
 
@@ -42,6 +42,7 @@ class SamplingMPCPlanner:
         distance = to_goal.norm()
         fallback_dir = to_goal.normalized(Vec3(1.0, 0.0, 0.0))
         ref_dir = reference.direction.normalized(fallback_dir)
+        dynamic_side = dynamic_side_hint(state, perception, self.config, ref_dir)
         self._update_side_commitment(state, ref_dir, reference.side_hint, perception)
         left = Vec3(-ref_dir.y, ref_dir.x, 0.0)
         current = Vec3(state.velocity.x, state.velocity.y, 0.0).limit_norm(max_speed)
@@ -58,7 +59,7 @@ class SamplingMPCPlanner:
         nominal = ref_dir * nominal_speed
 
         rng = random.Random(self._seed_from_state(state, local_goal))
-        specs = self._sample_specs(num_samples, rng, reference.side_hint, self._committed_side)
+        specs = self._sample_specs(num_samples, rng, reference.side_hint, self._committed_side, dynamic_side)
         ref_progress_now = self._path_progress(reference.points, state.position, local_goal)
         candidates: List[CandidateTrajectory] = []
         best_cost = 999999.0
@@ -67,6 +68,7 @@ class SamplingMPCPlanner:
         stop_count = 0
         moving_count = 0
         opposite_count = 0
+        dynamic_count = 0
 
         for idx, spec in enumerate(specs[:num_samples]):
             controls = self._controls_from_spec(spec, current, nominal, ref_dir, left, horizon_steps, dt, max_speed, max_accel)
@@ -96,6 +98,8 @@ class SamplingMPCPlanner:
             breakdown["committed_side"] = float(self._committed_side)
 
             is_stop = kind == "stop"
+            if kind.startswith("dynamic_"):
+                dynamic_count += 1
             if is_stop:
                 stop_count += 1
             elif candidate.velocity.norm() > 0.05:
@@ -117,6 +121,7 @@ class SamplingMPCPlanner:
                     "dynamic_min_ttc": float(breakdown.get("dynamic_min_ttc", 999.0)),
                     "dynamic_closing_speed": float(breakdown.get("dynamic_closing_speed", 0.0)),
                     "dynamic_min_clearance": float(breakdown.get("dynamic_min_clearance", 999.0)),
+                    "dynamic_side_hint": float(dynamic_side),
                     "committed_side": float(self._committed_side),
                     "candidate_side": float(candidate_side),
                     "commitment_penalty": float(commitment_penalty),
@@ -149,6 +154,8 @@ class SamplingMPCPlanner:
             "committed_until": float(self._committed_until),
             "commit_reason": str(self._last_commit_reason),
             "commit_age": float(self._last_commit_age),
+            "dynamic_side_hint": float(dynamic_side),
+            "dynamic_samples": int(dynamic_count),
             "opposite_side_penalized": int(opposite_count),
             "moving_samples": int(moving_count),
             "stop_samples": int(stop_count),
@@ -164,15 +171,36 @@ class SamplingMPCPlanner:
         }
         return candidates
 
-    def _sample_specs(self, num_samples: int, rng: random.Random, side_hint: float = 0.0, committed_side: float = 0.0) -> List[dict]:
+    def _sample_specs(
+        self,
+        num_samples: int,
+        rng: random.Random,
+        side_hint: float = 0.0,
+        committed_side: float = 0.0,
+        dynamic_side: float = 0.0,
+    ) -> List[dict]:
         side_hint = self._sign(side_hint)
         committed_side = self._sign(committed_side)
+        dynamic_side = self._sign(dynamic_side)
         specs: List[dict] = [
             {"kind": "nominal", "forward": 0.0, "lateral": 0.0, "speed_scale": 1.0, "turn_rate": 0.0},
             {"kind": "slow", "forward": -0.06, "lateral": 0.0, "speed_scale": 0.72, "turn_rate": 0.0},
             {"kind": "brake", "forward": -0.18, "lateral": 0.0, "speed_scale": 0.42, "turn_rate": 0.0},
             {"kind": "stop", "forward": -1.0, "lateral": 0.0, "speed_scale": 0.0, "turn_rate": 0.0},
         ]
+        if abs(dynamic_side) > 0.5:
+            opp = -dynamic_side
+            specs.extend(
+                [
+                    {"kind": "dynamic_escape", "forward": -0.18, "lateral": dynamic_side * 1.45, "speed_scale": 0.78, "turn_rate": dynamic_side * 0.22},
+                    {"kind": "dynamic_escape_wide", "forward": -0.25, "lateral": dynamic_side * 1.75, "speed_scale": 0.72, "turn_rate": dynamic_side * 0.26},
+                    {"kind": "dynamic_back_side", "forward": -0.42, "lateral": dynamic_side * 1.30, "speed_scale": 0.58, "turn_rate": dynamic_side * 0.18},
+                    {"kind": "dynamic_yield_side", "forward": -0.32, "lateral": dynamic_side * 0.95, "speed_scale": 0.45, "turn_rate": dynamic_side * 0.12},
+                    # Keep one opposite-side option for mixed static/dynamic cases
+                    # where the preferred side is blocked by a static obstacle.
+                    {"kind": "dynamic_alt_side", "forward": -0.22, "lateral": opp * 1.20, "speed_scale": 0.58, "turn_rate": opp * 0.16},
+                ]
+            )
         for source, side in (("committed", committed_side), ("reference", side_hint)):
             if abs(side) > 0.5:
                 specs.extend(
@@ -190,11 +218,18 @@ class SamplingMPCPlanner:
             specs.append({"kind": f"wide_{label}", "forward": -0.04, "lateral": side * 1.20, "speed_scale": 0.70, "turn_rate": side * 0.18})
 
         while len(specs) < num_samples:
-            lateral_mean = committed_side * 0.42 if abs(committed_side) > 0.5 else side_hint * 0.25
+            if abs(dynamic_side) > 0.5:
+                lateral_mean = dynamic_side * 0.95
+                forward_mean = -0.14
+                speed_mean = 0.68
+            else:
+                lateral_mean = committed_side * 0.42 if abs(committed_side) > 0.5 else side_hint * 0.25
+                forward_mean = 0.03
+                speed_mean = 0.88
             lateral = rng.gauss(lateral_mean, 0.65)
-            forward = rng.gauss(0.03, 0.18)
-            speed_scale = max(0.18, min(1.15, rng.gauss(0.88, 0.18)))
-            turn_rate = rng.gauss(committed_side * 0.05, 0.18)
+            forward = rng.gauss(forward_mean, 0.18)
+            speed_scale = max(0.18, min(1.15, rng.gauss(speed_mean, 0.18)))
+            turn_rate = rng.gauss((dynamic_side or committed_side) * 0.08, 0.18)
             specs.append({"kind": "sample", "forward": forward, "lateral": lateral, "speed_scale": speed_scale, "turn_rate": turn_rate})
         return specs
 
@@ -368,6 +403,8 @@ class SamplingMPCPlanner:
         if candidate_side * committed >= 0.0:
             return 0.0
         lower = str(kind).lower()
+        if lower.startswith("dynamic_"):
+            return 0.0
         if "wide" in lower or "bias" in lower or "side" in lower or "sample" in lower or "slow" in lower:
             return float(getattr(self.config, "sampling_mpc_opposite_side_penalty", 850.0))
         return 250.0
