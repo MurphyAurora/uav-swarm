@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Dynamic-obstacle TTC and escape helpers.
-
-These helpers are intentionally lightweight and deterministic so they can be
-used both by the offline simulator and by the ROS planner nodes.  They do not
-replace the hard SafetyChecker; they add a dynamic layer that distinguishes
-"hover is safe" in static scenes from "hover is still in the path of an
-approaching obstacle" in dynamic scenes.
-"""
+"""Dynamic-obstacle TTC and escape helpers."""
 
 from __future__ import annotations
 
@@ -16,16 +9,11 @@ from typing import Optional, Sequence, Tuple
 from .common import PerceptionData, PlannerConfig, PlannerState, TrajectoryPoint, Vec3
 
 
+_EPS = 1.0e-9
 _MIN_DYNAMIC_SPEED = 0.03
 
 
 def obstacle_velocity(obs, sample_dt: float = 0.35) -> Vec3:
-    """Return a robust velocity estimate for an obstacle.
-
-    Prefer the explicit obstacle velocity, but fall back to the first prediction
-    difference.  This keeps dynamic safety usable when the simulator provides
-    predictions but the velocity field is zero or missing.
-    """
     vel = getattr(obs, "velocity", Vec3()) or Vec3()
     if vel.norm() > _MIN_DYNAMIC_SPEED:
         return vel
@@ -48,7 +36,6 @@ def dynamic_ttc_snapshot(
     perception: Optional[PerceptionData],
     config: PlannerConfig,
 ) -> Tuple[float, float, float, Optional[object]]:
-    """Return min TTC, max closing speed, min dynamic clearance, and obstacle."""
     if perception is None:
         return 999.0, 0.0, 999.0, None
     min_ttc = 999.0
@@ -63,15 +50,12 @@ def dynamic_ttc_snapshot(
         obs_pos = obs.position_at(0.0)
         rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
         dist = rel.norm()
-        if dist <= 1.0e-6:
+        if dist <= _EPS:
             continue
         clearance = dist - (radius_base + float(getattr(obs, "radius", 0.0)))
         rel_vel = obstacle_velocity(obs) - ego_vel
         closing = -((rel.x * rel_vel.x + rel.y * rel_vel.y) / dist)
-        if closing <= 0.0:
-            ttc = 999.0
-        else:
-            ttc = max(0.0, clearance) / closing
+        ttc = max(0.0, clearance) / closing if closing > 0.0 else 999.0
         if ttc < min_ttc or clearance < min_clearance:
             worst = obs
         min_ttc = min(min_ttc, ttc)
@@ -86,11 +70,6 @@ def dynamic_side_hint(
     config: PlannerConfig,
     ref_dir: Optional[Vec3] = None,
 ) -> float:
-    """Return preferred escape side for approaching dynamic obstacles.
-
-    Positive means left of ref_dir/heading, negative means right.  Zero means no
-    urgent dynamic side preference.
-    """
     min_ttc, closing, clearance, obs = dynamic_ttc_snapshot(state, perception, config)
     if obs is None:
         return 0.0
@@ -99,7 +78,7 @@ def dynamic_side_hint(
     if min_ttc > ttc_trigger and clearance > clearance_trigger and closing < 0.05:
         return 0.0
     base = ref_dir.normalized(Vec3()) if ref_dir is not None else Vec3()
-    if base.norm() <= 1.0e-6:
+    if base.norm() <= _EPS:
         heading = float(getattr(state, "heading", 0.0))
         base = Vec3(math.cos(heading), math.sin(heading), 0.0).normalized(Vec3(1.0, 0.0, 0.0))
     left = Vec3(-base.y, base.x, 0.0)
@@ -118,12 +97,11 @@ def dynamic_escape_command(
     perception: Optional[PerceptionData],
     config: PlannerConfig,
 ) -> Optional[Vec3]:
-    """Compute an emergency escape velocity for approaching dynamic obstacles.
+    """Emergency command used when a moving obstacle is still approaching.
 
-    In dynamic head-on or crossing cases, pure hover can be unsafe because the
-    obstacle keeps moving.  This function chooses a lateral/back-lateral command
-    that increases short-horizon clearance against the nearest approaching
-    dynamic obstacle.
+    The command is deliberately lateral-dominant.  In head-on cases, backing up
+    alone can keep the UAV inside the moving obstacle corridor; increasing lateral
+    separation is the primary objective.
     """
     if perception is None:
         return None
@@ -139,7 +117,7 @@ def dynamic_escape_command(
         obs_pos = obs.position_at(0.0)
         rel = Vec3(obs_pos.x - state.position.x, obs_pos.y - state.position.y, 0.0)
         dist = rel.norm()
-        if dist <= 1.0e-6:
+        if dist <= _EPS:
             continue
         clearance = dist - (radius_base + float(getattr(obs, "radius", 0.0)))
         rel_vel = obstacle_velocity(obs) - ego_vel
@@ -163,9 +141,11 @@ def dynamic_escape_command(
     if abs(side) < 0.5:
         side = 1.0
     lateral = left * side
-    back = forward * -0.35
-    speed = min(float(getattr(config, "max_speed", 0.75)), max(0.28, float(getattr(config, "dynamic_escape_speed", 0.36))))
-    return (lateral + back).normalized(lateral) * speed
+    # Strong lateral separation, small backward component.  This is closer to a
+    # short-horizon escape corridor than the older back+lateral reflex.
+    back = forward * -0.12
+    speed = min(float(getattr(config, "max_speed", 0.75)), max(0.46, float(getattr(config, "dynamic_escape_speed", 0.50))))
+    return (lateral * 1.85 + back).normalized(lateral) * speed
 
 
 def dynamic_trajectory_risk(
@@ -174,21 +154,13 @@ def dynamic_trajectory_risk(
     perception: Optional[PerceptionData],
     config: PlannerConfig,
 ) -> Tuple[float, float, float, float]:
-    """Dynamic risk for MPC candidate scoring.
-
-    Returns: cost, min_ttc, max_closing_speed, min_dynamic_clearance.
-    This is still returned as a cost so it can be used by Sampling MPC, but the
-    cost includes a large barrier-like term for future dynamic collisions.  In
-    practice this acts like a hard preference against trajectories that remain in
-    the dynamic collision cone.
-    """
     if perception is None or not perception.obstacles or not points:
         return 0.0, 999.0, 0.0, 999.0
     radius_base = float(getattr(config, "drone_radius", 0.35))
     ttc_soft = float(getattr(config, "dynamic_ttc_soft", 2.2))
-    ttc_hard = float(getattr(config, "dynamic_ttc_hard", 1.05))
+    ttc_risk = float(getattr(config, "dynamic_ttc_risk", 1.05))
     clearance_soft = float(getattr(config, "dynamic_clearance_soft", 0.80))
-    clearance_hard = float(getattr(config, "dynamic_clearance_hard", 0.18))
+    clearance_risk = float(getattr(config, "dynamic_clearance_risk", 0.18))
     cost = 0.0
     samples = 0
     min_ttc = 999.0
@@ -202,7 +174,7 @@ def dynamic_trajectory_risk(
             obs_pos = obs.position_at(point.t)
             rel = Vec3(obs_pos.x - point.position.x, obs_pos.y - point.position.y, 0.0)
             dist = rel.norm()
-            if dist <= 1.0e-6:
+            if dist <= _EPS:
                 continue
             clearance = dist - (radius_base + float(getattr(obs, "radius", 0.0)))
             obs_vel = obstacle_velocity(obs)
@@ -215,15 +187,12 @@ def dynamic_trajectory_risk(
             if closing > 0.0 and ttc < ttc_soft:
                 gap = ttc_soft - ttc
                 cost += gap * gap * (1.0 + 0.8 * closing)
-            if closing > 0.0 and ttc < ttc_hard:
-                # Barrier-like penalty: these trajectories are not literally
-                # removed here, but backend selection will almost never prefer
-                # them over a feasible escape sample.
-                cost += 80.0 + 60.0 * (ttc_hard - ttc)
+            if closing > 0.0 and ttc < ttc_risk:
+                cost += 80.0 + 60.0 * (ttc_risk - ttc)
             if clearance < clearance_soft:
                 gap = clearance_soft - clearance
                 cost += 0.75 * gap * gap
-            if clearance < clearance_hard:
-                cost += 45.0 + 80.0 * (clearance_hard - clearance)
+            if clearance < clearance_risk:
+                cost += 45.0 + 80.0 * (clearance_risk - clearance)
             samples += 1
     return cost / max(1, samples), float(min_ttc), float(max_closing), float(min_clearance)
