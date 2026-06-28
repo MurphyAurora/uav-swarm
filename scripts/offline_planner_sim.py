@@ -115,6 +115,47 @@ def write_csv(path: str, history: Iterable[Dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
+def _plot_dynamic_obstacle_motion(ax, case: SimCase, config: PlannerConfig, final_t: float) -> None:
+    if not case.dynamic_obstacles or final_t <= 0.0:
+        return
+    samples = max(3, min(80, int(math.ceil(final_t / max(case.dt * 2.0, 1.0e-6))) + 1))
+    for obs in case.dynamic_obstacles:
+        times = [final_t * idx / max(samples - 1, 1) for idx in range(samples)]
+        xs = []
+        ys = []
+        for t in times:
+            x, y = obs.position_at(t)
+            xs.append(float(x))
+            ys.append(float(y))
+        label = f"dynamic path:{obs.obstacle_id or 'obs'}"
+        ax.plot(xs, ys, "--", linewidth=1.4, alpha=0.85, label=label)
+        ax.plot(xs[0], ys[0], "o", markersize=5)
+        ax.plot(xs[-1], ys[-1], "x", markersize=6)
+        step = max(1, len(xs) // 6)
+        for idx in range(0, len(xs), step):
+            circle = ax.add_patch(
+                plt.Circle(
+                    (xs[idx], ys[idx]),
+                    obs.radius + config.drone_radius,
+                    fill=False,
+                    linestyle=":",
+                    linewidth=0.8,
+                    alpha=0.45,
+                )
+            )
+            circle.set_label("_nolegend_")
+        if len(xs) >= 2:
+            ax.annotate(
+                "",
+                xy=(xs[-1], ys[-1]),
+                xytext=(xs[max(0, len(xs) - 3)], ys[max(0, len(ys) - 3)]),
+                arrowprops={"arrowstyle": "->", "linewidth": 1.2},
+            )
+        if obs.obstacle_id:
+            ax.text(xs[0], ys[0], f"{obs.obstacle_id}@start", fontsize=7)
+            ax.text(xs[-1], ys[-1], f"{obs.obstacle_id}@end", fontsize=7)
+
+
 def plot_case(path: str, case: SimCase, history: List[Dict[str, object]], config: PlannerConfig) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -132,22 +173,31 @@ def plot_case(path: str, case: SimCase, history: List[Dict[str, object]], config
     ax.plot([case.start.x], [case.start.y], "go", label="start")
     ax.plot([case.goal.x], [case.goal.y], "r*", markersize=12, label="goal")
     if history:
-        ax.plot([float(r["x"]) for r in history], [float(r["y"]) for r in history], "b-", linewidth=2, label="trajectory")
+        ax.plot([float(r["x"]) for r in history], [float(r["y"]) for r in history], "b-", linewidth=2, label="uav trajectory")
 
     final_t = float(history[-1]["t"]) if history else 0.0
-    for x, y, radius, obs_id in obstacle_snapshots(case, 0.0):
-        circle = plt.Circle((x, y), radius + config.drone_radius, color="tab:gray", alpha=0.25)
+    for item in case.obstacles:
+        x, y = item.position_at(0.0)
+        circle = plt.Circle((x, y), item.radius + config.drone_radius, color="tab:gray", alpha=0.25)
         ax.add_patch(circle)
         ax.plot(x, y, "ko", markersize=3)
-        if obs_id:
-            ax.text(x, y, obs_id, fontsize=7)
+        if item.obstacle_id:
+            ax.text(x, y, item.obstacle_id, fontsize=7)
+
+    _plot_dynamic_obstacle_motion(ax, case, config, final_t)
+
+    # Also show the dynamic obstacle's exact inflated start/end disks more
+    # clearly, because these are the states most useful when debugging collision.
+    for x, y, radius, obs_id in obstacle_snapshots(case, 0.0):
+        if obs_id and any(obs.obstacle_id == obs_id for obs in case.dynamic_obstacles):
+            circle = plt.Circle((x, y), radius + config.drone_radius, color="tab:orange", alpha=0.12)
+            ax.add_patch(circle)
     if case.dynamic_obstacles and final_t > 0.0:
         for x, y, radius, obs_id in obstacle_snapshots(case, final_t):
-            circle = plt.Circle((x, y), radius + config.drone_radius, color="tab:orange", alpha=0.18)
-            ax.add_patch(circle)
-            ax.plot(x, y, "kx", markersize=4)
-            if obs_id:
-                ax.text(x, y, f"{obs_id}@end", fontsize=7)
+            if obs_id and any(obs.obstacle_id == obs_id for obs in case.dynamic_obstacles):
+                circle = plt.Circle((x, y), radius + config.drone_radius, color="tab:red", alpha=0.14)
+                ax.add_patch(circle)
+                ax.plot(x, y, "kx", markersize=4)
 
     ax.set_title(case.name)
     ax.set_aspect("equal", adjustable="box")
