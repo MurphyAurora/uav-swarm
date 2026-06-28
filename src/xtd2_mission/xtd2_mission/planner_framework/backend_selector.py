@@ -4,6 +4,7 @@
 from typing import List, Optional, Sequence
 
 from .common import CandidateEvaluation, CandidateTrajectory, PlannerConfig, PlannerState, SafetyReport, Vec3
+from .risk_context import RiskKind, infer_evaluation_context, is_dynamic_context
 
 
 class BackendSelector:
@@ -62,26 +63,21 @@ class BackendSelector:
         reverse_cost = max(0.0, -progress)
         moving = self._is_moving_candidate_obj(candidate)
         stop_like = self._is_stop_candidate_obj(candidate)
+        dynamic_candidate = self._is_dynamic_escape_candidate(candidate)
         selection_safety = self._selection_safety_for_sampling_mpc(candidate, safety)
 
-        # Sampling MPC already evaluates full-horizon objective terms.  The backend
-        # adds only hard-risk penalties and selection-shape penalties, instead of
-        # overwriting the MPC objective with the legacy one-step candidate score.
         score = sample_cost
         if not safety.feasible:
             score += 10000.0
         elif not safety.safe:
-            # Keep hard-feasible moving rollouts alive.  The layered selector still
-            # prefers originally safe moving rollouts before these candidates.
             score += 160.0 if moving and not stop_like else 900.0
         if stop_like:
-            # Stop is a last-resort fallback, not a normal MPC solution when the
-            # goal is still far.  A low-cost stop can otherwise lock S-curve/static
-            # recovery even though small feasible motion samples exist.
             goal_dist = state.position.distance_to(local_goal)
             if goal_dist > self.config.local_goal_reached_radius:
+                # Stop is context-gated later.  Give it a high default cost so it
+                # cannot lock static S-curves when any feasible motion exists.
                 score += 5000.0 + 400.0 * goal_dist
-        if reverse_cost > 0.05 and not self._is_dynamic_escape_candidate(candidate):
+        if reverse_cost > 0.05 and not dynamic_candidate:
             score += 1200.0
 
         costs = dict(metadata.get("sample_breakdown", {}) or {})
@@ -94,6 +90,7 @@ class BackendSelector:
                 "lateral": abs(lateral),
                 "moving": 0.0 if moving else 1.0,
                 "stop_like": 1.0 if stop_like else 0.0,
+                "dynamic_candidate": 1.0 if dynamic_candidate else 0.0,
                 "selection_safe_promoted": 1.0 if selection_safety is not safety else 0.0,
                 "raw_safe": 1.0 if safety.safe else 0.0,
                 "raw_feasible": 1.0 if safety.feasible else 0.0,
@@ -151,35 +148,13 @@ class BackendSelector:
             if prefer_motion and moving_safe:
                 local_astar_safe = self._local_astar_items(moving_safe)
                 if local_astar_safe:
-                    return min(
-                        local_astar_safe,
-                        key=lambda item: (
-                            item.costs.get("goal", 999.0),
-                            item.costs.get("progress", 999.0),
-                            item.costs.get("lateral", 999.0),
-                            item.score,
-                        ),
-                    )
-                goal_tracking = [
-                    item for item in moving_safe
-                    if item.trajectory.name in ("track_goal", "slow_goal")
-                ]
+                    return min(local_astar_safe, key=lambda item: (item.costs.get("goal", 999.0), item.costs.get("progress", 999.0), item.costs.get("lateral", 999.0), item.score))
+                goal_tracking = [item for item in moving_safe if item.trajectory.name in ("track_goal", "slow_goal")]
                 if goal_tracking:
                     return min(goal_tracking, key=lambda item: (item.costs.get("goal", 999.0), item.score))
-                progress_safe = [
-                    item for item in moving_safe
-                    if item.costs.get("reverse", 0.0) <= 1.0e-6
-                ]
+                progress_safe = [item for item in moving_safe if item.costs.get("reverse", 0.0) <= 1.0e-6]
                 if progress_safe:
-                    return min(
-                        progress_safe,
-                        key=lambda item: (
-                            item.costs.get("goal", 999.0),
-                            item.costs.get("progress", 999.0),
-                            item.costs.get("lateral", 999.0),
-                            item.score,
-                        ),
-                    )
+                    return min(progress_safe, key=lambda item: (item.costs.get("goal", 999.0), item.costs.get("progress", 999.0), item.costs.get("lateral", 999.0), item.score))
                 return min(moving_safe, key=lambda item: (item.costs.get("reverse", 999.0), item.costs.get("goal", 999.0), item.score))
             return min(safe, key=lambda item: item.score)
         feasible = [item for item in pool if item.safety.feasible]
@@ -190,31 +165,10 @@ class BackendSelector:
             if prefer_motion and moving_feasible:
                 local_astar_feasible = self._local_astar_items(moving_feasible)
                 if local_astar_feasible:
-                    return min(
-                        local_astar_feasible,
-                        key=lambda item: (
-                            item.costs.get("goal", 999.0),
-                            item.costs.get("progress", 999.0),
-                            item.costs.get("lateral", 999.0),
-                            -item.safety.min_clearance,
-                            item.score,
-                        ),
-                    )
-                progress_feasible = [
-                    item for item in moving_feasible
-                    if item.costs.get("reverse", 0.0) <= 1.0e-6
-                ]
+                    return min(local_astar_feasible, key=lambda item: (item.costs.get("goal", 999.0), item.costs.get("progress", 999.0), item.costs.get("lateral", 999.0), -item.safety.min_clearance, item.score))
+                progress_feasible = [item for item in moving_feasible if item.costs.get("reverse", 0.0) <= 1.0e-6]
                 if progress_feasible:
-                    return min(
-                        progress_feasible,
-                        key=lambda item: (
-                            item.costs.get("goal", 999.0),
-                            item.costs.get("progress", 999.0),
-                            item.costs.get("lateral", 999.0),
-                            -item.safety.min_clearance,
-                            item.score,
-                        ),
-                    )
+                    return min(progress_feasible, key=lambda item: (item.costs.get("goal", 999.0), item.costs.get("progress", 999.0), item.costs.get("lateral", 999.0), -item.safety.min_clearance, item.score))
                 return min(moving_feasible, key=lambda item: (item.costs.get("reverse", 999.0), item.costs.get("goal", 999.0), -item.safety.min_clearance, item.score))
             return min(feasible, key=lambda item: (-item.safety.min_clearance, item.score))
         return min(pool, key=lambda item: (-item.safety.min_clearance, item.score)) if pool else None
@@ -227,7 +181,13 @@ class BackendSelector:
         if state is not None and local_goal is not None:
             prefer_motion = state.position.distance_to(local_goal) > self.config.local_goal_reached_radius
 
+        context = infer_evaluation_context(mpc_items)
+        dynamic_context = is_dynamic_context(context)
+        static_only = context.kind == RiskKind.STATIC_ONLY
+
         moving = [item for item in mpc_items if self._is_moving_evaluation(item) and not self._is_stop_evaluation(item)]
+        dynamic_moving = [item for item in moving if self._is_dynamic_escape_candidate(item.trajectory)]
+        regular_moving = [item for item in moving if not self._is_dynamic_escape_candidate(item.trajectory)]
         originally_safe_moving = [item for item in moving if item.costs.get("raw_safe", 1.0 if item.safety.safe else 0.0) > 0.5]
         selectable_moving = [item for item in moving if item.safety.safe]
         feasible_moving = [item for item in moving if item.safety.feasible]
@@ -236,29 +196,59 @@ class BackendSelector:
         feasible_stop = [item for item in stop_like if item.safety.feasible]
 
         if prefer_motion:
+            if dynamic_context:
+                # Dynamic scenes: dynamic candidates are allowed to lead, but only
+                # if they exist and satisfy normal safety tiers.  Stop remains last.
+                for pool in (
+                    [item for item in dynamic_moving if item in originally_safe_moving],
+                    [item for item in dynamic_moving if item in selectable_moving],
+                    [item for item in dynamic_moving if item in feasible_moving],
+                ):
+                    if pool:
+                        return min(pool, key=lambda item: (item.costs.get("dynamic_corridor_flag", 0.0), item.score))
+            else:
+                # Static scenes: do not let dynamic-tuned lateral/escape samples
+                # dominate just because their cost terms were shaped for moving
+                # obstacles.  Prefer regular moving samples first.
+                static_safe = [item for item in originally_safe_moving if item in regular_moving]
+                if static_safe:
+                    return min(static_safe, key=lambda item: item.score)
+                static_selectable = [item for item in selectable_moving if item in regular_moving]
+                if static_selectable:
+                    return min(static_selectable, key=lambda item: item.score)
+                static_feasible = [item for item in feasible_moving if item in regular_moving]
+                if static_feasible:
+                    return min(static_feasible, key=lambda item: item.score)
+
             if originally_safe_moving:
                 return min(originally_safe_moving, key=lambda item: item.score)
             if selectable_moving:
                 return min(selectable_moving, key=lambda item: item.score)
             if feasible_moving:
                 return min(feasible_moving, key=lambda item: item.score)
-            # Do not let a safe stop dominate forever when any tiny but feasible
-            # motion sample exists.  If there is literally no motion candidate, stop
-            # remains a valid last resort.
             if safe_stop and not moving:
                 return min(safe_stop, key=lambda item: item.score)
             if feasible_stop and not moving:
                 return min(feasible_stop, key=lambda item: item.score)
+
         safe = [item for item in mpc_items if item.safety.safe]
         if safe:
             moving_safe = [item for item in safe if self._is_moving_evaluation(item) and not self._is_stop_evaluation(item)]
             if prefer_motion and moving_safe:
+                if static_only:
+                    regular = [item for item in moving_safe if not self._is_dynamic_escape_candidate(item.trajectory)]
+                    if regular:
+                        return min(regular, key=lambda item: item.score)
                 return min(moving_safe, key=lambda item: item.score)
             return min(safe, key=lambda item: item.score)
         feasible = [item for item in mpc_items if item.safety.feasible]
         if feasible:
             moving_feasible = [item for item in feasible if self._is_moving_evaluation(item) and not self._is_stop_evaluation(item)]
             if prefer_motion and moving_feasible:
+                if static_only:
+                    regular = [item for item in moving_feasible if not self._is_dynamic_escape_candidate(item.trajectory)]
+                    if regular:
+                        return min(regular, key=lambda item: item.score)
                 return min(moving_feasible, key=lambda item: item.score)
             return min(feasible, key=lambda item: item.score)
         return min(mpc_items, key=lambda item: item.score)
