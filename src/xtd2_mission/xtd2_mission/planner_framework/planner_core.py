@@ -12,6 +12,7 @@ from .dynamic_safety import dynamic_ttc_snapshot
 from .fallback_manager import FallbackManager
 from .frontend_planner import FrontendPlanner
 from .goal_manager import LocalGoalManager
+from .risk_context import RiskKind, classify_perception_context, is_dynamic_context
 from .safety_checker import SafetyChecker
 
 
@@ -69,6 +70,7 @@ class EgoLikePlannerCore:
 
         active_goal = self.goal_manager.active_waypoint(final_goal)
         local_goal = self.goal_manager.compute_local_goal(state, final_goal, perception)
+        risk_context = classify_perception_context(state, local_goal, perception, self.config)
         planning_state, planning_heading = self._goal_aligned_state(state, local_goal, dt)
 
         candidates = self.frontend.generate(planning_state, local_goal, perception)
@@ -76,7 +78,7 @@ class EgoLikePlannerCore:
         evaluations = self.backend.evaluate_all(candidates, safety_reports, state, local_goal)
         best = self.backend.select_best(evaluations, state, local_goal)
 
-        risk = self._risk_summary(evaluations, best, state, perception)
+        risk = self._risk_summary(evaluations, best, state, perception, risk_context)
         mode = self._update_mode(now, risk)
 
         if mode == self.NORMAL_TRACK:
@@ -100,12 +102,6 @@ class EgoLikePlannerCore:
         elif mode == self.ESCAPE:
             command = self.fallback.command(state, perception, evaluations)
         elif mode == self.EMERGENCY_STOP:
-            # Static emergency stop can hover, but dynamic obstacles keep moving.
-            # Mature dynamic MPC/safety layers treat hover as another candidate and
-            # reject it when it remains in the collision corridor.  Therefore the
-            # emergency state first asks FallbackManager for a dynamic TTC escape or
-            # latched escape, and only falls back to hover when no dynamic escape is
-            # available.
             emergency_command = self.fallback.command(state, perception, self._non_stop_evaluations(evaluations))
             if emergency_command.mode == "fallback_escape" and str(emergency_command.source_trajectory).startswith("dynamic_ttc_escape"):
                 command = emergency_command
@@ -136,19 +132,9 @@ class EgoLikePlannerCore:
 
         if mode == self.DYNAMIC_AVOID and command.velocity.norm() > 0.20:
             cap = min(0.32 if str(command.source_trajectory).startswith("sampling_mpc") and "dynamic_" in str(command.source_trajectory) else 0.22, self.config.max_speed)
-            command = PlannerCommand(
-                command.velocity.limit_norm(cap),
-                command.mode,
-                command.source_trajectory,
-                command.reason,
-            )
+            command = PlannerCommand(command.velocity.limit_norm(cap), command.mode, command.source_trajectory, command.reason)
         elif mode == self.RECOVERY and command.velocity.norm() > 0.12:
-            command = PlannerCommand(
-                command.velocity.limit_norm(min(0.15, self.config.max_speed)),
-                command.mode,
-                command.source_trajectory,
-                command.reason,
-            )
+            command = PlannerCommand(command.velocity.limit_norm(min(0.15, self.config.max_speed)), command.mode, command.source_trajectory, command.reason)
 
         command = self._lidar_velocity_shield(command, state, perception)
         command = self._goal_progress_guard(command, state, local_goal)
@@ -189,13 +175,13 @@ class EgoLikePlannerCore:
                 "unsafe_streak": self.unsafe_streak,
                 "reason": self.last_mode_reason,
                 "risk": risk,
+                "risk_context": risk_context.to_dict(),
                 "recovery_choice": dict(self._last_recovery_choice),
             },
             "evaluations": [item.to_dict() for item in sorted(evaluations, key=lambda item: item.score)[:5]],
         }
 
-
-    def _risk_summary(self, evaluations, best, state: PlannerState, perception: PerceptionData) -> Dict[str, object]:
+    def _risk_summary(self, evaluations, best, state: PlannerState, perception: PerceptionData, risk_context=None) -> Dict[str, object]:
         safe_count = sum(1 for item in evaluations if item.safety.safe)
         feasible_count = sum(1 for item in evaluations if item.safety.feasible)
         candidate_min_clearance = min((item.safety.min_clearance for item in evaluations), default=999.0)
@@ -206,6 +192,7 @@ class EgoLikePlannerCore:
         if dynamic_closing > 0.02:
             min_ttc = min(min_ttc, dynamic_ttc)
         best_name = best.trajectory.name if best is not None else None
+        ctx_dict = risk_context.to_dict() if risk_context is not None else {}
         return {
             "safe_count": int(safe_count),
             "feasible_count": int(feasible_count),
@@ -222,8 +209,10 @@ class EgoLikePlannerCore:
             "best_safe": bool(best.safety.safe) if best is not None else False,
             "best_feasible": bool(best.safety.feasible) if best is not None else False,
             "best_goal_directed": bool(best is not None and self._is_goal_directed_name(best.trajectory.name)),
+            "risk_kind": str(ctx_dict.get("risk_kind", RiskKind.LOW_RISK.value)),
+            "risk_context_dynamic": bool(risk_context is not None and is_dynamic_context(risk_context)),
+            "risk_context": ctx_dict,
         }
-
 
     def _current_min_clearance(self, state: PlannerState, perception: PerceptionData) -> float:
         min_clearance = 999.0
@@ -246,6 +235,7 @@ class EgoLikePlannerCore:
         min_clearance = float(risk.get("min_clearance", 999.0) or 999.0)
         min_ttc = float(risk.get("min_ttc", 999.0) or 999.0)
         near_field_danger = bool(risk.get("near_field_danger", False))
+        dynamic_context = bool(risk.get("risk_context_dynamic", False))
 
         if safe_count > 0 or recoverable_count > 0:
             self.safe_streak += 1
@@ -263,7 +253,10 @@ class EgoLikePlannerCore:
         dynamic_clearance = float(getattr(self.config, "dynamic_avoid_clearance", max(0.75, self.config.emergency_clearance)))
         dynamic_ttc = float(getattr(self.config, "dynamic_avoid_ttc", 1.20))
 
-        if near_field_danger or min_clearance < 0.0 or min_ttc < emergency_ttc:
+        # TTC emergency is meaningful for moving obstacles.  Static close-range
+        # pressure should go through RECOVERY/ESCAPE so the planner keeps trying to
+        # move around the obstacle instead of freezing in a dynamic emergency mode.
+        if near_field_danger or min_clearance < 0.0 or (dynamic_context and min_ttc < emergency_ttc):
             self._set_mode(self.EMERGENCY_STOP, now + emergency_hold_sec, "emergency_risk")
             return self.mode
 
@@ -282,8 +275,10 @@ class EgoLikePlannerCore:
                 self._set_mode(self.ESCAPE, now + escape_hold_sec, "no_safe_candidates")
             elif safe_count == 0:
                 self._set_mode(self.RECOVERY, now + recovery_hold_sec, "recoverable_rejoin")
-            elif min_clearance < dynamic_clearance or min_ttc < dynamic_ttc:
-                self._set_mode(self.DYNAMIC_AVOID, now, "elevated_risk")
+            elif dynamic_context and (min_clearance < dynamic_clearance or min_ttc < dynamic_ttc):
+                self._set_mode(self.DYNAMIC_AVOID, now, "dynamic_elevated_risk")
+            elif min_clearance < recovery_clearance:
+                self._set_mode(self.RECOVERY, now + recovery_hold_sec, "static_elevated_risk")
             else:
                 self._set_mode(self.NORMAL_TRACK, now, "risk_low")
             return self.mode
@@ -359,12 +354,10 @@ class EgoLikePlannerCore:
         )
 
     def _is_dynamic_avoid_preferred(self, item) -> bool:
-        if self._is_avoid_preferred_name(item.trajectory.name):
-            return True
-        if item.trajectory.metadata.get("planner") != "sampling_mpc":
-            return False
-        kind = str(item.trajectory.metadata.get("sample_kind", "")).lower()
-        return any(token in kind for token in ("dynamic", "side", "wide", "bias"))
+        if item.trajectory.metadata.get("planner") == "sampling_mpc":
+            kind = str(item.trajectory.metadata.get("sample_kind", "")).lower()
+            return kind.startswith("dynamic_")
+        return self._is_avoid_preferred_name(item.trajectory.name)
 
     @staticmethod
     def _is_stop_like_candidate(item) -> bool:
@@ -389,10 +382,7 @@ class EgoLikePlannerCore:
             self._record_recovery_choice(selected, "safe_bypass")
             return selected
 
-        recoverable = [
-            item for item in evaluations
-            if self._is_recoverable_rejoin(item, current_clearance)
-        ]
+        recoverable = [item for item in evaluations if self._is_recoverable_rejoin(item, current_clearance)]
         if recoverable:
             selected = min(recoverable, key=self._recovery_rank_key)
             self._record_recovery_choice(selected, "recoverable_rejoin")
@@ -502,16 +492,10 @@ class EgoLikePlannerCore:
         if self._planning_heading is None:
             self._planning_heading = desired
         else:
-            # A mature local planner does not rotate its planning frame by tens of
-            # degrees every frame.  Rate-limit the frame so subgoals and tracker
-            # velocity stay consistent while still following the mission direction.
             step = max(0.08, min(0.22, 0.85 * (dt if dt is not None else 0.1)))
             delta = math.atan2(math.sin(desired - self._planning_heading), math.cos(desired - self._planning_heading))
             delta = max(-step, min(step, delta))
-            self._planning_heading = math.atan2(
-                math.sin(self._planning_heading + delta),
-                math.cos(self._planning_heading + delta),
-            )
+            self._planning_heading = math.atan2(math.sin(self._planning_heading + delta), math.cos(self._planning_heading + delta))
         heading = self._planning_heading
         return PlannerState(
             drone_id=state.drone_id,
@@ -587,15 +571,7 @@ class EgoLikePlannerCore:
             closing = new_v.x * unit.x + new_v.y * unit.y
             max_closing = max(max_closing, closing)
             if dist <= hard_stop_dist and closing > 0.02:
-                self._last_shield_info = {
-                    "active": True,
-                    "action": "brake",
-                    "dist": float(dist),
-                    "clearance": float(clearance),
-                    "closing": float(closing),
-                    "old_velocity": command.velocity.to_dict(),
-                    "new_velocity": Vec3().to_dict(),
-                }
+                self._last_shield_info = {"active": True, "action": "brake", "dist": float(dist), "clearance": float(clearance), "closing": float(closing), "old_velocity": command.velocity.to_dict(), "new_velocity": Vec3().to_dict()}
                 return PlannerCommand(Vec3(), "fallback_hover", "hover", f"{command.reason}|shield:brake")
             if closing > 0.0:
                 new_v = new_v - unit * closing
@@ -605,45 +581,17 @@ class EgoLikePlannerCore:
             return command
         if new_v.norm() < 0.02:
             if min_dist <= 0.95:
-                self._last_shield_info = {
-                    "active": True,
-                    "action": "project_stop",
-                    "dist": float(min_dist),
-                    "clearance": float(min_clearance),
-                    "closing": float(max_closing),
-                    "old_velocity": command.velocity.to_dict(),
-                    "new_velocity": Vec3().to_dict(),
-                }
+                self._last_shield_info = {"active": True, "action": "project_stop", "dist": float(min_dist), "clearance": float(min_clearance), "closing": float(max_closing), "old_velocity": command.velocity.to_dict(), "new_velocity": Vec3().to_dict()}
                 return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:project_stop")
             return command
 
         if new_v.x * original.x + new_v.y * original.y < 0.0:
-            self._last_shield_info = {
-                "active": True,
-                "action": "reverse_blocked",
-                "dist": float(min_dist),
-                "clearance": float(min_clearance),
-                "closing": float(max_closing),
-                "old_velocity": command.velocity.to_dict(),
-                "new_velocity": Vec3().to_dict(),
-            }
+            self._last_shield_info = {"active": True, "action": "reverse_blocked", "dist": float(min_dist), "clearance": float(min_clearance), "closing": float(max_closing), "old_velocity": command.velocity.to_dict(), "new_velocity": Vec3().to_dict()}
             return PlannerCommand(Vec3(0.0, 0.0, command.velocity.z), "fallback_hover", "hover", f"{command.reason}|shield:reverse_blocked")
 
-        # Keep the projected vector, but do not cap it to a crawl.  PathTracker
-        # and planner_cautious already bound the speed; the shield only removes
-        # the dangerous component.
         new_v = new_v.limit_norm(min(command.velocity.norm(), 0.18))
         out = Vec3(new_v.x, new_v.y, command.velocity.z)
-        self._last_shield_info = {
-            "active": True,
-            "action": "project",
-            "dist": float(min_dist),
-            "clearance": float(min_clearance),
-            "closing": float(max_closing),
-            "projected_points": int(projected),
-            "old_velocity": command.velocity.to_dict(),
-            "new_velocity": out.to_dict(),
-        }
+        self._last_shield_info = {"active": True, "action": "project", "dist": float(min_dist), "clearance": float(min_clearance), "closing": float(max_closing), "projected_points": int(projected), "old_velocity": command.velocity.to_dict(), "new_velocity": out.to_dict()}
         return PlannerCommand(out, command.mode, command.source_trajectory, f"{command.reason}|shield:project")
 
     def _goal_progress_guard(self, command: PlannerCommand, state: PlannerState, local_goal: Vec3) -> PlannerCommand:
@@ -664,12 +612,7 @@ class EgoLikePlannerCore:
         if corrected.norm() < 0.02:
             corrected = Vec3()
         out = Vec3(corrected.x, corrected.y, command.velocity.z).limit_norm(command.velocity.norm())
-        return PlannerCommand(
-            out,
-            command.mode,
-            command.source_trajectory,
-            f"{command.reason}|goal_progress_guard",
-        )
+        return PlannerCommand(out, command.mode, command.source_trajectory, f"{command.reason}|goal_progress_guard")
 
     def reset_output_filter(self) -> None:
         self.output.reset()
