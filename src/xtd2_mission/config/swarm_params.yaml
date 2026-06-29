@@ -16,12 +16,9 @@ ws_root: ""  # auto-detected
 # ===== Swarm mode =====
 swarm_mode: "hybrid"
 avoid_scope: "leader"
-# Stable chain default:
-#   ego_like_planner_framework -> primitive_cmd_vel_ned
-#   lidar_ttc_safety_filter    -> safe_cmd_vel_ned
-#   multi_waypoint2_arbiter    -> cruise_cmd_vel_ned
-#   command_arbiter            -> cmd_vel_ned
-# Keep avoid_source=primitive so mission code uses safe_primitive when available.
+# Control source for final avoidance velocity: primitive, orca, fused, none.
+# Current default keeps the legacy chain behavior for ongoing planner work.
+# The stable arbiter chain remains available through scripts/start_stable_ego_chain.sh.
 avoid_source: "primitive"
 auto_arm_offboard: true
 
@@ -78,8 +75,6 @@ third_wall_enable: true
 start_wall_clearance: 8.0
 
 # ===== ORCA =====
-# ORCA remains available as a comparison baseline, but it is not in the stable
-# default execution chain. Enable avoid_source:=orca or fused only for ablation.
 orca_safe_radius: 1.2
 orca_max_speed: 0.22
 orca_gain: 0.45
@@ -127,11 +122,15 @@ collision_warning_margin: 1.5
 collision_state_timeout: 2.0
 collision_max_reports: 30
 
-# ===== Stable EGO-like local planner chain =====
-# Only one planner should publish /primitive_cmd_vel_ned in normal experiments.
-# Use ego_like_enable=true and motion_primitive_enable=false to avoid command races.
-motion_primitive_enable: false
-ego_like_enable: true
+# ===== Planner selection =====
+# Legacy/current development default:
+#   motion_primitive_selector -> /primitive_cmd_vel_ned
+#   lidar_ttc_safety_filter   -> /safe_cmd_vel_ned
+#   multi_waypoint2           -> final mission/control logic
+# Optional stable chain, when explicitly launched with scripts/start_stable_ego_chain.sh:
+#   ego_like_planner_framework -> lidar_ttc_safety_filter -> command_arbiter
+motion_primitive_enable: true
+ego_like_enable: false
 ego_like_publish_cmd: true
 ego_like_output_topic: "/xtdrone2/swarm/ego_like_planner_framework"
 ego_like_cmd_topic_template: "/xtdrone2/x500_{id}/primitive_cmd_vel_ned"
@@ -172,8 +171,7 @@ ego_like_astar_progress_move_epsilon: 0.22
 ego_like_astar_recovery_sec: 1.6
 ego_like_astar_latch_clearance: 0.45
 
-# ===== Legacy lightweight motion primitive selector =====
-# Disabled by default. Keep these parameters for old-chain ablation only.
+# ===== Lightweight motion primitive selector =====
 primitive_horizon: 3.5
 primitive_dt: 0.5
 primitive_cruise_speed: 0.34
@@ -187,7 +185,7 @@ primitive_state_timeout: 2.0
 primitive_target_weight: 0.6
 primitive_risk_weight: 28.0
 primitive_smooth_weight: 3.0
-primitive_publish_shadow_cmd: false
+primitive_publish_shadow_cmd: true
 primitive_emergency_clearance: 1.6
 primitive_projection_alpha: 1.4
 primitive_projection_iterations: 3
