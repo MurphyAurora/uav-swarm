@@ -21,6 +21,17 @@ from .common import (
 )
 from .planner_api import EgoLikePlannerAdapter, PlannerBase, PlannerRequest, PlannerResult
 from .planner_core import EgoLikePlannerCore
+from .planner_types import (
+    MotionLimits,
+    ObstacleState,
+    PlannerObservation,
+    PredictedObstacle,
+    PredictedState,
+    Trajectory,
+    TrajectorySample,
+    VehicleState,
+    trajectory_from_points,
+)
 from .reference_generator import LocalAStarReferenceGenerator, LocalReference
 from .sampling_mpc_planner import SamplingMPCPlanner
 
@@ -34,18 +45,27 @@ __all__ = [
     "EgoLikePlannerCore",
     "LocalAStarReferenceGenerator",
     "LocalReference",
+    "MotionLimits",
     "NativePlannerSystemAdapter",
     "Obstacle",
+    "ObstacleState",
     "PerceptionData",
     "PlannerBase",
     "PlannerCommand",
     "PlannerConfig",
+    "PlannerObservation",
     "PlannerRequest",
     "PlannerResult",
     "PlannerState",
+    "PredictedObstacle",
+    "PredictedState",
     "SafetyReport",
     "SamplingMPCPlanner",
     "ScenarioContract",
+    "Trajectory",
     "TrajectoryPoint",
+    "TrajectorySample",
     "Vec3",
+    "VehicleState",
+    "trajectory_from_points",
 ]
