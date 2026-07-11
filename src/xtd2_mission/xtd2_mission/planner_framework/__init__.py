@@ -34,6 +34,7 @@ from .planner_types import (
 )
 from .reference_generator import LocalAStarReferenceGenerator, LocalReference
 from .sampling_mpc_planner import SamplingMPCPlanner
+from .scenario_registry import ScenarioRegistry, ScenarioSpec, scenario_registry
 
 __all__ = [
     "BenchmarkOutput",
@@ -62,10 +63,13 @@ __all__ = [
     "SafetyReport",
     "SamplingMPCPlanner",
     "ScenarioContract",
+    "ScenarioRegistry",
+    "ScenarioSpec",
     "Trajectory",
     "TrajectoryPoint",
     "TrajectorySample",
     "Vec3",
     "VehicleState",
+    "scenario_registry",
     "trajectory_from_points",
 ]
