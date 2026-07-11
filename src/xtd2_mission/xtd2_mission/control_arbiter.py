@@ -22,9 +22,19 @@ class ControlArbiter:
         self.state = {}
         self.recovery_clearance = float(recovery_clearance)
         self.last_switch = {}
+        self.last_source = {}
 
     def select(self, drone_id, mission_cmd, primitive_cmd=None,
                safe_cmd=None, clearance=999.0):
+        """Select the only command allowed to reach the vehicle layer.
+
+        Priority:
+        1. safety command
+        2. local avoidance planner
+        3. mission waypoint command
+
+        Returns (command, state, metadata) so upper layers can log ownership.
+        """
         now = time.time()
         drone_id = int(drone_id)
         current = self.state.get(drone_id, ControlState.NORMAL)
@@ -32,18 +42,29 @@ class ControlArbiter:
         if safe_cmd is not None:
             self.state[drone_id] = ControlState.EMERGENCY
             self.last_switch[drone_id] = now
-            return safe_cmd, self.state[drone_id].value
+            self.last_source[drone_id] = "safety"
+            return safe_cmd, self.state[drone_id].value, self.metadata(drone_id)
 
         if primitive_cmd is not None:
             self.state[drone_id] = ControlState.AVOIDING
             self.last_switch[drone_id] = now
-            return primitive_cmd, self.state[drone_id].value
+            self.last_source[drone_id] = "primitive"
+            return primitive_cmd, self.state[drone_id].value, self.metadata(drone_id)
 
         if current in (ControlState.AVOIDING, ControlState.EMERGENCY):
             if clearance >= self.recovery_clearance:
                 self.state[drone_id] = ControlState.RECOVER
             else:
-                return mission_cmd, current.value
+                self.last_source[drone_id] = "hold_mission"
+                return mission_cmd, current.value, self.metadata(drone_id)
 
         self.state[drone_id] = ControlState.NORMAL
-        return mission_cmd, self.state[drone_id].value
+        self.last_source[drone_id] = "mission"
+        return mission_cmd, self.state[drone_id].value, self.metadata(drone_id)
+
+    def metadata(self, drone_id):
+        return {
+            "drone_id": int(drone_id),
+            "source": self.last_source.get(int(drone_id), "unknown"),
+            "timestamp": time.time(),
+        }
