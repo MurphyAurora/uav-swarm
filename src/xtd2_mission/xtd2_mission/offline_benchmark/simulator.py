@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal deterministic simulator for planner-level comparisons.
-
-This module intentionally does not import ROS2, Gazebo, or PX4. The vehicle
-uses a common velocity-command executor so every native planner is evaluated
-under the same simplified dynamics.
-"""
+"""Minimal deterministic simulator for planner-level comparisons."""
 
 from dataclasses import dataclass
 from typing import List
@@ -19,8 +14,9 @@ from ..planner_framework import (
     PlannerState,
     Vec3,
 )
+from .logger import TrajectoryLogger
 from .metrics import EpisodeMetrics, MetricsCollector
-from .scenario import OfflineScenario, ScenarioObstacle
+from .scenario import OfflineScenario
 
 
 @dataclass
@@ -28,6 +24,7 @@ class OfflineRunResult:
     metrics: EpisodeMetrics
     final_position: Vec3
     reports: List[dict]
+    trajectory: TrajectoryLogger
 
 
 class OfflineBenchmarkRunner:
@@ -42,6 +39,7 @@ class OfflineBenchmarkRunner:
         position = scenario.start
         velocity = Vec3()
         collector = MetricsCollector(scenario.scenario_id, self.planner.name)
+        trajectory = TrajectoryLogger()
         collector.update_position(position)
         reports: List[dict] = []
         collided = False
@@ -74,10 +72,22 @@ class OfflineBenchmarkRunner:
             velocity = result.command
             position = position + velocity * scenario.dt
             elapsed += scenario.dt
-            collector.update_position(position)
-
             clearance = self._minimum_clearance(scenario, position, elapsed)
+            collector.update_position(position)
             collector.update_clearance(clearance)
+            trajectory.record(
+                time=elapsed,
+                x=position.x,
+                y=position.y,
+                z=position.z,
+                vx=velocity.x,
+                vy=velocity.y,
+                vz=velocity.z,
+                clearance=clearance,
+                mode=result.mode,
+                command_mode=command_mode,
+            )
+
             if clearance <= scenario.collision_margin:
                 collided = True
                 break
@@ -96,51 +106,21 @@ class OfflineBenchmarkRunner:
         elif not reached:
             metrics.failure_reason = "timeout"
         collector.finish()
-        return OfflineRunResult(metrics=metrics, final_position=position, reports=reports)
+        return OfflineRunResult(metrics=metrics, final_position=position, reports=reports, trajectory=trajectory)
 
-    def _visible_obstacles(
-        self,
-        scenario: OfflineScenario,
-        position: Vec3,
-        timestamp: float,
-    ) -> List[Obstacle]:
+    def _visible_obstacles(self, scenario: OfflineScenario, position: Vec3, timestamp: float) -> List[Obstacle]:
         visible: List[Obstacle] = []
         for item in scenario.obstacles:
             obstacle_position = item.position_at(timestamp)
             if position.distance_to(obstacle_position) > scenario.sensing_radius:
                 continue
-            visible.append(
-                Obstacle(
-                    position=obstacle_position,
-                    velocity=item.velocity,
-                    radius=item.radius,
-                    source=item.source,
-                    obstacle_id=item.obstacle_id,
-                )
-            )
+            visible.append(Obstacle(position=obstacle_position, velocity=item.velocity, radius=item.radius, source=item.source, obstacle_id=item.obstacle_id))
         return visible
 
     @staticmethod
     def _perception(position: Vec3, obstacles: List[Obstacle], timestamp: float) -> PerceptionData:
-        nearest = min(
-            (position.distance_to(item.position) - item.radius for item in obstacles),
-            default=999.0,
-        )
-        return PerceptionData(
-            obstacles=obstacles,
-            nearest_distance=float(nearest),
-            near_field_danger=False,
-            frame_id="world",
-            stamp=float(timestamp),
-        )
+        nearest = min((position.distance_to(item.position) - item.radius for item in obstacles), default=999.0)
+        return PerceptionData(obstacles=obstacles, nearest_distance=float(nearest), near_field_danger=False, frame_id="world", stamp=float(timestamp))
 
     def _minimum_clearance(self, scenario: OfflineScenario, position: Vec3, timestamp: float) -> float:
-        return min(
-            (
-                position.distance_to(item.position_at(timestamp))
-                - self.vehicle_radius
-                - item.radius
-                for item in scenario.obstacles
-            ),
-            default=999.0,
-        )
+        return min((position.distance_to(item.position_at(timestamp)) - self.vehicle_radius - item.radius for item in scenario.obstacles), default=999.0)
