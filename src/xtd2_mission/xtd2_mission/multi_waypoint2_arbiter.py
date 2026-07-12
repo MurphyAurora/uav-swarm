@@ -1,3 +1,5 @@
+# DEPRECATED: compatibility wrapper. Use command_arbiter as the only final command owner.
+
 #!/usr/bin/env python3
 """Run multi_waypoint2 as a cruise-proposal producer.
 

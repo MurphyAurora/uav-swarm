@@ -60,7 +60,7 @@ class FixedPointMission(Node):
             self.pubs[i] = pub
             self.vel_pubs[i] = self.create_publisher(
                 Twist,
-                f'/xtdrone2/x500_{i}/cmd_vel_ned',
+                f'/xtdrone2/x500_{i}/cruise_cmd_vel_ned',
                 10,
             )
 

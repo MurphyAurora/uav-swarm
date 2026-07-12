@@ -12,7 +12,7 @@ multi_waypoint2.py.  It implements the minimum complete local-planner loop:
   -> path scoring and safety validation
   -> lookahead velocity tracking
   -> near-field escape and stuck recovery
-  -> /cmd_vel_ned output
+  -> /cruise_cmd_vel_ned mission output
 
 Scope:
   - one UAV, static obstacles only;
@@ -75,7 +75,7 @@ class LocalStaticPlanner(Node):
         self.drone_id = int(drone_id)
         self.state_topic = state_topic
         self.lidar_topic = lidar_topic or f'/x500_{self.drone_id}/lidar/points_local'
-        self.cmd_topic = cmd_topic or f'/xtdrone2/x500_{self.drone_id}/cmd_vel_ned'
+        self.cmd_topic = cmd_topic or f'/xtdrone2/x500_{self.drone_id}/cruise_cmd_vel_ned'
         self.target_x = float(target_x)
         self.target_y = float(target_y)
         self.target_z = float(target_z)

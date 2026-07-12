@@ -371,7 +371,7 @@ class MissionController(Node):
             default_target_y = self.target_y + (planner_drone_id - 1) * self.y_spacing
             target_y = float(os.environ.get('STATIC_PLANNER_TARGET_Y', str(default_target_y)))
             target_z = float(os.environ.get('STATIC_PLANNER_TARGET_Z', str(self.mission_z)))
-            cmd_topic = f'/xtdrone2/x500_{planner_drone_id}/cruise_cmd_vel_ned' if command_arbiter_enable else f'/xtdrone2/x500_{planner_drone_id}/cmd_vel_ned'
+            cmd_topic = f'/xtdrone2/x500_{planner_drone_id}/cruise_cmd_vel_ned'  # mission layer output; final cmd_vel_ned is owned by command_arbiter
 
             if self.num_drones != 1:
                 self.get_logger().warn(

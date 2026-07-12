@@ -39,10 +39,11 @@ setup(
             'motion_primitive_selector = xtd2_mission.motion_primitive_selector:main',
             'lidar_ttc_safety_filter = xtd2_mission.lidar_ttc_safety_filter:main',
             'command_arbiter = xtd2_mission.command_arbiter:main',
+            # control_arbiter is an internal arbitration policy module; command_arbiter is the only ROS2 output node.
             'ego_like_planner_framework = xtd2_mission.ego_like_planner_framework_node:main',
             'local_static_planner = xtd2_mission.local_static_planner:main',
             'multi_waypoint2 = xtd2_mission.multi_waypoint2:main',
-            'multi_waypoint2_arbiter = xtd2_mission.multi_waypoint2_arbiter:main',
+            # Deprecated compatibility wrapper kept in source but not exposed as a primary node.
             'mission_controller = xtd2_mission.mission_controller:main',
             'obstacle_config = xtd2_mission.obstacle_config:main',
         ],
