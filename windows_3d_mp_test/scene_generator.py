@@ -17,6 +17,8 @@ DEFAULT_HEIGHTS = {
     "high": 8.0,
 }
 
+DEFAULT_SINGLE_PILLAR_RADIUS = 1.6
+
 # Mirrored from scripts/offline_scenarios/static_cases.py::forest_gap.
 # This fallback keeps windows_3d_mp_test runnable without importing the full
 # xtd2_mission planner package used by the offline benchmark package.
@@ -36,7 +38,7 @@ FALLBACK_CASES = {
     "single_pillar": {
         "start": [0.0, 0.0],
         "goal": [12.0, 0.0],
-        "obstacles": [(4.0, 0.0, 0.55, "pillar_1")],
+        "obstacles": [(4.0, 0.0, DEFAULT_SINGLE_PILLAR_RADIUS, "pillar_1")],
     },
 }
 
@@ -61,7 +63,7 @@ def _vec3_to_array(vec, fallback_z=3.0):
     )
 
 
-def _fallback_case(case_name, pillar_height, flight_height):
+def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
     try:
         data = FALLBACK_CASES[case_name]
     except KeyError as exc:
@@ -70,16 +72,19 @@ def _fallback_case(case_name, pillar_height, flight_height):
             f"fallback case {case_name!r} is not available; available: {choices}"
         ) from exc
 
-    obstacles = [
-        DynamicObstacle.static_pillar(
-            x=x,
-            y=y,
-            radius=radius,
-            height=pillar_height,
-            obstacle_id=obstacle_id,
+    obstacles = []
+    for x, y, radius, obstacle_id in data["obstacles"]:
+        if case_name == "single_pillar" and pillar_radius is not None:
+            radius = float(pillar_radius)
+        obstacles.append(
+            DynamicObstacle.static_pillar(
+                x=x,
+                y=y,
+                radius=radius,
+                height=pillar_height,
+                obstacle_id=obstacle_id,
+            )
         )
-        for x, y, radius, obstacle_id in data["obstacles"]
-    ]
 
     return {
         "name": case_name,
@@ -90,18 +95,21 @@ def _fallback_case(case_name, pillar_height, flight_height):
     }
 
 
-def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3.0):
+def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_radius=None):
     """Lift a 2D offline scenario into a 3D cylinder scene.
 
     The XY obstacle distribution is preserved exactly. Only z=0 and obstacle
     height are added, which keeps the existing 2D validation geometry reusable.
     """
+    if case_name == "single_pillar":
+        return _fallback_case(case_name, pillar_height, flight_height, pillar_radius=pillar_radius)
+
     try:
         from scripts.offline_scenarios.registry import get_case
-    except ModuleNotFoundError:
-        return _fallback_case(case_name, pillar_height, flight_height)
+        case = get_case(case_name)
+    except (ModuleNotFoundError, KeyError):
+        return _fallback_case(case_name, pillar_height, flight_height, pillar_radius=pillar_radius)
 
-    case = get_case(case_name)
     start = _vec3_to_array(case.start, fallback_z=flight_height)
     goal = _vec3_to_array(case.goal, fallback_z=flight_height)
 
@@ -131,9 +139,14 @@ def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3
     }
 
 
-def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0):
+def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_radius=None):
     if name in {"forest_gap", "single_pillar", "narrow_corridor_easy", "narrow_corridor_medium", "narrow_corridor_hard"}:
-        return load_offline_case(name, pillar_height=pillar_height, flight_height=flight_height)
+        return load_offline_case(
+            name,
+            pillar_height=pillar_height,
+            flight_height=flight_height,
+            pillar_radius=pillar_radius,
+        )
 
     if name == "forest_gap_high":
         return load_offline_case("forest_gap", pillar_height=DEFAULT_HEIGHTS["high"], flight_height=flight_height)
@@ -165,4 +178,9 @@ def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0):
         )
         return scene
 
-    return load_offline_case(name, pillar_height=pillar_height, flight_height=flight_height)
+    return load_offline_case(
+        name,
+        pillar_height=pillar_height,
+        flight_height=flight_height,
+        pillar_radius=pillar_radius,
+    )
