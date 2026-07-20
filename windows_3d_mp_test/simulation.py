@@ -10,14 +10,19 @@ if __name__ == '__main__':
     goal = np.array([20.0, 0.0, 3.0])
 
     obstacles = [
-        DynamicObstacle([10, 0, 3], [0, 0.1, 0])
+        DynamicObstacle(
+            position=[10.0, 0.0, 0.0],
+            velocity=[0.0, 0.05, 0.0],
+            radius=1.0,
+            height=5.0
+        )
     ]
 
     planner = MotionPrimitivePlanner()
 
     history = [state.copy()]
 
-    for step in range(100):
+    for step in range(300):
         best_traj, cost = planner.plan(state, goal, obstacles)
 
         if best_traj is None:
