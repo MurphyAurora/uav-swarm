@@ -1,0 +1,69 @@
+scene:
+  name: 3d_dense_wall_field
+  description: Dense deterministic wall field for testing repeated climb, lateral bypass, and descent balance.
+
+swarm:
+  num_drones: 3
+  leader_id: 2
+  y_spacing: 1.8
+  start:
+    x: -6.0
+    y: 0.0
+    z: -3.0
+
+target:
+  x: 18.0
+  y: 0.0
+  z: -3.0
+  y_spacing: 1.8
+  axis: y
+
+static_obstacles:
+  walls:
+    - name: gate_left_1
+      x: 1.5
+      y: -2.4
+      z: 0.9
+      length: 4.8
+      thickness: 0.35
+      height: 4.2
+      segment_spacing: 0.5
+      orientation: y
+    - name: gate_right_1
+      x: 1.5
+      y: 2.4
+      z: 0.9
+      length: 4.8
+      thickness: 0.35
+      height: 4.2
+      segment_spacing: 0.5
+      orientation: y
+    - name: center_high_wall
+      x: 6.0
+      y: 0.0
+      z: 0.9
+      length: 5.4
+      thickness: 0.35
+      height: 5.2
+      segment_spacing: 0.45
+      orientation: y
+    - name: offset_wall_left
+      x: 10.0
+      y: -1.8
+      z: 0.9
+      length: 4.8
+      thickness: 0.35
+      height: 3.8
+      segment_spacing: 0.5
+      orientation: y
+    - name: offset_wall_right
+      x: 13.0
+      y: 1.8
+      z: 0.9
+      length: 4.8
+      thickness: 0.35
+      height: 4.6
+      segment_spacing: 0.5
+      orientation: y
+
+dynamic_obstacles: []
