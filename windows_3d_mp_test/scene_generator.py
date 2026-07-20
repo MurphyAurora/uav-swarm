@@ -17,6 +17,29 @@ DEFAULT_HEIGHTS = {
     "high": 8.0,
 }
 
+# Mirrored from scripts/offline_scenarios/static_cases.py::forest_gap.
+# This fallback keeps windows_3d_mp_test runnable without importing the full
+# xtd2_mission planner package used by the offline benchmark package.
+FALLBACK_CASES = {
+    "forest_gap": {
+        "start": [0.0, 0.0],
+        "goal": [16.0, 0.0],
+        "obstacles": [
+            (3.0, -1.25, 0.36, "p1"),
+            (4.6, 1.35, 0.36, "p2"),
+            (6.3, 0.30, 0.40, "p3"),
+            (8.3, -1.35, 0.38, "p4"),
+            (10.0, 1.25, 0.38, "p5"),
+            (11.8, 0.15, 0.36, "p6"),
+        ],
+    },
+    "single_pillar": {
+        "start": [0.0, 0.0],
+        "goal": [12.0, 0.0],
+        "obstacles": [(4.0, 0.0, 0.55, "pillar_1")],
+    },
+}
+
 
 def _component(vec, name, index, default=0.0):
     if hasattr(vec, name):
@@ -38,13 +61,45 @@ def _vec3_to_array(vec, fallback_z=3.0):
     )
 
 
+def _fallback_case(case_name, pillar_height, flight_height):
+    try:
+        data = FALLBACK_CASES[case_name]
+    except KeyError as exc:
+        choices = ", ".join(sorted(FALLBACK_CASES))
+        raise KeyError(
+            f"fallback case {case_name!r} is not available; available: {choices}"
+        ) from exc
+
+    obstacles = [
+        DynamicObstacle.static_pillar(
+            x=x,
+            y=y,
+            radius=radius,
+            height=pillar_height,
+            obstacle_id=obstacle_id,
+        )
+        for x, y, radius, obstacle_id in data["obstacles"]
+    ]
+
+    return {
+        "name": case_name,
+        "start": np.array([data["start"][0], data["start"][1], flight_height], dtype=float),
+        "goal": np.array([data["goal"][0], data["goal"][1], flight_height], dtype=float),
+        "obstacles": obstacles,
+        "bounds": None,
+    }
+
+
 def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3.0):
     """Lift a 2D offline scenario into a 3D cylinder scene.
 
     The XY obstacle distribution is preserved exactly. Only z=0 and obstacle
     height are added, which keeps the existing 2D validation geometry reusable.
     """
-    from scripts.offline_scenarios.registry import get_case
+    try:
+        from scripts.offline_scenarios.registry import get_case
+    except ModuleNotFoundError:
+        return _fallback_case(case_name, pillar_height, flight_height)
 
     case = get_case(case_name)
     start = _vec3_to_array(case.start, fallback_z=flight_height)
