@@ -2,6 +2,13 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
+def _get_obstacle_value(obs, key):
+    """Support both dict obstacles and DynamicObstacle objects."""
+    if isinstance(obs, dict):
+        return obs[key]
+    return getattr(obs, key)
+
+
 def plot_result(uav_path, obstacles, goal=None):
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection='3d')
@@ -14,7 +21,11 @@ def plot_result(uav_path, obstacles, goal=None):
         ax.scatter(goal[0], goal[1], goal[2], label='goal')
 
     for obs in obstacles:
-        x, y, h, r = obs['x'], obs['y'], obs['height'], obs['radius']
+        x = _get_obstacle_value(obs, 'x')
+        y = _get_obstacle_value(obs, 'y')
+        h = _get_obstacle_value(obs, 'height')
+        r = _get_obstacle_value(obs, 'radius')
+
         verts = [[
             (x-r, y-r, 0), (x+r, y-r, 0),
             (x+r, y+r, 0), (x-r, y+r, 0)
