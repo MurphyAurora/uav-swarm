@@ -18,12 +18,21 @@ DEFAULT_HEIGHTS = {
 }
 
 
+def _component(vec, name, index, default=0.0):
+    if hasattr(vec, name):
+        return float(getattr(vec, name))
+    try:
+        return float(vec[index])
+    except (TypeError, IndexError):
+        return float(default)
+
+
 def _vec3_to_array(vec, fallback_z=3.0):
     return np.array(
         [
-            float(getattr(vec, "x", vec[0] if len(vec) > 0 else 0.0)),
-            float(getattr(vec, "y", vec[1] if len(vec) > 1 else 0.0)),
-            fallback_z,
+            _component(vec, "x", 0),
+            _component(vec, "y", 1),
+            float(fallback_z),
         ],
         dtype=float,
     )
