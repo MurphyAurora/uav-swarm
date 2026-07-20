@@ -1,29 +1,47 @@
 import numpy as np
 
-from primitive import generate_primitives
 from obstacle import DynamicObstacle
-from cost_function import PrimitiveCost
+from planner import MotionPrimitivePlanner
+from visualize import plot_result
 
 
 if __name__ == '__main__':
     state = np.array([0.0, 0.0, 3.0])
     goal = np.array([20.0, 0.0, 3.0])
 
-    obstacles = [DynamicObstacle([10, 0, 3], [0, 0.1, 0])]
-    cost = PrimitiveCost()
+    obstacles = [
+        DynamicObstacle([10, 0, 3], [0, 0.1, 0])
+    ]
+
+    planner = MotionPrimitivePlanner()
+
+    history = [state.copy()]
 
     for step in range(100):
-        primitives = generate_primitives(state)
+        best_traj, cost = planner.plan(state, goal, obstacles)
 
-        scores = [cost.total_cost(p, goal, obstacles) for p in primitives]
-        best = primitives[int(np.argmin(scores))]
+        if best_traj is None:
+            print('no feasible trajectory')
+            break
 
-        state = best[1]
+        state = best_traj[1]
+        history.append(state.copy())
+
         for obs in obstacles:
             obs.update()
 
-        print('step:', step, 'state:', state, 'cost:', min(scores))
+        print(
+            'step:', step,
+            'state:', state,
+            'cost:', round(cost, 3)
+        )
 
-        if np.linalg.norm(state-goal) < 1:
+        if np.linalg.norm(state - goal) < 1:
             print('goal reached')
             break
+
+    plot_result(
+        np.array(history),
+        obstacles,
+        goal
+    )
