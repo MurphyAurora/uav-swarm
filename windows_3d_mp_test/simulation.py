@@ -10,6 +10,7 @@ def run_simulation(
     scenario="forest_gap",
     pillar_height=5.0,
     flight_height=3.0,
+    pillar_radius=None,
     max_steps=300,
     dt=0.1,
 ):
@@ -17,6 +18,7 @@ def run_simulation(
         scenario,
         pillar_height=pillar_height,
         flight_height=flight_height,
+        pillar_radius=pillar_radius,
     )
     state = scene["start"].copy()
     goal = scene["goal"].copy()
@@ -27,6 +29,11 @@ def run_simulation(
 
     print("scenario:", scene["name"])
     print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
+    if obstacles:
+        print(
+            "first obstacle radius:", round(float(obstacles[0].radius), 3),
+            "height:", round(float(obstacles[0].height), 3),
+        )
 
     for step in range(max_steps):
         best_traj, cost = planner.plan(state, goal, obstacles, predict_time=2.0)
@@ -64,6 +71,7 @@ def main():
     parser.add_argument("--scenario", default="forest_gap")
     parser.add_argument("--pillar-height", type=float, default=5.0)
     parser.add_argument("--flight-height", type=float, default=3.0)
+    parser.add_argument("--pillar-radius", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--dt", type=float, default=0.1)
     args = parser.parse_args()
@@ -72,6 +80,7 @@ def main():
         scenario=args.scenario,
         pillar_height=args.pillar_height,
         flight_height=args.flight_height,
+        pillar_radius=args.pillar_radius,
         max_steps=args.max_steps,
         dt=args.dt,
     )
