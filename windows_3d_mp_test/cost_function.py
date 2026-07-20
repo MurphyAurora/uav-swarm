@@ -10,6 +10,7 @@ class PrimitiveCost:
                  altitude_weight=0.5,
                  smooth_weight=0.5,
                  energy_weight=2.0,
+                 switch_weight=1.0,
                  safe_distance=2.0,
                  reference_height=3.0):
         self.goal_weight = goal_weight
@@ -17,25 +18,28 @@ class PrimitiveCost:
         self.altitude_weight = altitude_weight
         self.smooth_weight = smooth_weight
         self.energy_weight = energy_weight
+        self.switch_weight = switch_weight
         self.safe_distance = safe_distance
         self.reference_height = reference_height
 
     def goal_cost(self, trajectory, goal):
-        end = trajectory[-1]
-        return np.linalg.norm(end - goal)
+        return np.linalg.norm(trajectory[-1] - goal)
 
     def collision_cost(self, trajectory, obstacles):
         cost = 0.0
         for p in trajectory:
             for obs in obstacles:
-                d = np.linalg.norm(p - obs.position)
-                if d < self.safe_distance:
-                    cost += (self.safe_distance - d) ** 2
+                horizontal = np.linalg.norm(p[:2] - obs.position[:2])
+                vertical = p[2]
+
+                if horizontal < obs.radius + self.safe_distance:
+                    if 0 <= vertical <= obs.height:
+                        margin = obs.radius + self.safe_distance - horizontal
+                        cost += margin ** 2
         return cost
 
     def altitude_cost(self, trajectory):
-        z = trajectory[:, 2]
-        return np.sum((z - self.reference_height) ** 2)
+        return np.sum((trajectory[:, 2] - self.reference_height) ** 2)
 
     def smooth_cost(self, trajectory):
         if len(trajectory) < 3:
