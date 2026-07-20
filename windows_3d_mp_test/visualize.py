@@ -3,10 +3,20 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 def _get_obstacle_value(obs, key):
-    """Support both dict obstacles and DynamicObstacle objects."""
+    """Support dict obstacles and DynamicObstacle objects."""
     if isinstance(obs, dict):
         return obs[key]
-    return getattr(obs, key)
+
+    if key == 'x':
+        return obs.position[0]
+    if key == 'y':
+        return obs.position[1]
+    if key == 'height':
+        return 3.0
+    if key == 'radius':
+        return 0.5
+
+    raise KeyError(key)
 
 
 def plot_result(uav_path, obstacles, goal=None):
@@ -33,6 +43,7 @@ def plot_result(uav_path, obstacles, goal=None):
             (x-r, y-r, h), (x+r, y-r, h),
             (x+r, y+r, h), (x-r, y+r, h)
         ]]
+
         ax.add_collection3d(Poly3DCollection(verts))
 
     ax.set_xlabel('X')
