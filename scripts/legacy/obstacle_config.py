@@ -108,9 +108,11 @@ class WallObstacle(Obstacle):
     def radius(self):
         return max(0.25, self.thickness * 0.5 + 0.15)
 
+    @property
+    def vertical_spacing(self):
+        return max(0.35, min(0.9, self.segment_spacing))
+
     def to_sdf_link(self, base_x=0.0, base_y=0.0, base_z=0.0, index=0):
-        # The model is spawned with a 90 deg yaw in ENU, so convert NED-relative
-        # offsets into the model-local frame used by SDF links.
         local_x = self.x - float(base_x)
         local_y = -(self.y - float(base_y))
         local_z = self.z - float(base_z)
@@ -148,23 +150,28 @@ class WallObstacle(Obstacle):
     def to_collision_points(self, start_obs_id=1):
         points = []
         segment_count = max(3, int(self.length / self.segment_spacing) + 1)
+        vertical_count = max(1, int(self.height / self.vertical_spacing) + 1)
         half_span = self.length * 0.5
         step = self.length / max(1, segment_count - 1)
         along_x = str(self.orientation).strip().lower() in ('x', 'x_axis', 'east_west')
+        obs_id = int(start_obs_id)
         for idx in range(segment_count):
             offset = -half_span + step * idx
-            points.append(
-                {
-                    'obs_id': int(start_obs_id) + idx,
-                    'x': self.x + offset if along_x else self.x,
-                    'y': self.y if along_x else self.y + offset,
-                    'z': 0.0,
-                    'vx': 0.0,
-                    'vy': 0.0,
-                    'vz': 0.0,
-                    'radius': self.radius,
-                }
-            )
+            for layer in range(vertical_count):
+                z = -min(self.height, (layer + 0.5) * self.vertical_spacing)
+                points.append(
+                    {
+                        'obs_id': obs_id,
+                        'x': self.x + offset if along_x else self.x,
+                        'y': self.y if along_x else self.y + offset,
+                        'z': z,
+                        'vx': 0.0,
+                        'vy': 0.0,
+                        'vz': 0.0,
+                        'radius': max(self.radius, 0.45 * self.vertical_spacing),
+                    }
+                )
+                obs_id += 1
         return points
 
     def contains_xy(self, x, y, inflation=0.0):
