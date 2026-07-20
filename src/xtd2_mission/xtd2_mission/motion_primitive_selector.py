@@ -16,6 +16,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
 
+from xtd2_mission.cost_function import risk_aware_altitude_cost, transition_cost
 from xtd2_mission.motion_primitive_library import MotionPrimitiveLibrary, norm3
 
 
@@ -45,6 +46,9 @@ class MotionPrimitiveSelector(Node):
         target_weight=1.0,
         risk_weight=8.0,
         smooth_weight=0.3,
+        transition_weight=1.2,
+        altitude_weight=1.4,
+        altitude_clearance=0.7,
         publish_shadow_cmd=True,
         include_static=True,
         include_other_drones=True,
@@ -75,6 +79,9 @@ class MotionPrimitiveSelector(Node):
         self.target_weight = float(target_weight)
         self.risk_weight = float(risk_weight)
         self.smooth_weight = float(smooth_weight)
+        self.transition_weight = float(transition_weight)
+        self.altitude_weight = float(altitude_weight)
+        self.altitude_clearance = float(altitude_clearance)
         self.publish_shadow_cmd = bool(publish_shadow_cmd)
         self.include_static = bool(include_static)
         self.include_other_drones = bool(include_other_drones)
@@ -100,6 +107,7 @@ class MotionPrimitiveSelector(Node):
         self.static_tracks = []
         self.static_stamp = 0.0
         self.last_log_time = 0.0
+        self.last_primitives = {}
 
         self.create_subscription(String, self.state_topic, self._state_cb, 10)
         self.create_subscription(String, self.predicted_topic, self._predicted_cb, 10)
@@ -122,7 +130,9 @@ class MotionPrimitiveSelector(Node):
             f'projection_alpha={self.projection_alpha:.2f}, '
             f'escape_clearance={self.escape_clearance:.2f}, hard_clearance={self.hard_clearance:.2f}, '
             f'static_hard_clearance={self.static_hard_clearance:.2f}, '
-            f'static_emergency_clearance={self.static_emergency_clearance:.2f}'
+            f'static_emergency_clearance={self.static_emergency_clearance:.2f}, '
+            f'transition_weight={self.transition_weight:.2f}, '
+            f'altitude_weight={self.altitude_weight:.2f}, altitude_clearance={self.altitude_clearance:.2f}'
         )
 
     def _state_cb(self, msg):
@@ -169,9 +179,22 @@ class MotionPrimitiveSelector(Node):
             if now - float(state.get('stamp', 0.0)) <= self.state_timeout
         ]
         selections = []
+        fresh_ids = set()
         for state in sorted(fresh_states, key=lambda item: int(item['id'])):
-            target = self._target_for_drone(int(state['id']))
-            selections.append(self._select_for_drone(state, target))
+            drone_id = int(state['id'])
+            fresh_ids.add(drone_id)
+            target = self._target_for_drone(drone_id)
+            selection = self._select_for_drone(state, target)
+            selections.append(selection)
+            self.last_primitives[drone_id] = {
+                'name': selection['primitive'],
+                'vx': selection['recommended_velocity_ned']['vx'],
+                'vy': selection['recommended_velocity_ned']['vy'],
+                'vz': selection['recommended_velocity_ned']['vz'],
+            }
+        for stale_id in list(self.last_primitives.keys()):
+            if stale_id not in fresh_ids:
+                self.last_primitives.pop(stale_id, None)
 
         msg = String()
         msg.data = json.dumps(
@@ -205,6 +228,7 @@ class MotionPrimitiveSelector(Node):
                     f'static_tracks={len(self.static_tracks)}, '
                     f'best=x500_{best["drone_id"]}:{best["primitive"]} '
                     f'score={best["score"]:.2f}, risk={best["risk_cost"]:.2f}, '
+                    f'alt={best.get("altitude_cost", 0.0):.2f}, trans={best.get("transition_cost", 0.0):.2f}, '
                     f'clearance={best["min_clearance"]:.2f}, '
                     f'source={best.get("min_clearance_source", "unknown")}, '
                     f'static_clearance={best.get("min_static_clearance", 999.0):.2f}, '
@@ -215,6 +239,7 @@ class MotionPrimitiveSelector(Node):
                     f'active_constraints={best.get("active_constraints", 0)}; '
                     f'most_risky=x500_{most_risky["drone_id"]}:{most_risky["primitive"]} '
                     f'score={most_risky["score"]:.2f}, risk={most_risky["risk_cost"]:.2f}, '
+                    f'alt={most_risky.get("altitude_cost", 0.0):.2f}, trans={most_risky.get("transition_cost", 0.0):.2f}, '
                     f'clearance={most_risky["min_clearance"]:.2f}, '
                     f'source={most_risky.get("min_clearance_source", "unknown")}, '
                     f'static_clearance={most_risky.get("min_static_clearance", 999.0):.2f}, '
@@ -240,8 +265,9 @@ class MotionPrimitiveSelector(Node):
             pub.publish(msg)
 
     def _select_for_drone(self, state, target):
+        previous = self.last_primitives.get(int(state['id']))
         primitives = self.library.generate(state, target)
-        scored = [self._score_primitive(state, target, primitive) for primitive in primitives]
+        scored = [self._score_primitive(state, target, primitive, previous) for primitive in primitives]
         feasible = [item for item in scored if item['feasible']]
         safe = [
             item for item in feasible
@@ -275,7 +301,7 @@ class MotionPrimitiveSelector(Node):
                 pvy,
                 pvz,
             )
-            projected_eval = self._score_primitive(state, target, primitive)
+            projected_eval = self._score_primitive(state, target, primitive, previous)
             best = projected_eval
             projected = True
             projected_clearance = projected_eval['min_clearance']
@@ -294,6 +320,7 @@ class MotionPrimitiveSelector(Node):
                     state,
                     target,
                     self._constant_velocity_primitive('emergency_brake', state, 0.0, 0.0, 0.0),
+                    previous,
                 )
                 if brake['min_clearance'] >= best['min_clearance']:
                     best = brake
@@ -314,6 +341,8 @@ class MotionPrimitiveSelector(Node):
             'target_cost': best['target_cost'],
             'risk_cost': best['risk_cost'],
             'smooth_cost': best['smooth_cost'],
+            'transition_cost': best['transition_cost'],
+            'altitude_cost': best['altitude_cost'],
             'min_clearance': best['min_clearance'],
             'min_clearance_source': best.get('min_clearance_source', 'unknown'),
             'min_static_clearance': best.get('min_static_clearance', 999.0),
@@ -368,7 +397,7 @@ class MotionPrimitiveSelector(Node):
             'points': points,
         }
 
-    def _score_primitive(self, state, target, primitive):
+    def _score_primitive(self, state, target, primitive, previous_primitive=None):
         final = primitive['points'][-1]
         target_cost = self._distance(
             (final['x'], final['y'], final['z']),
@@ -386,10 +415,26 @@ class MotionPrimitiveSelector(Node):
                 float(primitive['vz']) - float(state.get('vz', 0.0)),
             )
         )
+        trans_cost = transition_cost(
+            previous_primitive,
+            primitive,
+            previous_velocity=(state.get('vx', 0.0), state.get('vy', 0.0), state.get('vz', 0.0)),
+        )
+        altitude_cost = risk_aware_altitude_cost(
+            primitive,
+            target['z'],
+            self._obstacle_samples_for_altitude(primitive, state),
+            self.risk_radius,
+            self.drone_radius,
+            self.safety_margin,
+            self.altitude_clearance,
+        )
         score = (
             self.target_weight * target_cost
             + self.risk_weight * risk_cost
             + self.smooth_weight * smooth_cost
+            + self.transition_weight * trans_cost
+            + self.altitude_weight * altitude_cost
         )
         if not feasible:
             score += 1000.0 + 100.0 * abs(self.hard_clearance - min_clearance)
@@ -400,6 +445,8 @@ class MotionPrimitiveSelector(Node):
             'target_cost': float(target_cost),
             'risk_cost': float(risk_cost),
             'smooth_cost': float(smooth_cost),
+            'transition_cost': float(trans_cost),
+            'altitude_cost': float(altitude_cost),
             'min_clearance': float(min_clearance),
             'min_clearance_source': str(min_source),
             'min_static_clearance': float(min_static_clearance),
@@ -407,6 +454,53 @@ class MotionPrimitiveSelector(Node):
             'vy': float(primitive['vy']),
             'vz': float(primitive['vz']),
         }
+
+    def _obstacle_samples_for_altitude(self, primitive, state):
+        samples = []
+        for track in self.predicted_tracks:
+            obs_radius = float(track.get('radius', 0.3))
+            predictions = list(track.get('predictions') or [])
+            for point in primitive['points']:
+                pred = self._nearest_prediction(predictions, float(point['t']))
+                if pred is None:
+                    continue
+                samples.append(
+                    {
+                        'x': float(pred.get('x', 0.0)),
+                        'y': float(pred.get('y', 0.0)),
+                        'z': float(pred.get('z', 0.0)),
+                        'radius': obs_radius,
+                    }
+                )
+        if self.include_static:
+            for track in self.static_tracks:
+                samples.append(
+                    {
+                        'x': float(track.get('x', 0.0)),
+                        'y': float(track.get('y', 0.0)),
+                        'z': float(track.get('z', 0.0)),
+                        'radius': float(track.get('radius', 0.3)),
+                    }
+                )
+        if self.include_other_drones:
+            own_id = int(state.get('id', 0))
+            now = time.time()
+            for other_id, other in self.states.items():
+                if int(other_id) == own_id:
+                    continue
+                if now - float(other.get('stamp', 0.0)) > self.state_timeout:
+                    continue
+                for point in primitive['points']:
+                    t = float(point['t'])
+                    samples.append(
+                        {
+                            'x': float(other.get('x', 0.0)) + float(other.get('vx', 0.0)) * t,
+                            'y': float(other.get('y', 0.0)) + float(other.get('vy', 0.0)) * t,
+                            'z': float(other.get('z', 0.0)) + float(other.get('vz', 0.0)) * t,
+                            'radius': self.drone_radius,
+                        }
+                    )
+        return samples
 
     def _risk_cost(self, primitive, state):
         max_cost = 0.0
@@ -514,7 +608,6 @@ class MotionPrimitiveSelector(Node):
                 dz = uz - oz
                 dist = math.sqrt(dx * dx + dy * dy + dz * dz)
                 if dist < 1e-6:
-                    # If exactly overlapped, use opposite relative velocity as an escape hint.
                     dx = vx - ovx
                     dy = vy - ovy
                     dz = vz - ovz
@@ -525,7 +618,6 @@ class MotionPrimitiveSelector(Node):
                 ny = dy / dist
                 nz = dz / dist
                 h = dist - threshold
-                # CBF-lite condition: n dot (v_uav - v_obs) + alpha * h >= 0.
                 lower_bound = (nx * ovx + ny * ovy + nz * ovz) - self.projection_alpha * h
                 current = nx * vx + ny * vy + nz * vz
                 if current < lower_bound:
@@ -694,6 +786,9 @@ def main():
     parser.add_argument('--target-weight', type=float, default=1.0)
     parser.add_argument('--risk-weight', type=float, default=8.0)
     parser.add_argument('--smooth-weight', type=float, default=0.3)
+    parser.add_argument('--transition-weight', type=float, default=1.2)
+    parser.add_argument('--altitude-weight', type=float, default=1.4)
+    parser.add_argument('--altitude-clearance', type=float, default=0.7)
     parser.add_argument('--publish-shadow-cmd', type=str, default='true')
     parser.add_argument('--include-static', type=str, default='true')
     parser.add_argument('--include-other-drones', type=str, default='true')
@@ -732,6 +827,9 @@ def main():
         target_weight=args.target_weight,
         risk_weight=args.risk_weight,
         smooth_weight=args.smooth_weight,
+        transition_weight=args.transition_weight,
+        altitude_weight=args.altitude_weight,
+        altitude_clearance=args.altitude_clearance,
         publish_shadow_cmd=str(args.publish_shadow_cmd).strip().lower() in ('1', 'true', 'yes', 'on'),
         include_static=str(args.include_static).strip().lower() in ('1', 'true', 'yes', 'on'),
         include_other_drones=str(args.include_other_drones).strip().lower() in ('1', 'true', 'yes', 'on'),
