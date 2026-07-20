@@ -36,6 +36,20 @@ cd D:\uav-swarm
 python windows_3d_mp_test\simulation.py --scenario forest_gap
 ```
 
+单柱绕行/爬升验证。默认单柱半径已放大到 `1.6`：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario single_pillar
+```
+
+进一步扫描半径，观察无人机是升高还是横向绕行：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius 1.2
+python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius 1.8
+python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius 2.4
+```
+
 高柱验证：
 
 ```powershell
