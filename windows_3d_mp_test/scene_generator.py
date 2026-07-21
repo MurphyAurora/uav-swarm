@@ -58,11 +58,11 @@ FALLBACK_CASES = {
         "height": 3.0,
     },
     "test_over_top": {
-        "start": [0.0, 0.0],
+        "start": [-6.0, 0.0],
         "goal": [15.0, 0.0],
         "obstacles": [(7.5, 0.0, 2.0, "over_top_pillar")],
         "height": 8.0,
-        "bounds": (0.0, 15.5, -1.2, 1.2),
+        "bounds": (-6.5, 15.5, -1.2, 1.2),
     },
 }
 
