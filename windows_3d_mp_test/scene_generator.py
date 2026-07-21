@@ -30,24 +30,40 @@ def _random_forest_case(
     n,
     length=16.0,
     width=6.0,
-    min_start_clear=1.6,
+    min_start_clear=1.8,
+    min_goal_clear=1.2,
     height_range=None,
+    center_corridor_half_width=0.65,
+    center_corridor_max_radius=0.36,
+    max_center_corridor_obstacles=4,
 ):
     rng = random.Random(seed)
     obstacles = []
+    center_corridor_count = 0
     attempts = 0
-    while len(obstacles) < n and attempts < n * 80:
+    while len(obstacles) < n and attempts < n * 160:
         attempts += 1
         x = rng.uniform(2.0, length - 2.0)
         y = rng.uniform(-width * 0.5, width * 0.5)
         radius = rng.uniform(0.25, 0.55)
-        if x < min_start_clear and abs(y) < 1.2:
+
+        if x < min_start_clear and abs(y) < 1.4:
             continue
+        if x > length - min_goal_clear and abs(y) < 1.4:
+            continue
+
+        in_center_corridor = abs(y) < center_corridor_half_width
+        if in_center_corridor:
+            if center_corridor_count >= max_center_corridor_obstacles:
+                continue
+            radius = min(radius, center_corridor_max_radius)
+            if rng.random() < 0.45:
+                continue
 
         ok = True
         for obs in obstacles:
             obs_x, obs_y, obs_radius = obs[0], obs[1], obs[2]
-            min_sep = radius + obs_radius + 0.35
+            min_sep = radius + obs_radius + 0.45
             if (x - obs_x) ** 2 + (y - obs_y) ** 2 < min_sep ** 2:
                 ok = False
                 break
@@ -58,6 +74,8 @@ def _random_forest_case(
         if height_range is not None:
             obstacle = obstacle + (rng.uniform(height_range[0], height_range[1]),)
         obstacles.append(obstacle)
+        if in_center_corridor:
+            center_corridor_count += 1
 
     return {
         "start": [0.0, 0.0],
