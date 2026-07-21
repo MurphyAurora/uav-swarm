@@ -10,11 +10,12 @@ class MotionPrimitivePlanner:
     def __init__(
         self,
         min_altitude=0.5,
-        max_altitude=9.2,
+        max_altitude=9.8,
         vx_range=(0.5, 1.5),
         vy_range=(-0.5, 0.5),
         vz_range=(-0.3, 0.3),
         primitive_dt=0.2,
+        xy_bounds=None,
     ):
         self.cost = PrimitiveCost(max_climb_height=max_altitude - 0.2)
         self.min_altitude = float(min_altitude)
@@ -23,6 +24,7 @@ class MotionPrimitivePlanner:
         self.vy_range = tuple(float(v) for v in vy_range)
         self.vz_range = tuple(float(v) for v in vz_range)
         self.primitive_dt = float(primitive_dt)
+        self.xy_bounds = xy_bounds
         self.previous_velocity = None
         self.last_debug = None
 
@@ -39,6 +41,26 @@ class MotionPrimitivePlanner:
     def _inside_altitude_limits(self, trajectory):
         return np.all(trajectory[:, 2] >= self.min_altitude) and np.all(
             trajectory[:, 2] <= self.max_altitude
+        )
+
+    def _inside_xy_bounds(self, trajectory):
+        if self.xy_bounds is None:
+            return True
+
+        bounds = self.xy_bounds
+        if isinstance(bounds, dict):
+            x_min = bounds.get("x_min", bounds.get("xmin", -np.inf))
+            x_max = bounds.get("x_max", bounds.get("xmax", np.inf))
+            y_min = bounds.get("y_min", bounds.get("ymin", -np.inf))
+            y_max = bounds.get("y_max", bounds.get("ymax", np.inf))
+        else:
+            x_min, x_max, y_min, y_max = bounds
+
+        return bool(
+            np.all(trajectory[:, 0] >= float(x_min))
+            and np.all(trajectory[:, 0] <= float(x_max))
+            and np.all(trajectory[:, 1] >= float(y_min))
+            and np.all(trajectory[:, 1] <= float(y_max))
         )
 
     def reset(self):
@@ -58,6 +80,9 @@ class MotionPrimitivePlanner:
             velocity = primitive["velocity"]
 
             if not self._inside_altitude_limits(traj):
+                continue
+
+            if not self._inside_xy_bounds(traj):
                 continue
 
             if self.cost.has_hard_collision(traj, obstacles, times):
