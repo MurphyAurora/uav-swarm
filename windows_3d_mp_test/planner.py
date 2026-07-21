@@ -1,69 +1,91 @@
 import numpy as np
 
 from cost_function import PrimitiveCost
+from primitive import generate_velocity_primitives
 
 
 class MotionPrimitivePlanner:
-    """Simple 3D motion primitive selector for algorithm validation."""
+    """Velocity-sampled 3D motion primitive selector for validation."""
 
-    def __init__(self, min_altitude=0.5, max_altitude=8.0):
-        self.cost = PrimitiveCost()
+    def __init__(
+        self,
+        min_altitude=0.5,
+        max_altitude=9.2,
+        vx_range=(0.5, 1.5),
+        vy_range=(-0.5, 0.5),
+        vz_range=(-0.3, 0.3),
+        primitive_dt=0.2,
+    ):
+        self.cost = PrimitiveCost(max_climb_height=max_altitude - 0.2)
         self.min_altitude = float(min_altitude)
         self.max_altitude = float(max_altitude)
+        self.vx_range = tuple(float(v) for v in vx_range)
+        self.vy_range = tuple(float(v) for v in vy_range)
+        self.vz_range = tuple(float(v) for v in vz_range)
+        self.primitive_dt = float(primitive_dt)
+        self.previous_velocity = None
+        self.last_debug = None
 
-    def generate_primitives(self, state, speed=1.0, horizon=2.0, steps=20):
-        directions = [
-            (1, 0, 0),
-            (1, 0.5, 0),
-            (1, -0.5, 0),
-            (0.8, 0, 0.6),
-            (0.8, 0, -0.6),
-            (1, 0.5, 0.5),
-            (1, -0.5, 0.5),
-            (1, 0.5, -0.5),
-            (1, -0.5, -0.5),
-            (0, 0, 1),
-            (0, 0, -1),
-        ]
-
-        trajectories = []
-        times = np.linspace(0.0, horizon, steps)
-
-        for direction in directions:
-            velocity = np.array(direction, dtype=float)
-            velocity = velocity / np.linalg.norm(velocity) * speed
-            traj = np.array([state + velocity * t for t in times])
-            trajectories.append(traj)
-
-        return trajectories, times
+    def generate_primitives(self, state, horizon=2.0):
+        return generate_velocity_primitives(
+            state,
+            vx_range=self.vx_range,
+            vy_range=self.vy_range,
+            vz_range=self.vz_range,
+            horizon=horizon,
+            dt=self.primitive_dt,
+        )
 
     def _inside_altitude_limits(self, trajectory):
         return np.all(trajectory[:, 2] >= self.min_altitude) and np.all(
             trajectory[:, 2] <= self.max_altitude
         )
 
-    def plan(self, state, goal, obstacles, predict_time=2.0):
-        candidates, times = self.generate_primitives(state, horizon=predict_time)
+    def reset(self):
+        self.previous_velocity = None
+        self.last_debug = None
+
+    def plan(self, state, goal, obstacles, predict_time=2.0, update_previous=True):
+        candidates = self.generate_primitives(state, horizon=predict_time)
 
         best = None
-        best_cost = float("inf")
+        best_terms = None
+        best_velocity = None
 
-        for traj in candidates:
+        for primitive in candidates:
+            traj = primitive["trajectory"]
+            times = primitive["times"]
+            velocity = primitive["velocity"]
+
             if not self._inside_altitude_limits(traj):
                 continue
 
             if self.cost.has_hard_collision(traj, obstacles, times):
                 continue
 
-            cost = self.cost.total_cost(
+            terms = self.cost.evaluate(
                 traj,
                 np.array(goal, dtype=float),
                 obstacles,
-                times,
+                times=times,
+                velocity=velocity,
+                previous_velocity=self.previous_velocity,
             )
 
-            if cost < best_cost:
-                best_cost = cost
+            if best_terms is None or terms["total_cost"] < best_terms["total_cost"]:
                 best = traj
+                best_terms = terms
+                best_velocity = velocity
 
-        return best, best_cost
+        if best is None:
+            self.last_debug = None
+            return None, float("inf")
+
+        if update_previous:
+            self.previous_velocity = best_velocity.copy()
+
+        self.last_debug = {
+            "velocity": best_velocity.copy(),
+            "cost_terms": dict(best_terms),
+        }
+        return best, best_terms["total_cost"]
