@@ -8,10 +8,11 @@ class PrimitiveCost:
         self,
         goal_weight=1.0,
         collision_weight=80.0,
-        altitude_weight=1.2,
+        altitude_weight=1.6,
         smooth_weight=1.2,
         energy_weight=1.0,
-        transition_weight=7.0,
+        vertical_motion_weight=5.0,
+        transition_weight=10.0,
         top_clearance_weight=18.0,
         safe_distance=0.8,
         reference_height=3.0,
@@ -22,12 +23,14 @@ class PrimitiveCost:
         vertical_speed_limit=0.3,
         approach_speed_floor=0.5,
         max_climb_height=9.6,
+        min_climb_height=0.5,
     ):
         self.goal_weight = float(goal_weight)
         self.collision_weight = float(collision_weight)
         self.altitude_weight = float(altitude_weight)
         self.smooth_weight = float(smooth_weight)
         self.energy_weight = float(energy_weight)
+        self.vertical_motion_weight = float(vertical_motion_weight)
         self.transition_weight = float(transition_weight)
         self.top_clearance_weight = float(top_clearance_weight)
         self.safe_distance = float(safe_distance)
@@ -39,6 +42,7 @@ class PrimitiveCost:
         self.vertical_speed_limit = float(vertical_speed_limit)
         self.approach_speed_floor = float(approach_speed_floor)
         self.max_climb_height = float(max_climb_height)
+        self.min_climb_height = float(min_climb_height)
 
     def goal_cost(self, trajectory, goal):
         return float(np.linalg.norm(trajectory[-1] - goal))
@@ -71,6 +75,18 @@ class PrimitiveCost:
         outside = np.hypot(max(0.0, horizontal - obs.radius), vertical)
         return float(outside)
 
+    def minimum_clearance(self, trajectory, obstacles, times=None):
+        if not obstacles:
+            return float("inf")
+        if times is None:
+            times = np.zeros(len(trajectory))
+
+        min_clearance = float("inf")
+        for point, t in zip(trajectory, times):
+            for obs in obstacles:
+                min_clearance = min(min_clearance, self._clearance(point, obs, t))
+        return float(min_clearance)
+
     def _point_collision_penalty(self, point, obs, t):
         clearance = self._clearance(point, obs, t)
         inflated_clearance = clearance - self.safe_distance
@@ -94,14 +110,7 @@ class PrimitiveCost:
         return float(cost)
 
     def has_hard_collision(self, trajectory, obstacles, times=None):
-        if times is None:
-            times = np.zeros(len(trajectory))
-
-        for point, t in zip(trajectory, times):
-            for obs in obstacles:
-                if self._clearance(point, obs, t) < 0.0:
-                    return True
-        return False
+        return self.minimum_clearance(trajectory, obstacles, times) < 0.0
 
     def obstacle_risk(self, trajectory, obstacles, times=None):
         """Horizontal obstacle risk used only to modulate altitude stiffness."""
@@ -122,13 +131,8 @@ class PrimitiveCost:
                 risk = max(risk, 1.0 - normalized_distance / risk_distance)
         return float(np.clip(risk, 0.0, 1.0))
 
-    def altitude_cost(self, trajectory, obstacles=None, times=None):
-        """Risk-aware z reference cost with continuous weight scheduling.
-
-        Low horizontal risk keeps the UAV tightly near reference_height. High
-        horizontal risk lowers that penalty so climb primitives remain available,
-        but this term never creates a climb target by itself.
-        """
+    def altitude_deviation_cost(self, trajectory, obstacles=None, times=None):
+        """Penalize deviation from z_ref and softly reject very high/low flight."""
         obstacles = obstacles or []
         if times is None:
             times = np.zeros(len(trajectory))
@@ -143,8 +147,12 @@ class PrimitiveCost:
             cost += height_weight * (point[2] - self.reference_height) ** 2
 
         over_ceiling = np.maximum(0.0, trajectory[:, 2] - self.max_climb_height)
-        ceiling_cost = np.mean(over_ceiling ** 2) * 25.0
-        return float(cost / max(1, len(trajectory)) + ceiling_cost)
+        under_floor = np.maximum(0.0, self.min_climb_height - trajectory[:, 2])
+        envelope_cost = 25.0 * np.mean(over_ceiling ** 2 + under_floor ** 2)
+        return float(cost / max(1, len(trajectory)) + envelope_cost)
+
+    def altitude_cost(self, trajectory, obstacles=None, times=None):
+        return self.altitude_deviation_cost(trajectory, obstacles, times)
 
     def _top_required_height(self, obs, t):
         obs_pos = self._obs_position(obs, t)
@@ -156,13 +164,7 @@ class PrimitiveCost:
         return lateral_distance <= obs.radius + self.safe_distance
 
     def top_clearance_cost(self, trajectory, obstacles, times=None):
-        """Create an early climb ramp only for trajectories staying in the top corridor.
-
-        A side-bypass candidate moves out of the lateral corridor, so this term
-        fades out and height_cost pulls it back to reference height. A candidate
-        that remains horizontally aligned with the obstacle must start climbing
-        early enough to satisfy the top clearance before entering the cylinder.
-        """
+        """Create an early climb ramp only for trajectories staying in the top corridor."""
         if not obstacles:
             return 0.0
         if times is None:
@@ -204,12 +206,21 @@ class PrimitiveCost:
         vertical_effort = 3.0 * velocity[2] * velocity[2]
         return float(np.dot(velocity, velocity) + vertical_effort)
 
+    def vertical_motion_cost(self, velocity, previous_velocity=None):
+        velocity = np.asarray(velocity, dtype=float)
+        cost = velocity[2] * velocity[2]
+        if previous_velocity is not None:
+            previous_velocity = np.asarray(previous_velocity, dtype=float)
+            cost += 2.0 * (velocity[2] - previous_velocity[2]) ** 2
+        return float(cost)
+
     def transition_cost(self, velocity, previous_velocity=None):
         if previous_velocity is None:
             return 0.0
         velocity = np.asarray(velocity, dtype=float)
         previous_velocity = np.asarray(previous_velocity, dtype=float)
-        return float(np.sum((velocity - previous_velocity) ** 2))
+        delta = velocity - previous_velocity
+        return float(np.dot(delta, delta) + 2.0 * delta[2] * delta[2])
 
     def evaluate(self, trajectory, goal, obstacles, times=None, velocity=None, previous_velocity=None):
         if velocity is None:
@@ -224,23 +235,27 @@ class PrimitiveCost:
         terms = {
             "goal_cost": self.goal_cost(trajectory, goal),
             "collision_cost": self.collision_cost(trajectory, obstacles, times),
-            "height_cost": self.altitude_cost(trajectory, obstacles, times),
+            "altitude_deviation_cost": self.altitude_deviation_cost(trajectory, obstacles, times),
             "smooth_cost": self.smooth_cost(trajectory),
             "energy_cost": self.energy_cost(velocity),
+            "vertical_motion_cost": self.vertical_motion_cost(velocity, previous_velocity),
             "transition_cost": self.transition_cost(velocity, previous_velocity),
             "top_clearance_cost": self.top_clearance_cost(trajectory, obstacles, times),
         }
+        terms["height_cost"] = terms["altitude_deviation_cost"]
         total = (
             self.goal_weight * terms["goal_cost"]
             + self.collision_weight * terms["collision_cost"]
-            + self.altitude_weight * terms["height_cost"]
+            + self.altitude_weight * terms["altitude_deviation_cost"]
             + self.smooth_weight * terms["smooth_cost"]
             + self.energy_weight * terms["energy_cost"]
+            + self.vertical_motion_weight * terms["vertical_motion_cost"]
             + self.transition_weight * terms["transition_cost"]
             + self.top_clearance_weight * terms["top_clearance_cost"]
         )
         terms["total_cost"] = float(total)
         terms["obstacle_risk"] = self.obstacle_risk(trajectory, obstacles, times)
+        terms["minimum_clearance"] = self.minimum_clearance(trajectory, obstacles, times)
         return terms
 
     def total_cost(self, trajectory, goal, obstacles, times=None, velocity=None, previous_velocity=None):
