@@ -78,6 +78,15 @@ def _round_or_blank(value):
     return round(float(value), 6)
 
 
+def _parse_height_range(values):
+    if values is None:
+        return None
+    low, high = float(values[0]), float(values[1])
+    if low > high:
+        low, high = high, low
+    return (low, high)
+
+
 def _log_row(writer, step, sim_time, state, cost, debug, status, computation_time=0.0):
     if writer is None:
         return
@@ -205,6 +214,29 @@ def _print_metrics(metrics):
             print(f"  {key}: {value}")
 
 
+def _print_obstacle_summary(obstacles):
+    if not obstacles:
+        return
+    radii = [float(obs.radius) for obs in obstacles]
+    heights = [float(obs.height) for obs in obstacles]
+    print(
+        "obstacle radius range:",
+        round(min(radii), 3),
+        "to",
+        round(max(radii), 3),
+        "height range:",
+        round(min(heights), 3),
+        "to",
+        round(max(heights), 3),
+    )
+    print(
+        "first obstacle radius:",
+        round(float(obstacles[0].radius), 3),
+        "height:",
+        round(float(obstacles[0].height), 3),
+    )
+
+
 def run_simulation(
     scenario="forest_gap",
     pillar_height=5.0,
@@ -216,12 +248,16 @@ def run_simulation(
     show_plot=True,
     log_file=None,
     summary_file=None,
+    height_range=None,
+    height_seed=0,
 ):
     scene = make_scene(
         scenario,
         pillar_height=pillar_height,
         flight_height=flight_height,
         pillar_radius=pillar_radius,
+        height_range=height_range,
+        height_seed=height_seed,
     )
     state = scene["start"].copy()
     goal = scene["goal"].copy()
@@ -235,17 +271,15 @@ def run_simulation(
     print("scenario:", scene["name"])
     print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
     print("dt:", dt, "predict_time:", predict_time)
+    if height_range is not None:
+        print("height range:", height_range, "height seed:", height_seed)
     if log_file is not None:
         print("log file:", str(Path(log_file)))
     if summary_file is not None:
         print("summary file:", str(Path(summary_file)))
     if scene.get("bounds") is not None:
         print("xy bounds:", scene["bounds"])
-    if obstacles:
-        print(
-            "first obstacle radius:", round(float(obstacles[0].radius), 3),
-            "height:", round(float(obstacles[0].height), 3),
-        )
+    _print_obstacle_summary(obstacles)
 
     status = "max_steps"
     try:
@@ -309,6 +343,8 @@ def main():
     parser.add_argument("--pillar-height", type=float, default=5.0)
     parser.add_argument("--flight-height", type=float, default=3.0)
     parser.add_argument("--pillar-radius", type=float, default=None)
+    parser.add_argument("--height-range", nargs=2, type=float, default=None, metavar=("MIN", "MAX"))
+    parser.add_argument("--height-seed", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--dt", type=float, default=0.2)
     parser.add_argument("--predict-time", type=float, default=2.0)
@@ -328,6 +364,8 @@ def main():
         show_plot=not args.no_plot,
         log_file=args.log_file,
         summary_file=args.summary_file,
+        height_range=_parse_height_range(args.height_range),
+        height_seed=args.height_seed,
     )
 
 
