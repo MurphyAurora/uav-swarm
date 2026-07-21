@@ -66,6 +66,46 @@ def _case_runs(cases, seeds):
             yield run
 
 
+def _case_key(case):
+    return (
+        case["scenario"],
+        case.get("pillar_height"),
+        case.get("pillar_radius"),
+        case.get("height_range"),
+    )
+
+
+def _case_label(case):
+    label = case["scenario"]
+    parts = []
+    if case.get("pillar_height") is not None:
+        parts.append(f"h={case['pillar_height']}")
+    if case.get("pillar_radius") is not None:
+        parts.append(f"r={case['pillar_radius']}")
+    if case.get("height_range") is not None:
+        parts.append(f"height_range={case['height_range']}")
+    if parts:
+        label += " (" + ", ".join(parts) + ")"
+    return label
+
+
+def _pilot_cases(cases, pilot_seed):
+    seen = set()
+    for case in cases:
+        key = _case_key(case)
+        if key in seen:
+            continue
+        seen.add(key)
+        run = dict(case)
+        run["height_seed"] = int(pilot_seed) if "height_range" in run else 0
+        yield run
+
+
+def _filter_cases_by_pilot(cases, pilot_rows):
+    passed_keys = {_case_key(row["_case"]) for row in pilot_rows if row["success"]}
+    return [case for case in cases if _case_key(case) in passed_keys]
+
+
 def _run_one(run_id, case, args, run_log_dir):
     scenario = case["scenario"]
     height_seed = int(case.get("height_seed", 0))
@@ -111,6 +151,7 @@ def _run_one(run_id, case, args, run_log_dir):
         "avg_computation_time": _float_or_none(metrics["avg_computation_time"]),
         "max_computation_time": _float_or_none(metrics["max_computation_time"]),
         "log_file": str(run_log),
+        "_case": case,
     }
 
 
@@ -121,12 +162,20 @@ def _mean(rows, key):
     return statistics.mean(values)
 
 
+def _public_row(row):
+    return {key: row.get(key) for key in CSV_COLUMNS if key in row}
+
+
 def _aggregate(rows, pass_threshold):
     total = len(rows)
     successes = sum(1 for row in rows if row["success"])
     failures = [row for row in rows if not row["success"]]
     success_rate = successes / total if total else 0.0
-    collision_runs = sum(1 for row in rows if isinstance(row["collision_rate"], (int, float)) and row["collision_rate"] > 0.0)
+    collision_runs = sum(
+        1
+        for row in rows
+        if isinstance(row["collision_rate"], (int, float)) and row["collision_rate"] > 0.0
+    )
 
     by_scenario = {}
     for row in rows:
@@ -154,7 +203,7 @@ def _aggregate(rows, pass_threshold):
         "mean_height_variation": _mean(rows, "height_variation"),
         "mean_avg_computation_time": _mean(rows, "avg_computation_time"),
         "by_scenario": by_scenario,
-        "failed_runs": failures,
+        "failed_runs": [_public_row(row) | {"log_file": row.get("log_file")} for row in failures],
     }
 
 
@@ -162,6 +211,9 @@ def main():
     parser = argparse.ArgumentParser(description="Static-map success-rate benchmark for the 3D motion primitive planner.")
     parser.add_argument("--output-dir", default="logs/static_benchmark")
     parser.add_argument("--seeds", type=int, default=20, help="Height seeds for mixed-height benchmark cases.")
+    parser.add_argument("--pilot-first", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pilot-seed", type=int, default=0)
+    parser.add_argument("--include-pilot-failures", action="store_true")
     parser.add_argument("--pass-threshold", type=float, default=0.90)
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--dt", type=float, default=0.2)
@@ -175,9 +227,30 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     run_log_dir.mkdir(parents=True, exist_ok=True)
 
+    benchmark_cases = DEFAULT_CASES
+    pilot_rows = []
+    if args.pilot_first:
+        pilot_log_dir = output_dir / "pilot_logs"
+        pilot_log_dir.mkdir(parents=True, exist_ok=True)
+        pilot_runs = list(_pilot_cases(DEFAULT_CASES, args.pilot_seed))
+        print(f"pilot validation runs: {len(pilot_runs)}")
+        for run_id, case in enumerate(pilot_runs, start=1):
+            row = _run_one(run_id, case, args, pilot_log_dir)
+            pilot_rows.append(row)
+            mark = "PASS" if row["success"] else "FAIL"
+            print(
+                f"[pilot {run_id:03d}/{len(pilot_runs):03d}] {mark} "
+                f"case={_case_label(case)} status={row['status']} collision={row['collision_rate']}"
+            )
+
+        if not args.include_pilot_failures:
+            benchmark_cases = _filter_cases_by_pilot(DEFAULT_CASES, pilot_rows)
+            dropped = len(DEFAULT_CASES) - len(benchmark_cases)
+            print(f"pilot filter: dropped {dropped} candidate cases before multi-seed benchmark")
+
     seeds = list(range(args.seeds))
     rows = []
-    runs = list(_case_runs(DEFAULT_CASES, seeds))
+    runs = list(_case_runs(benchmark_cases, seeds))
     print(f"static benchmark runs: {len(runs)}")
 
     for run_id, case in enumerate(runs, start=1):
@@ -195,13 +268,27 @@ def main():
         writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: row.get(key) for key in CSV_COLUMNS})
+            writer.writerow(_public_row(row))
 
     summary = _aggregate(rows, args.pass_threshold)
+    summary.update(
+        {
+            "pilot_first": args.pilot_first,
+            "pilot_seed": args.pilot_seed,
+            "pilot_total": len(pilot_rows),
+            "pilot_successes": sum(1 for row in pilot_rows if row["success"]),
+            "pilot_failures": [
+                _public_row(row) | {"log_file": row.get("log_file")}
+                for row in pilot_rows
+                if not row["success"]
+            ],
+        }
+    )
     summary_path = output_dir / "static_benchmark_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print("summary:")
+    print(f"  pilot_successes: {summary['pilot_successes']}/{summary['pilot_total']}")
     print(f"  success_rate: {summary['success_rate']:.3f}")
     print(f"  successes: {summary['successes']}/{summary['total_runs']}")
     print(f"  collision_runs: {summary['collision_runs']}")
