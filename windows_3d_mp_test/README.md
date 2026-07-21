@@ -10,7 +10,8 @@
 - short-horizon kinematic rollout
 - spatio-temporal collision checking
 - previous-velocity transition cost
-- risk-aware altitude cost
+- risk-aware altitude weight scheduling
+- top clearance cost for over-obstacle motion
 - deterministic 3D validation scenes
 
 ## Structure
@@ -43,6 +44,18 @@ python windows_3d_mp_test\simulation.py --scenario forest_gap
 python windows_3d_mp_test\simulation.py --scenario no_obstacle
 ```
 
+低障碍侧绕验证。期望 `vz` 基本接近 `0`，`z` 维持在 `3m` 附近：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario test_side_bypass
+```
+
+高障碍越顶验证。该场景有窄 XY bounds，水平绕行空间受限，期望出现升高、通过、下降恢复：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario test_over_top
+```
+
 单柱绕行/爬升验证。默认单柱半径为 `1.6`：
 
 ```powershell
@@ -57,16 +70,10 @@ python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius
 python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius 2.4
 ```
 
-高阻挡验证。该场景为 start `(0,0,3)`、goal `(15,0,3)`、柱体中心 `(7.5,0)`、半径 `2`、高度 `8`：
-
-```powershell
-python windows_3d_mp_test\simulation.py --scenario high_block
-```
-
 只看终端调试输出、不弹出图像窗口：
 
 ```powershell
-python windows_3d_mp_test\simulation.py --scenario high_block --no-plot
+python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot
 ```
 
 地面动态障碍验证：
@@ -108,39 +115,39 @@ J = wg*J_goal
   + ws*J_smooth
   + we*J_energy
   + wt*J_transition
-  + wr*J_risk
+  + wtop*J_top_clearance
 ```
 
 其中：
 
 - goal cost: final distance to goal
 - collision cost: cylinder/sphere obstacle clearance over rollout time
-- altitude cost: keep reference height when safe, relax near obstacle risk
+- altitude cost: keep reference height with a risk-aware weight schedule
 - smooth cost: rollout smoothness
 - energy cost: velocity and climb/descent effort
 - transition cost: squared difference between current and previous primitive velocity
-- risk cost: deterministic predicted obstacle risk
+- top clearance cost: when inside the obstacle XY region, enforce `z > obstacle_height + safety_margin`
 
 ## Debug Output
 
 每一步会打印：
 
 ```text
-primitive: vx=... vy=... vz=... height=... collision=... transition=... risk=... risk_level=...
+primitive: vx=... vy=... vz=... goal=... collision=... height=... transition=... top_clearance=... risk_level=...
 ```
 
 判断逻辑：
 
-- `vz` 长期接近 `0`，且 `collision/risk` 很低：说明水平绕行已经更便宜
-- `collision/risk` 高但 `vz` 仍不升：说明高度、能量或 transition 权重仍压制爬升
-- `vz` 在正负之间快速切换，且 `transition` 高：说明动作连续性还需要继续加强
-- `max height` 很高但 `risk` 已低：说明高度上限或下降恢复项需要继续调
+- `test_side_bypass` 中 `vz` 长期接近 `0`：说明侧绕没有被无意义爬升污染
+- `top_clearance` 高且 `vz` 仍不升：说明越顶安全代价或预测时间还不够
+- `transition` 高且 `vz` 正负切换：说明动作连续性还需要继续加强
+- `max height` 很高但 `top_clearance` 已经低：说明高度上限或能量项需要继续调
 
 ## Validation Criteria
 
 - `no_obstacle`: 轨迹保持在 `z≈3`
-- `single_pillar`: 低/中等阻挡时优先平滑水平绕行
-- `high_block`: 出现有限高度变化，表现为 `z` 升高、通过障碍、再恢复
+- `test_side_bypass`: 低障碍优先平滑水平绕行，避免随机爬升
+- `test_over_top`: 高障碍在水平空间受限时升高，满足顶部安全间隙，通过后下降恢复
 - 禁止无限升高飞行
 - 禁止 climb/descend 高频震荡
 - 禁止大角度折线轨迹
