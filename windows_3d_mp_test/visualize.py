@@ -38,17 +38,7 @@ def _draw_sphere_marker(ax, center, radius, color="tab:red"):
     ax.scatter(center[0], center[1], center[2], s=max(30.0, radius * 160.0), c=color)
 
 
-def plot_result(uav_path, obstacles, goal=None, future_horizon=3.0, future_steps=8):
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(111, projection="3d")
-
-    uav_path = np.asarray(uav_path, dtype=float)
-    ax.plot(uav_path[:, 0], uav_path[:, 1], uav_path[:, 2], label="UAV trajectory")
-    ax.scatter(uav_path[0, 0], uav_path[0, 1], uav_path[0, 2], label="start")
-
-    if goal is not None:
-        ax.scatter(goal[0], goal[1], goal[2], label="goal")
-
+def _plot_obstacles(ax, obstacles, future_horizon=3.0, future_steps=8):
     for obs in obstacles:
         center = _position(obs)
         radius = float(_value(obs, "radius", 0.5))
@@ -72,10 +62,44 @@ def plot_result(uav_path, obstacles, goal=None, future_horizon=3.0, future_steps
                 alpha=0.8,
             )
 
+
+def _set_axes(ax, title=None):
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
     ax.set_box_aspect((1.8, 0.8, 0.7))
+    if title:
+        ax.set_title(title)
     ax.legend()
     plt.tight_layout()
+
+
+def plot_scene(start, goal, obstacles, title="3D obstacle scene"):
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
+
+    start = np.asarray(start, dtype=float)
+    goal = np.asarray(goal, dtype=float)
+    ax.scatter(start[0], start[1], start[2], label="start", c="tab:blue")
+    ax.scatter(goal[0], goal[1], goal[2], label="goal", c="tab:orange")
+    ax.plot([start[0], goal[0]], [start[1], goal[1]], [start[2], goal[2]], linestyle="--", color="0.45", alpha=0.6, label="start-goal line")
+
+    _plot_obstacles(ax, obstacles)
+    _set_axes(ax, title=title)
+    plt.show()
+
+
+def plot_result(uav_path, obstacles, goal=None, future_horizon=3.0, future_steps=8):
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
+
+    uav_path = np.asarray(uav_path, dtype=float)
+    ax.plot(uav_path[:, 0], uav_path[:, 1], uav_path[:, 2], label="UAV trajectory")
+    ax.scatter(uav_path[0, 0], uav_path[0, 1], uav_path[0, 2], label="start")
+
+    if goal is not None:
+        ax.scatter(goal[0], goal[1], goal[2], label="goal")
+
+    _plot_obstacles(ax, obstacles, future_horizon=future_horizon, future_steps=future_steps)
+    _set_axes(ax)
     plt.show()
