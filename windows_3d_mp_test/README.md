@@ -15,6 +15,7 @@
 - top clearance cost for over-obstacle motion
 - deterministic and randomized mixed-height 3D validation scenes
 - random forest generation with built-in spacing and corridor constraints
+- standalone scene preview mode
 - optional static map feasibility diagnostics
 - CSV logs and JSON summaries for trajectory/cost metrics
 
@@ -32,6 +33,29 @@ windows_3d_mp_test/
 ├── simulation.py
 ├── experiment.py
 └── README.md
+```
+
+## Scene Preview
+
+只预览地图，不运行 planner：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario s_curve_mixed_height --preview-scene
+python windows_3d_mp_test\simulation.py --scenario forest_gap_mixed_height --preview-scene
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_medium --preview-scene
+```
+
+预览随机高度地图：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario s_curve_medium --height-range 2 8 --height-seed 7 --preview-scene
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --height-range 2 8 --height-seed 21 --preview-scene
+```
+
+预览并同时打印静态 XY 可行性诊断：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_dense --preview-scene --check-feasibility
 ```
 
 ## Run
