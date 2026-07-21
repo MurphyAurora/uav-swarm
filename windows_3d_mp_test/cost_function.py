@@ -7,67 +7,66 @@ class PrimitiveCost:
     def __init__(
         self,
         goal_weight=1.0,
-        collision_weight=100.0,
-        altitude_weight=0.5,
-        smooth_weight=0.5,
-        energy_weight=2.0,
-        risk_weight=5.0,
+        collision_weight=80.0,
+        altitude_weight=0.8,
+        smooth_weight=1.2,
+        energy_weight=0.8,
+        transition_weight=6.0,
+        risk_weight=10.0,
         safe_distance=0.8,
         reference_height=3.0,
         hard_collision_penalty=1000.0,
+        risk_threshold=0.25,
+        max_climb_height=8.8,
     ):
-        self.goal_weight = goal_weight
-        self.collision_weight = collision_weight
-        self.altitude_weight = altitude_weight
-        self.smooth_weight = smooth_weight
-        self.energy_weight = energy_weight
-        self.risk_weight = risk_weight
-        self.safe_distance = safe_distance
-        self.reference_height = reference_height
-        self.hard_collision_penalty = hard_collision_penalty
+        self.goal_weight = float(goal_weight)
+        self.collision_weight = float(collision_weight)
+        self.altitude_weight = float(altitude_weight)
+        self.smooth_weight = float(smooth_weight)
+        self.energy_weight = float(energy_weight)
+        self.transition_weight = float(transition_weight)
+        self.risk_weight = float(risk_weight)
+        self.safe_distance = float(safe_distance)
+        self.reference_height = float(reference_height)
+        self.hard_collision_penalty = float(hard_collision_penalty)
+        self.risk_threshold = float(risk_threshold)
+        self.max_climb_height = float(max_climb_height)
 
     def goal_cost(self, trajectory, goal):
-        return np.linalg.norm(trajectory[-1] - goal)
+        return float(np.linalg.norm(trajectory[-1] - goal))
 
     def _obs_position(self, obs, t):
         if hasattr(obs, "position_at"):
             return np.asarray(obs.position_at(t), dtype=float)
         return np.asarray(obs.position, dtype=float)
 
-    def _cylinder_penalty(self, point, obs, t):
+    def _clearance(self, point, obs, t):
         obs_pos = self._obs_position(obs, t)
+        if getattr(obs, "is_flying", False):
+            return float(np.linalg.norm(point - obs_pos) - obs.radius)
+
         horizontal = np.linalg.norm(point[:2] - obs_pos[:2])
-        inflated_radius = obs.radius + self.safe_distance
-        z_min = obs_pos[2] - self.safe_distance
-        z_max = obs_pos[2] + obs.height + self.safe_distance
+        if obs_pos[2] <= point[2] <= obs_pos[2] + obs.height:
+            return float(horizontal - obs.radius)
 
-        if not (z_min <= point[2] <= z_max):
+        if point[2] < obs_pos[2]:
+            vertical = obs_pos[2] - point[2]
+        else:
+            vertical = point[2] - (obs_pos[2] + obs.height)
+        outside = np.hypot(max(0.0, horizontal - obs.radius), vertical)
+        return float(outside)
+
+    def _point_collision_penalty(self, point, obs, t):
+        clearance = self._clearance(point, obs, t)
+        inflated_clearance = clearance - self.safe_distance
+        if inflated_clearance >= 0.0:
             return 0.0
 
-        if horizontal >= inflated_radius:
-            return 0.0
-
-        margin = inflated_radius - horizontal
-        penalty = margin ** 2
-
-        if horizontal < obs.radius and obs_pos[2] <= point[2] <= obs_pos[2] + obs.height:
+        margin = -inflated_clearance
+        penalty = margin * margin
+        if clearance < 0.0:
             penalty += self.hard_collision_penalty
-
-        return penalty
-
-    def _sphere_penalty(self, point, obs, t):
-        obs_pos = self._obs_position(obs, t)
-        distance = np.linalg.norm(point - obs_pos)
-        inflated_radius = obs.radius + self.safe_distance
-
-        if distance >= inflated_radius:
-            return 0.0
-
-        margin = inflated_radius - distance
-        penalty = margin ** 2
-        if distance < obs.radius:
-            penalty += self.hard_collision_penalty
-        return penalty
+        return float(penalty)
 
     def collision_cost(self, trajectory, obstacles, times=None):
         if times is None:
@@ -76,11 +75,8 @@ class PrimitiveCost:
         cost = 0.0
         for point, t in zip(trajectory, times):
             for obs in obstacles:
-                if getattr(obs, "is_flying", False):
-                    cost += self._sphere_penalty(point, obs, t)
-                else:
-                    cost += self._cylinder_penalty(point, obs, t)
-        return cost
+                cost += self._point_collision_penalty(point, obs, t)
+        return float(cost)
 
     def has_hard_collision(self, trajectory, obstacles, times=None):
         if times is None:
@@ -88,40 +84,105 @@ class PrimitiveCost:
 
         for point, t in zip(trajectory, times):
             for obs in obstacles:
-                obs_pos = self._obs_position(obs, t)
-                if getattr(obs, "is_flying", False):
-                    if np.linalg.norm(point - obs_pos) < obs.radius:
-                        return True
-                else:
-                    horizontal = np.linalg.norm(point[:2] - obs_pos[:2])
-                    inside_height = obs_pos[2] <= point[2] <= obs_pos[2] + obs.height
-                    if horizontal < obs.radius and inside_height:
-                        return True
+                if self._clearance(point, obs, t) < 0.0:
+                    return True
         return False
 
-    def altitude_cost(self, trajectory):
-        return np.sum((trajectory[:, 2] - self.reference_height) ** 2)
+    def obstacle_risk(self, trajectory, obstacles, times=None):
+        if not obstacles:
+            return 0.0
+        if times is None:
+            times = np.zeros(len(trajectory))
+
+        risk = 0.0
+        risk_radius = max(self.safe_distance * 4.0, 1e-6)
+        for point, t in zip(trajectory, times):
+            for obs in obstacles:
+                clearance = self._clearance(point, obs, t)
+                if clearance < 0.0:
+                    return 1.0
+                if clearance < risk_radius:
+                    risk = max(risk, 1.0 - clearance / risk_radius)
+        return float(np.clip(risk, 0.0, 1.0))
+
+    def altitude_cost(self, trajectory, obstacles=None, times=None):
+        """Keep z near reference when safe, relax it near obstacle risk.
+
+        Risk reduces the reference-height attraction so the planner is allowed
+        to climb. A soft ceiling still prevents unlimited altitude growth.
+        """
+        risk = self.obstacle_risk(trajectory, obstacles or [], times)
+        if risk < self.risk_threshold:
+            effective_weight = 1.0
+        else:
+            effective_weight = max(0.10, 1.0 - 0.90 * risk)
+
+        reference_error = np.mean((trajectory[:, 2] - self.reference_height) ** 2)
+        over_ceiling = np.maximum(0.0, trajectory[:, 2] - self.max_climb_height)
+        ceiling_cost = np.mean(over_ceiling ** 2) * 25.0
+        return float(effective_weight * reference_error + ceiling_cost)
 
     def smooth_cost(self, trajectory):
         if len(trajectory) < 3:
             return 0.0
         velocity = np.diff(trajectory, axis=0)
         acceleration = np.diff(velocity, axis=0)
-        return np.sum(acceleration ** 2)
+        return float(np.sum(acceleration ** 2))
 
-    def energy_cost(self, trajectory):
-        velocity = np.diff(trajectory, axis=0)
-        return np.sum(velocity ** 2)
+    def energy_cost(self, velocity):
+        velocity = np.asarray(velocity, dtype=float)
+        vertical_effort = 2.0 * velocity[2] * velocity[2]
+        return float(np.dot(velocity, velocity) + vertical_effort)
+
+    def transition_cost(self, velocity, previous_velocity=None):
+        if previous_velocity is None:
+            return 0.0
+        velocity = np.asarray(velocity, dtype=float)
+        previous_velocity = np.asarray(previous_velocity, dtype=float)
+        return float(np.sum((velocity - previous_velocity) ** 2))
 
     def risk_cost(self, trajectory, obstacles, times=None):
-        return self.collision_cost(trajectory, obstacles, times)
+        risk = self.obstacle_risk(trajectory, obstacles, times)
+        return float(risk * risk)
 
-    def total_cost(self, trajectory, goal, obstacles, times=None):
-        return (
-            self.goal_weight * self.goal_cost(trajectory, goal)
-            + self.collision_weight * self.collision_cost(trajectory, obstacles, times)
-            + self.altitude_weight * self.altitude_cost(trajectory)
-            + self.smooth_weight * self.smooth_cost(trajectory)
-            + self.energy_weight * self.energy_cost(trajectory)
-            + self.risk_weight * self.risk_cost(trajectory, obstacles, times)
+    def evaluate(self, trajectory, goal, obstacles, times=None, velocity=None, previous_velocity=None):
+        if velocity is None:
+            if len(trajectory) >= 2:
+                dt = 1.0
+                if times is not None and len(times) >= 2:
+                    dt = max(1e-6, float(times[1] - times[0]))
+                velocity = (trajectory[1] - trajectory[0]) / dt
+            else:
+                velocity = np.zeros(3)
+
+        terms = {
+            "goal_cost": self.goal_cost(trajectory, goal),
+            "collision_cost": self.collision_cost(trajectory, obstacles, times),
+            "height_cost": self.altitude_cost(trajectory, obstacles, times),
+            "smooth_cost": self.smooth_cost(trajectory),
+            "energy_cost": self.energy_cost(velocity),
+            "transition_cost": self.transition_cost(velocity, previous_velocity),
+            "risk_cost": self.risk_cost(trajectory, obstacles, times),
+        }
+        total = (
+            self.goal_weight * terms["goal_cost"]
+            + self.collision_weight * terms["collision_cost"]
+            + self.altitude_weight * terms["height_cost"]
+            + self.smooth_weight * terms["smooth_cost"]
+            + self.energy_weight * terms["energy_cost"]
+            + self.transition_weight * terms["transition_cost"]
+            + self.risk_weight * terms["risk_cost"]
         )
+        terms["total_cost"] = float(total)
+        terms["obstacle_risk"] = self.obstacle_risk(trajectory, obstacles, times)
+        return terms
+
+    def total_cost(self, trajectory, goal, obstacles, times=None, velocity=None, previous_velocity=None):
+        return self.evaluate(
+            trajectory,
+            goal,
+            obstacles,
+            times=times,
+            velocity=velocity,
+            previous_velocity=previous_velocity,
+        )["total_cost"]
