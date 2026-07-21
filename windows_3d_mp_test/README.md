@@ -4,13 +4,14 @@
 
 ## Current Focus
 
-当前阶段不是重新设计二维场景，而是继承 `scripts/offline_scenarios` 中已经验证过的二维 XY 障碍分布，并补充：
+当前阶段保持 Motion Primitive + Cost Function 架构，但把离散动作扩展为速度空间采样：
 
-- 3D cylinder obstacle model
-- dynamic obstacle motion model
-- cylindrical collision checking
-- 3D trajectory visualization
-- lifted `forest_gap` validation scene
+- continuous velocity sampled primitive
+- short-horizon kinematic rollout
+- spatio-temporal collision checking
+- previous-velocity transition cost
+- risk-aware altitude cost
+- deterministic 3D validation scenes
 
 ## Structure
 
@@ -36,7 +37,13 @@ cd D:\uav-swarm
 python windows_3d_mp_test\simulation.py --scenario forest_gap
 ```
 
-单柱绕行/爬升验证。默认单柱半径已放大到 `1.6`：
+无障碍高度保持验证：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario no_obstacle
+```
+
+单柱绕行/爬升验证。默认单柱半径为 `1.6`：
 
 ```powershell
 python windows_3d_mp_test\simulation.py --scenario single_pillar
@@ -50,10 +57,16 @@ python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius
 python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius 2.4
 ```
 
-高柱验证：
+高阻挡验证。该场景为 start `(0,0,3)`、goal `(15,0,3)`、柱体中心 `(7.5,0)`、半径 `2`、高度 `8`：
 
 ```powershell
-python windows_3d_mp_test\simulation.py --scenario forest_gap_high
+python windows_3d_mp_test\simulation.py --scenario high_block
+```
+
+只看终端调试输出、不弹出图像窗口：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario high_block --no-plot
 ```
 
 地面动态障碍验证：
@@ -71,11 +84,11 @@ python windows_3d_mp_test\simulation.py --scenario forest_gap_flying
 ## Planning Flow
 
 ```text
-3D scene
+3D state
     |
-Dynamic obstacle model
+Velocity-space primitive sampling
     |
-Motion primitive rollout
+Kinematic rollout
     |
 Spatio-temporal collision checking
     |
@@ -94,23 +107,40 @@ J = wg*J_goal
   + wh*J_altitude
   + ws*J_smooth
   + we*J_energy
+  + wt*J_transition
   + wr*J_risk
 ```
 
 其中：
 
 - goal cost: final distance to goal
-- collision cost: cylinder/sphere obstacle clearance
-- altitude cost: deviation from reference height
-- smooth cost: acceleration-like trajectory smoothness
+- collision cost: cylinder/sphere obstacle clearance over rollout time
+- altitude cost: keep reference height when safe, relax near obstacle risk
+- smooth cost: rollout smoothness
 - energy cost: velocity and climb/descent effort
+- transition cost: squared difference between current and previous primitive velocity
 - risk cost: deterministic predicted obstacle risk
 
-## Stage-1 Validation Criteria
+## Debug Output
 
-- `forest_gap` 的 XY 障碍分布来自 `scripts/offline_scenarios/static_cases.py`
-- 二维圆障碍被提升为 z=0 起始的三维柱体
-- 柱体可视化包含侧面、顶面和底面
-- 碰撞检测区分柱体障碍和飞行障碍
-- Planner 会跳过硬碰撞 primitive
-- 输出最大高度和高度变化量，用于检查是否出现无限爬升或频繁升降
+每一步会打印：
+
+```text
+primitive: vx=... vy=... vz=... height=... collision=... transition=... risk=... risk_level=...
+```
+
+判断逻辑：
+
+- `vz` 长期接近 `0`，且 `collision/risk` 很低：说明水平绕行已经更便宜
+- `collision/risk` 高但 `vz` 仍不升：说明高度、能量或 transition 权重仍压制爬升
+- `vz` 在正负之间快速切换，且 `transition` 高：说明动作连续性还需要继续加强
+- `max height` 很高但 `risk` 已低：说明高度上限或下降恢复项需要继续调
+
+## Validation Criteria
+
+- `no_obstacle`: 轨迹保持在 `z≈3`
+- `single_pillar`: 低/中等阻挡时优先平滑水平绕行
+- `high_block`: 出现有限高度变化，表现为 `z` 升高、通过障碍、再恢复
+- 禁止无限升高飞行
+- 禁止 climb/descend 高频震荡
+- 禁止大角度折线轨迹
