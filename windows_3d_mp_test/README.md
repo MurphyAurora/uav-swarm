@@ -15,6 +15,7 @@
 - top clearance cost for over-obstacle motion
 - deterministic and randomized mixed-height 3D validation scenes
 - lifted 2D benchmark maps as 3D cylinder scenes
+- static map feasibility precheck for random scene filtering
 - CSV logs and JSON summaries for trajectory/cost metrics
 
 ## Structure
@@ -24,6 +25,7 @@ windows_3d_mp_test/
 ├── primitive.py
 ├── obstacle.py
 ├── cost_function.py
+├── feasibility.py
 ├── planner.py
 ├── scene_generator.py
 ├── visualize.py
@@ -88,6 +90,26 @@ python windows_3d_mp_test\simulation.py --scenario forest_gap --height-range 2 8
 python windows_3d_mp_test\simulation.py --scenario random_forest_medium --height-range 2 8 --height-seed 21
 ```
 
+随机或密集地图建议先看可行性预检查。默认会打印 `feasible_xy`、`feasibility_reason`、`xy_min_clearance`：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_dense --no-plot
+```
+
+如果只想统计可行静态地图，使用 `--require-feasible`。不可行地图会被标记为 `status=infeasible_map` 并跳过规划：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_dense --require-feasible --no-plot --summary-file logs\dense_prechecked_summary.json
+```
+
+预检查参数：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --height-range 2 8 --height-seed 21 --feasibility-resolution 0.15 --feasibility-margin 0.8
+```
+
+说明：`feasibility.py` 只做 XY 平面膨胀障碍连通性检查，不替代 3D planner。它用于剔除随机生成时本身无路的地图，避免把地图不可行误算成 planner 失败。
+
 单柱绕行/爬升验证。默认单柱半径为 `1.6`：
 
 ```powershell
@@ -125,7 +147,7 @@ step,time,x,y,z,vx,vy,vz,total_cost,goal_cost,collision_cost,altitude_deviation_
 JSON 汇总指标包括：
 
 ```text
-success_rate,collision_rate,path_length,flight_time,minimum_clearance,max_altitude,height_variation,computation_time,avg_computation_time,max_computation_time,status,steps
+success_rate,collision_rate,path_length,flight_time,minimum_clearance,max_altitude,height_variation,computation_time,avg_computation_time,max_computation_time,status,steps,feasible_xy,feasibility_reason,xy_path_length,xy_min_clearance
 ```
 
 地面动态障碍验证：
@@ -204,6 +226,7 @@ primitive: vx=... vy=... vz=... goal=... collision=... altitude=... vertical=...
 - `test_over_top`: 高障碍在水平空间受限时升高，满足顶部安全间隙，通过后下降恢复
 - `s_curve_*` / `forest_*`: 二维多障碍地图被提升为三维柱体后，检查连续绕行、局部越障和高度恢复
 - `*_mixed_height` / `--height-range`: 同时验证水平绕行、局部爬升、以及高度恢复
+- 静态地图成功率评估应优先统计 `feasible_xy=true` 的地图
 - 禁止无限升高飞行
 - 禁止 climb/descend 高频震荡
 - 禁止大角度折线轨迹
