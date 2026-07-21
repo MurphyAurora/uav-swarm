@@ -34,7 +34,7 @@ class MotionPrimitivePlanner:
         distance_to_goal = float(np.linalg.norm(np.asarray(goal, dtype=float) - np.asarray(state, dtype=float)))
         if distance_to_goal > self.goal_slowdown_distance:
             return self.forward_speed_range
-        return (0.0, min(0.8, self.forward_speed_range[1]))
+        return (0.15, min(0.8, self.forward_speed_range[1]))
 
     def generate_primitives(self, state, goal=None, horizon=2.0):
         if goal is None:
