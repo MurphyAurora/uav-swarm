@@ -13,7 +13,7 @@
 - altitude deviation cost around `z_ref=3`
 - vertical motion cost for `vz` and `delta_vz`
 - top clearance cost for over-obstacle motion
-- deterministic 3D validation scenes
+- deterministic and randomized mixed-height 3D validation scenes
 - lifted 2D benchmark maps as 3D cylinder scenes
 - CSV logs and JSON summaries for trajectory/cost metrics
 
@@ -70,11 +70,22 @@ python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar
 python windows_3d_mp_test\simulation.py --scenario random_forest_dense --pillar-height 5
 ```
 
-如果要测试更强的三维越障倾向，可以提高柱体高度：
+固定混合高度场景。部分障碍较低，部分障碍较高，用于避免实验全部变成绕行或全部变成爬升：
 
 ```powershell
-python windows_3d_mp_test\simulation.py --scenario s_curve_medium --pillar-height 8
-python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 8
+python windows_3d_mp_test\simulation.py --scenario s_curve_mixed_height
+python windows_3d_mp_test\simulation.py --scenario forest_gap_mixed_height
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_sparse
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_medium
+python windows_3d_mp_test\simulation.py --scenario random_forest_mixed_dense
+```
+
+对任意二维地图随机采样每个障碍的高度：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario s_curve_medium --height-range 2 8 --height-seed 7
+python windows_3d_mp_test\simulation.py --scenario forest_gap --height-range 2 8 --height-seed 11
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --height-range 2 8 --height-seed 21
 ```
 
 单柱绕行/爬升验证。默认单柱半径为 `1.6`：
@@ -101,7 +112,7 @@ python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot
 
 ```powershell
 python windows_3d_mp_test\simulation.py --scenario s_curve_easy --pillar-height 3.5 --no-plot --log-file logs\s_curve_easy_3d.csv --summary-file logs\s_curve_easy_3d_summary.json
-python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 5 --no-plot --log-file logs\forest_medium_3d.csv --summary-file logs\forest_medium_3d_summary.json
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --height-range 2 8 --height-seed 21 --no-plot --log-file logs\forest_medium_3d.csv --summary-file logs\forest_medium_3d_summary.json
 python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot --log-file logs\test_over_top.csv --summary-file logs\test_over_top_summary.json
 ```
 
@@ -192,6 +203,7 @@ primitive: vx=... vy=... vz=... goal=... collision=... altitude=... vertical=...
 - `test_side_bypass`: 低障碍优先平滑水平绕行，避免随机爬升
 - `test_over_top`: 高障碍在水平空间受限时升高，满足顶部安全间隙，通过后下降恢复
 - `s_curve_*` / `forest_*`: 二维多障碍地图被提升为三维柱体后，检查连续绕行、局部越障和高度恢复
+- `*_mixed_height` / `--height-range`: 同时验证水平绕行、局部爬升、以及高度恢复
 - 禁止无限升高飞行
 - 禁止 climb/descend 高频震荡
 - 禁止大角度折线轨迹
