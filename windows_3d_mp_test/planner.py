@@ -43,19 +43,30 @@ class MotionPrimitivePlanner:
             trajectory[:, 2] <= self.max_altitude
         )
 
+    def _bounds_tuple(self):
+        bounds = self.xy_bounds
+        if bounds is None:
+            return None
+
+        if isinstance(bounds, dict):
+            return (
+                bounds.get("x_min", bounds.get("xmin", -np.inf)),
+                bounds.get("x_max", bounds.get("xmax", np.inf)),
+                bounds.get("y_min", bounds.get("ymin", -np.inf)),
+                bounds.get("y_max", bounds.get("ymax", np.inf)),
+            )
+
+        if all(hasattr(bounds, name) for name in ("xmin", "xmax", "ymin", "ymax")):
+            return bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax
+
+        return tuple(bounds)
+
     def _inside_xy_bounds(self, trajectory):
-        if self.xy_bounds is None:
+        bounds = self._bounds_tuple()
+        if bounds is None:
             return True
 
-        bounds = self.xy_bounds
-        if isinstance(bounds, dict):
-            x_min = bounds.get("x_min", bounds.get("xmin", -np.inf))
-            x_max = bounds.get("x_max", bounds.get("xmax", np.inf))
-            y_min = bounds.get("y_min", bounds.get("ymin", -np.inf))
-            y_max = bounds.get("y_max", bounds.get("ymax", np.inf))
-        else:
-            x_min, x_max, y_min, y_max = bounds
-
+        x_min, x_max, y_min, y_max = bounds
         return bool(
             np.all(trajectory[:, 0] >= float(x_min))
             and np.all(trajectory[:, 0] <= float(x_max))
