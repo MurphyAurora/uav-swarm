@@ -183,17 +183,35 @@ class PrimitiveCost:
         lateral_distance = abs(point[1] - obs_pos[1])
         return lateral_distance <= obs.radius + self.safe_distance
 
-    def top_clearance_cost(self, trajectory, obstacles, times=None):
-        """Create an early climb ramp only for trajectories staying in the top corridor."""
+    def _obstacle_between_state_and_goal(self, state, goal, obs, t):
+        obs_pos = self._obs_position(obs, t)
+        to_goal = np.asarray(goal[:2], dtype=float) - np.asarray(state[:2], dtype=float)
+        goal_distance = float(np.linalg.norm(to_goal))
+        if goal_distance < 1e-6:
+            return False
+
+        to_obs = obs_pos[:2] - np.asarray(state[:2], dtype=float)
+        along_track = float(np.dot(to_obs, to_goal / goal_distance))
+        if along_track < -self.safe_distance:
+            return False
+        if along_track > goal_distance + obs.radius + self.safe_distance:
+            return False
+        return True
+
+    def top_clearance_cost(self, trajectory, obstacles, times=None, goal=None):
+        """Create an early climb ramp only for forward obstacles in the top corridor."""
         if not obstacles:
             return 0.0
         if times is None:
             times = np.zeros(len(trajectory))
 
         cost = 0.0
+        state = trajectory[0]
         for point, t in zip(trajectory, times):
             for obs in obstacles:
                 if getattr(obs, "is_flying", False):
+                    continue
+                if goal is not None and not self._obstacle_between_state_and_goal(state, goal, obs, t):
                     continue
                 if not self._inside_over_top_corridor(point, obs, t):
                     continue
@@ -262,7 +280,7 @@ class PrimitiveCost:
             "energy_cost": self.energy_cost(velocity),
             "vertical_motion_cost": self.vertical_motion_cost(velocity, previous_velocity),
             "transition_cost": self.transition_cost(velocity, previous_velocity),
-            "top_clearance_cost": self.top_clearance_cost(trajectory, obstacles, times),
+            "top_clearance_cost": self.top_clearance_cost(trajectory, obstacles, times, goal),
         }
         terms["height_cost"] = terms["altitude_deviation_cost"]
         total = (
