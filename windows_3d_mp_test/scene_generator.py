@@ -21,7 +21,18 @@ DEFAULT_HEIGHTS = {
 DEFAULT_SINGLE_PILLAR_RADIUS = 1.6
 
 
-def _random_forest_case(seed, n, length=16.0, width=6.0, min_start_clear=1.6):
+def _heighted_obstacles(obstacles, heights):
+    return [tuple(obstacle) + (float(height),) for obstacle, height in zip(obstacles, heights)]
+
+
+def _random_forest_case(
+    seed,
+    n,
+    length=16.0,
+    width=6.0,
+    min_start_clear=1.6,
+    height_range=None,
+):
     rng = random.Random(seed)
     obstacles = []
     attempts = 0
@@ -34,14 +45,19 @@ def _random_forest_case(seed, n, length=16.0, width=6.0, min_start_clear=1.6):
             continue
 
         ok = True
-        for obs_x, obs_y, obs_radius, _ in obstacles:
+        for obs in obstacles:
+            obs_x, obs_y, obs_radius = obs[0], obs[1], obs[2]
             min_sep = radius + obs_radius + 0.35
             if (x - obs_x) ** 2 + (y - obs_y) ** 2 < min_sep ** 2:
                 ok = False
                 break
         if not ok:
             continue
-        obstacles.append((x, y, radius, f"tree_{len(obstacles):02d}"))
+
+        obstacle = (x, y, radius, f"tree_{len(obstacles):02d}")
+        if height_range is not None:
+            obstacle = obstacle + (rng.uniform(height_range[0], height_range[1]),)
+        obstacles.append(obstacle)
 
     return {
         "start": [0.0, 0.0],
@@ -49,6 +65,24 @@ def _random_forest_case(seed, n, length=16.0, width=6.0, min_start_clear=1.6):
         "obstacles": obstacles,
         "bounds": (-0.6, length + 0.5, -width * 0.5, width * 0.5),
     }
+
+
+S_CURVE_MEDIUM_OBSTACLES = [
+    (2.8, -0.50, 0.58, "s1"),
+    (4.9, 0.55, 0.58, "s2"),
+    (7.0, -0.55, 0.58, "s3"),
+    (9.1, 0.55, 0.58, "s4"),
+    (11.2, -0.50, 0.58, "s5"),
+]
+
+FOREST_GAP_OBSTACLES = [
+    (3.0, -1.25, 0.36, "p1"),
+    (4.6, 1.35, 0.36, "p2"),
+    (6.3, 0.30, 0.40, "p3"),
+    (8.3, -1.35, 0.38, "p4"),
+    (10.0, 1.25, 0.38, "p5"),
+    (11.8, 0.15, 0.36, "p6"),
+]
 
 
 # Mirrored from scripts/offline_scenarios/static_cases.py and generated_cases.py.
@@ -62,14 +96,13 @@ FALLBACK_CASES = {
     "forest_gap": {
         "start": [0.0, 0.0],
         "goal": [16.0, 0.0],
-        "obstacles": [
-            (3.0, -1.25, 0.36, "p1"),
-            (4.6, 1.35, 0.36, "p2"),
-            (6.3, 0.30, 0.40, "p3"),
-            (8.3, -1.35, 0.38, "p4"),
-            (10.0, 1.25, 0.38, "p5"),
-            (11.8, 0.15, 0.36, "p6"),
-        ],
+        "obstacles": FOREST_GAP_OBSTACLES,
+        "bounds": (-0.6, 16.5, -3.4, 3.4),
+    },
+    "forest_gap_mixed_height": {
+        "start": [0.0, 0.0],
+        "goal": [16.0, 0.0],
+        "obstacles": _heighted_obstacles(FOREST_GAP_OBSTACLES, [2.4, 6.2, 3.2, 7.5, 4.0, 6.8]),
         "bounds": (-0.6, 16.5, -3.4, 3.4),
     },
     "s_curve_easy": {
@@ -86,18 +119,21 @@ FALLBACK_CASES = {
     "s_curve_medium": {
         "start": [0.0, 0.0],
         "goal": [14.0, 0.0],
-        "obstacles": [
-            (2.8, -0.50, 0.58, "s1"),
-            (4.9, 0.55, 0.58, "s2"),
-            (7.0, -0.55, 0.58, "s3"),
-            (9.1, 0.55, 0.58, "s4"),
-            (11.2, -0.50, 0.58, "s5"),
-        ],
+        "obstacles": S_CURVE_MEDIUM_OBSTACLES,
+        "bounds": (-0.6, 14.5, -2.1, 2.1),
+    },
+    "s_curve_mixed_height": {
+        "start": [0.0, 0.0],
+        "goal": [14.0, 0.0],
+        "obstacles": _heighted_obstacles(S_CURVE_MEDIUM_OBSTACLES, [2.2, 7.2, 3.8, 6.4, 2.8]),
         "bounds": (-0.6, 14.5, -2.1, 2.1),
     },
     "random_forest_sparse": _random_forest_case(seed=0, n=12, width=6.5),
     "random_forest_medium": _random_forest_case(seed=1, n=20, width=6.0),
     "random_forest_dense": _random_forest_case(seed=2, n=30, width=6.0),
+    "random_forest_mixed_sparse": _random_forest_case(seed=10, n=12, width=6.5, height_range=(2.0, 8.0)),
+    "random_forest_mixed_medium": _random_forest_case(seed=11, n=20, width=6.0, height_range=(2.0, 8.0)),
+    "random_forest_mixed_dense": _random_forest_case(seed=12, n=30, width=6.0, height_range=(2.0, 8.0)),
     "single_pillar": {
         "start": [0.0, 0.0],
         "goal": [12.0, 0.0],
@@ -145,7 +181,7 @@ def _vec3_to_array(vec, fallback_z=3.0):
     )
 
 
-def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
+def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None, height_range=None, height_seed=0):
     try:
         data = FALLBACK_CASES[case_name]
     except KeyError as exc:
@@ -155,8 +191,13 @@ def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
         ) from exc
 
     scenario_height = float(data.get("height", pillar_height))
+    height_rng = random.Random(height_seed)
     obstacles = []
-    for x, y, radius, obstacle_id in data["obstacles"]:
+    for obstacle in data["obstacles"]:
+        x, y, radius, obstacle_id = obstacle[:4]
+        obstacle_height = float(obstacle[4]) if len(obstacle) >= 5 else scenario_height
+        if height_range is not None:
+            obstacle_height = height_rng.uniform(height_range[0], height_range[1])
         if case_name == "single_pillar" and pillar_radius is not None:
             radius = float(pillar_radius)
         obstacles.append(
@@ -164,7 +205,7 @@ def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
                 x=x,
                 y=y,
                 radius=radius,
-                height=scenario_height,
+                height=obstacle_height,
                 obstacle_id=obstacle_id,
             )
         )
@@ -178,28 +219,50 @@ def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
     }
 
 
-def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_radius=None):
+def load_offline_case(
+    case_name="forest_gap",
+    pillar_height=5.0,
+    flight_height=3.0,
+    pillar_radius=None,
+    height_range=None,
+    height_seed=0,
+):
     """Lift a 2D offline scenario into a 3D cylinder scene.
 
     The XY obstacle distribution is preserved exactly. Only z=0 and obstacle
     height are added, which keeps the existing 2D validation geometry reusable.
     """
     if case_name in FALLBACK_CASES:
-        return _fallback_case(case_name, pillar_height, flight_height, pillar_radius=pillar_radius)
+        return _fallback_case(
+            case_name,
+            pillar_height,
+            flight_height,
+            pillar_radius=pillar_radius,
+            height_range=height_range,
+            height_seed=height_seed,
+        )
 
     try:
         from scripts.offline_scenarios.registry import get_case
         case = get_case(case_name)
     except (ModuleNotFoundError, KeyError):
-        return _fallback_case(case_name, pillar_height, flight_height, pillar_radius=pillar_radius)
+        return _fallback_case(
+            case_name,
+            pillar_height,
+            flight_height,
+            pillar_radius=pillar_radius,
+            height_range=height_range,
+            height_seed=height_seed,
+        )
 
     start = _vec3_to_array(case.start, fallback_z=flight_height)
     goal = _vec3_to_array(case.goal, fallback_z=flight_height)
 
-    obstacles = [
-        DynamicObstacle.from_2d_circle(item, height=pillar_height)
-        for item in case.obstacles
-    ]
+    height_rng = random.Random(height_seed)
+    obstacles = []
+    for item in case.obstacles:
+        obstacle_height = height_rng.uniform(height_range[0], height_range[1]) if height_range is not None else pillar_height
+        obstacles.append(DynamicObstacle.from_2d_circle(item, height=obstacle_height))
 
     for item in getattr(case, "dynamic_obstacles", ()):
         x, y = item.position_at(0.0)
@@ -222,15 +285,27 @@ def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3
     }
 
 
-def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_radius=None):
+def make_scene(
+    name="forest_gap",
+    pillar_height=5.0,
+    flight_height=3.0,
+    pillar_radius=None,
+    height_range=None,
+    height_seed=0,
+):
     if name in {
         "no_obstacle",
         "forest_gap",
+        "forest_gap_mixed_height",
         "s_curve_easy",
         "s_curve_medium",
+        "s_curve_mixed_height",
         "random_forest_sparse",
         "random_forest_medium",
         "random_forest_dense",
+        "random_forest_mixed_sparse",
+        "random_forest_mixed_medium",
+        "random_forest_mixed_dense",
         "single_pillar",
         "high_block",
         "test_side_bypass",
@@ -244,6 +319,8 @@ def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_r
             pillar_height=pillar_height,
             flight_height=flight_height,
             pillar_radius=pillar_radius,
+            height_range=height_range,
+            height_seed=height_seed,
         )
 
     if name == "forest_gap_high":
@@ -281,4 +358,6 @@ def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_r
         pillar_height=pillar_height,
         flight_height=flight_height,
         pillar_radius=pillar_radius,
+        height_range=height_range,
+        height_seed=height_seed,
     )
