@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 
-from feasibility import StaticSceneFeasibility
 from planner import MotionPrimitivePlanner
 from scene_generator import make_scene
 from visualize import plot_result
@@ -88,6 +87,15 @@ def _parse_height_range(values):
     return (low, high)
 
 
+def _check_feasibility(state, goal, obstacles, bounds, resolution, margin):
+    from feasibility import StaticSceneFeasibility
+
+    return StaticSceneFeasibility(
+        resolution=resolution,
+        safety_margin=margin,
+    ).evaluate(state, goal, obstacles, bounds=bounds)
+
+
 def _log_row(writer, step, sim_time, state, cost, debug, status, computation_time=0.0):
     if writer is None:
         return
@@ -166,7 +174,7 @@ def _collision_rate(path, obstacles, cost_model, dt):
     return float(collisions / len(path))
 
 
-def _build_metrics(path, obstacles, planner, dt, status, computation_times, feasibility):
+def _build_metrics(path, obstacles, planner, dt, status, computation_times, feasibility=None):
     min_clearance = _minimum_clearance(path, obstacles, planner.cost, dt)
     collision_rate = _collision_rate(path, obstacles, planner.cost, dt)
     success = status == "goal_reached" and collision_rate == 0.0
@@ -174,7 +182,7 @@ def _build_metrics(path, obstacles, planner, dt, status, computation_times, feas
     avg_comp = float(np.mean(computation_times)) if computation_times else 0.0
     max_comp = float(np.max(computation_times)) if computation_times else 0.0
 
-    return {
+    metrics = {
         "success_rate": 1.0 if success else 0.0,
         "collision_rate": collision_rate,
         "path_length": _path_length(path),
@@ -187,16 +195,22 @@ def _build_metrics(path, obstacles, planner, dt, status, computation_times, feas
         "max_computation_time": max_comp,
         "status": status,
         "steps": max(0, len(path) - 1),
-        "feasible_xy": bool(feasibility["feasible_xy"]),
-        "feasibility_reason": feasibility["reason"],
-        "xy_path_length": feasibility["xy_path_length"],
-        "xy_min_clearance": feasibility["xy_min_clearance"],
     }
+    if feasibility is not None:
+        metrics.update(
+            {
+                "feasible_xy": bool(feasibility["feasible_xy"]),
+                "feasibility_reason": feasibility["reason"],
+                "xy_path_length": feasibility["xy_path_length"],
+                "xy_min_clearance": feasibility["xy_min_clearance"],
+            }
+        )
+    return metrics
 
 
 def _print_metrics(metrics):
     print("metrics:")
-    for key in [
+    keys = [
         "success_rate",
         "collision_rate",
         "path_length",
@@ -212,7 +226,10 @@ def _print_metrics(metrics):
         "xy_path_length",
         "xy_min_clearance",
         "status",
-    ]:
+    ]
+    for key in keys:
+        if key not in metrics:
+            continue
         value = metrics[key]
         if isinstance(value, float):
             if np.isinf(value):
@@ -259,9 +276,9 @@ def run_simulation(
     summary_file=None,
     height_range=None,
     height_seed=0,
+    check_feasibility=False,
     feasibility_resolution=0.15,
     feasibility_margin=0.8,
-    require_feasible=False,
 ):
     scene = make_scene(
         scenario,
@@ -279,22 +296,29 @@ def run_simulation(
     history = [state.copy()]
     computation_times = []
     log_handle, log_writer = _open_log_writer(log_file)
-    feasibility = StaticSceneFeasibility(
-        resolution=feasibility_resolution,
-        safety_margin=feasibility_margin,
-    ).evaluate(state, goal, obstacles, bounds=scene.get("bounds"))
+    feasibility = None
+    if check_feasibility:
+        feasibility = _check_feasibility(
+            state,
+            goal,
+            obstacles,
+            scene.get("bounds"),
+            feasibility_resolution,
+            feasibility_margin,
+        )
 
     print("scenario:", scene["name"])
     print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
     print("dt:", dt, "predict_time:", predict_time)
-    print(
-        "feasibility:",
-        feasibility["feasible_xy"],
-        "reason:",
-        feasibility["reason"],
-        "xy_min_clearance:",
-        feasibility["xy_min_clearance"],
-    )
+    if feasibility is not None:
+        print(
+            "feasibility:",
+            feasibility["feasible_xy"],
+            "reason:",
+            feasibility["reason"],
+            "xy_min_clearance:",
+            feasibility["xy_min_clearance"],
+        )
     if height_range is not None:
         print("height range:", height_range, "height seed:", height_seed)
     if log_file is not None:
@@ -309,44 +333,40 @@ def run_simulation(
     try:
         _log_row(log_writer, -1, 0.0, state, 0.0, None, "start")
 
-        if require_feasible and not feasibility["feasible_xy"]:
-            status = "infeasible_map"
-            print("skip planning: infeasible static XY map")
-        else:
-            for step in range(max_steps):
-                tic = time.perf_counter()
-                best_traj, cost = planner.plan(state, goal, obstacles, predict_time=predict_time)
-                comp_time = time.perf_counter() - tic
-                computation_times.append(comp_time)
+        for step in range(max_steps):
+            tic = time.perf_counter()
+            best_traj, cost = planner.plan(state, goal, obstacles, predict_time=predict_time)
+            comp_time = time.perf_counter() - tic
+            computation_times.append(comp_time)
 
-                if best_traj is None:
-                    status = "no_feasible"
-                    print("no feasible trajectory")
-                    _log_row(log_writer, step, step * dt, state, cost, planner.last_debug, status, comp_time)
-                    break
+            if best_traj is None:
+                status = "no_feasible"
+                print("no feasible trajectory")
+                _log_row(log_writer, step, step * dt, state, cost, planner.last_debug, status, comp_time)
+                break
 
-                state = best_traj[1]
-                history.append(state.copy())
+            state = best_traj[1]
+            history.append(state.copy())
 
-                for obs in obstacles:
-                    obs.update(dt)
+            for obs in obstacles:
+                obs.update(dt)
 
-                status = "running"
-                if np.linalg.norm(state - goal) < 1.0:
-                    status = "goal_reached"
+            status = "running"
+            if np.linalg.norm(state - goal) < 1.0:
+                status = "goal_reached"
 
-                print(
-                    "step:", step,
-                    "state:", np.round(state, 3),
-                    "cost:", round(cost, 3),
-                    "comp_ms:", round(comp_time * 1000.0, 3),
-                    _format_debug(planner.last_debug),
-                )
-                _log_row(log_writer, step, (step + 1) * dt, state, cost, planner.last_debug, status, comp_time)
+            print(
+                "step:", step,
+                "state:", np.round(state, 3),
+                "cost:", round(cost, 3),
+                "comp_ms:", round(comp_time * 1000.0, 3),
+                _format_debug(planner.last_debug),
+            )
+            _log_row(log_writer, step, (step + 1) * dt, state, cost, planner.last_debug, status, comp_time)
 
-                if status == "goal_reached":
-                    print("goal reached")
-                    break
+            if status == "goal_reached":
+                print("goal reached")
+                break
     finally:
         if log_handle is not None:
             log_handle.close()
@@ -360,7 +380,7 @@ def run_simulation(
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
-    if show_plot and status != "infeasible_map":
+    if show_plot:
         plot_result(path, obstacles, goal)
     return path, obstacles, goal, metrics
 
@@ -373,9 +393,9 @@ def main():
     parser.add_argument("--pillar-radius", type=float, default=None)
     parser.add_argument("--height-range", nargs=2, type=float, default=None, metavar=("MIN", "MAX"))
     parser.add_argument("--height-seed", type=int, default=0)
+    parser.add_argument("--check-feasibility", action="store_true")
     parser.add_argument("--feasibility-resolution", type=float, default=0.15)
     parser.add_argument("--feasibility-margin", type=float, default=0.8)
-    parser.add_argument("--require-feasible", action="store_true")
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--dt", type=float, default=0.2)
     parser.add_argument("--predict-time", type=float, default=2.0)
@@ -397,9 +417,9 @@ def main():
         summary_file=args.summary_file,
         height_range=_parse_height_range(args.height_range),
         height_seed=args.height_seed,
+        check_feasibility=args.check_feasibility,
         feasibility_resolution=args.feasibility_resolution,
         feasibility_margin=args.feasibility_margin,
-        require_feasible=args.require_feasible,
     )
 
 
