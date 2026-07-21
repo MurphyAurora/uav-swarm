@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 import sys
 
 import numpy as np
@@ -19,9 +20,39 @@ DEFAULT_HEIGHTS = {
 
 DEFAULT_SINGLE_PILLAR_RADIUS = 1.6
 
-# Mirrored from scripts/offline_scenarios/static_cases.py::forest_gap.
-# This fallback keeps windows_3d_mp_test runnable without importing the full
-# xtd2_mission planner package used by the offline benchmark package.
+
+def _random_forest_case(seed, n, length=16.0, width=6.0, min_start_clear=1.6):
+    rng = random.Random(seed)
+    obstacles = []
+    attempts = 0
+    while len(obstacles) < n and attempts < n * 80:
+        attempts += 1
+        x = rng.uniform(2.0, length - 2.0)
+        y = rng.uniform(-width * 0.5, width * 0.5)
+        radius = rng.uniform(0.25, 0.55)
+        if x < min_start_clear and abs(y) < 1.2:
+            continue
+
+        ok = True
+        for obs_x, obs_y, obs_radius, _ in obstacles:
+            min_sep = radius + obs_radius + 0.35
+            if (x - obs_x) ** 2 + (y - obs_y) ** 2 < min_sep ** 2:
+                ok = False
+                break
+        if not ok:
+            continue
+        obstacles.append((x, y, radius, f"tree_{len(obstacles):02d}"))
+
+    return {
+        "start": [0.0, 0.0],
+        "goal": [length, 0.0],
+        "obstacles": obstacles,
+        "bounds": (-0.6, length + 0.5, -width * 0.5, width * 0.5),
+    }
+
+
+# Mirrored from scripts/offline_scenarios/static_cases.py and generated_cases.py.
+# This fallback keeps windows_3d_mp_test runnable without importing xtd2_mission.
 FALLBACK_CASES = {
     "no_obstacle": {
         "start": [0.0, 0.0],
@@ -39,7 +70,34 @@ FALLBACK_CASES = {
             (10.0, 1.25, 0.38, "p5"),
             (11.8, 0.15, 0.36, "p6"),
         ],
+        "bounds": (-0.6, 16.5, -3.4, 3.4),
     },
+    "s_curve_easy": {
+        "start": [0.0, 0.0],
+        "goal": [13.0, 0.0],
+        "obstacles": [
+            (3.0, -0.90, 0.50, "s1"),
+            (5.2, 0.90, 0.50, "s2"),
+            (7.4, -0.90, 0.50, "s3"),
+            (9.6, 0.90, 0.50, "s4"),
+        ],
+        "bounds": (-0.6, 13.5, -2.2, 2.2),
+    },
+    "s_curve_medium": {
+        "start": [0.0, 0.0],
+        "goal": [14.0, 0.0],
+        "obstacles": [
+            (2.8, -0.50, 0.58, "s1"),
+            (4.9, 0.55, 0.58, "s2"),
+            (7.0, -0.55, 0.58, "s3"),
+            (9.1, 0.55, 0.58, "s4"),
+            (11.2, -0.50, 0.58, "s5"),
+        ],
+        "bounds": (-0.6, 14.5, -2.1, 2.1),
+    },
+    "random_forest_sparse": _random_forest_case(seed=0, n=12, width=6.5),
+    "random_forest_medium": _random_forest_case(seed=1, n=20, width=6.0),
+    "random_forest_dense": _random_forest_case(seed=2, n=30, width=6.0),
     "single_pillar": {
         "start": [0.0, 0.0],
         "goal": [12.0, 0.0],
@@ -168,6 +226,11 @@ def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_r
     if name in {
         "no_obstacle",
         "forest_gap",
+        "s_curve_easy",
+        "s_curve_medium",
+        "random_forest_sparse",
+        "random_forest_medium",
+        "random_forest_dense",
         "single_pillar",
         "high_block",
         "test_side_bypass",
