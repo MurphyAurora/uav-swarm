@@ -6,13 +6,31 @@ from scene_generator import make_scene
 from visualize import plot_result
 
 
+def _format_debug(debug):
+    if not debug:
+        return "primitive: none"
+
+    velocity = debug["velocity"]
+    terms = debug["cost_terms"]
+    return (
+        f"primitive: vx={velocity[0]:.2f} vy={velocity[1]:.2f} vz={velocity[2]:.2f} "
+        f"height={terms['height_cost']:.3f} "
+        f"collision={terms['collision_cost']:.3f} "
+        f"transition={terms['transition_cost']:.3f} "
+        f"risk={terms['risk_cost']:.3f} "
+        f"risk_level={terms['obstacle_risk']:.3f}"
+    )
+
+
 def run_simulation(
     scenario="forest_gap",
     pillar_height=5.0,
     flight_height=3.0,
     pillar_radius=None,
     max_steps=300,
-    dt=0.1,
+    dt=0.2,
+    predict_time=2.0,
+    show_plot=True,
 ):
     scene = make_scene(
         scenario,
@@ -24,11 +42,12 @@ def run_simulation(
     goal = scene["goal"].copy()
     obstacles = scene["obstacles"]
 
-    planner = MotionPrimitivePlanner()
+    planner = MotionPrimitivePlanner(primitive_dt=dt)
     history = [state.copy()]
 
     print("scenario:", scene["name"])
     print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
+    print("dt:", dt, "predict_time:", predict_time)
     if obstacles:
         print(
             "first obstacle radius:", round(float(obstacles[0].radius), 3),
@@ -36,7 +55,7 @@ def run_simulation(
         )
 
     for step in range(max_steps):
-        best_traj, cost = planner.plan(state, goal, obstacles, predict_time=2.0)
+        best_traj, cost = planner.plan(state, goal, obstacles, predict_time=predict_time)
 
         if best_traj is None:
             print("no feasible trajectory")
@@ -50,8 +69,9 @@ def run_simulation(
 
         print(
             "step:", step,
-            "state:", state,
+            "state:", np.round(state, 3),
             "cost:", round(cost, 3),
+            _format_debug(planner.last_debug),
         )
 
         if np.linalg.norm(state - goal) < 1.0:
@@ -62,7 +82,8 @@ def run_simulation(
     print("max height:", round(float(np.max(path[:, 2])), 3))
     print("height variation:", round(float(np.sum(np.abs(np.diff(path[:, 2])))), 3))
 
-    plot_result(path, obstacles, goal)
+    if show_plot:
+        plot_result(path, obstacles, goal)
     return path, obstacles, goal
 
 
@@ -73,7 +94,9 @@ def main():
     parser.add_argument("--flight-height", type=float, default=3.0)
     parser.add_argument("--pillar-radius", type=float, default=None)
     parser.add_argument("--max-steps", type=int, default=300)
-    parser.add_argument("--dt", type=float, default=0.1)
+    parser.add_argument("--dt", type=float, default=0.2)
+    parser.add_argument("--predict-time", type=float, default=2.0)
+    parser.add_argument("--no-plot", action="store_true")
     args = parser.parse_args()
 
     run_simulation(
@@ -83,6 +106,8 @@ def main():
         pillar_radius=args.pillar_radius,
         max_steps=args.max_steps,
         dt=args.dt,
+        predict_time=args.predict_time,
+        show_plot=not args.no_plot,
     )
 
 
