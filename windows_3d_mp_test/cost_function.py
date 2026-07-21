@@ -179,7 +179,7 @@ class PrimitiveCost:
                 required_z = self._top_required_height(obs, t)
                 climb_height = max(0.0, required_z - self.reference_height)
                 climb_distance = climb_height * self.approach_speed_floor / max(self.vertical_speed_limit, 1e-6)
-                approach_distance = max(climb_distance, obs.radius + self.safe_distance)
+                approach_distance = climb_distance + obs.radius + self.safe_distance
 
                 horizontal_clearance = max(0.0, self._horizontal_clearance(point, obs, t))
                 progress = np.clip(1.0 - horizontal_clearance / max(approach_distance, 1e-6), 0.0, 1.0)
