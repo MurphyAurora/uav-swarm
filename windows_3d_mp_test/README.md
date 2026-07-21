@@ -13,6 +13,7 @@
 - risk-aware altitude weight scheduling
 - top clearance cost for over-obstacle motion
 - deterministic 3D validation scenes
+- lifted 2D benchmark maps as 3D cylinder scenes
 
 ## Structure
 
@@ -54,6 +55,24 @@ python windows_3d_mp_test\simulation.py --scenario test_side_bypass
 
 ```powershell
 python windows_3d_mp_test\simulation.py --scenario test_over_top
+```
+
+二维地图提升为三维柱体地图：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario s_curve_easy --pillar-height 5
+python windows_3d_mp_test\simulation.py --scenario s_curve_medium --pillar-height 5
+python windows_3d_mp_test\simulation.py --scenario forest_gap --pillar-height 5
+python windows_3d_mp_test\simulation.py --scenario random_forest_sparse --pillar-height 5
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 5
+python windows_3d_mp_test\simulation.py --scenario random_forest_dense --pillar-height 5
+```
+
+如果要测试更强的三维越障倾向，可以提高柱体高度：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario s_curve_medium --pillar-height 8
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 8
 ```
 
 单柱绕行/爬升验证。默认单柱半径为 `1.6`：
@@ -148,6 +167,7 @@ primitive: vx=... vy=... vz=... goal=... collision=... height=... transition=...
 - `no_obstacle`: 轨迹保持在 `z≈3`
 - `test_side_bypass`: 低障碍优先平滑水平绕行，避免随机爬升
 - `test_over_top`: 高障碍在水平空间受限时升高，满足顶部安全间隙，通过后下降恢复
+- `s_curve_*` / `forest_*`: 二维多障碍地图被提升为三维柱体后，检查连续绕行、局部越障和高度恢复
 - 禁止无限升高飞行
 - 禁止 climb/descend 高频震荡
 - 禁止大角度折线轨迹
