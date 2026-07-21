@@ -36,6 +36,8 @@ LOG_COLUMNS = [
     "status",
 ]
 
+GOAL_TOLERANCE = 1.0
+
 
 def _format_debug(debug):
     if not debug:
@@ -46,6 +48,8 @@ def _format_debug(debug):
     return (
         f"primitive: vx={velocity[0]:.2f} vy={velocity[1]:.2f} vz={velocity[2]:.2f} "
         f"goal={terms['goal_cost']:.3f} "
+        f"progress={terms.get('goal_progress_cost', 0.0):.3f} "
+        f"overshoot={terms.get('goal_overshoot_cost', 0.0):.3f} "
         f"collision={terms['collision_cost']:.3f} "
         f"altitude={terms['altitude_deviation_cost']:.3f} "
         f"vertical={terms['vertical_motion_cost']:.3f} "
@@ -381,6 +385,11 @@ def run_simulation(
         _log_row(log_writer, -1, 0.0, state, 0.0, None, "start")
 
         for step in range(max_steps):
+            if np.linalg.norm(state - goal) < GOAL_TOLERANCE:
+                status = "goal_reached"
+                print("goal reached")
+                break
+
             tic = time.perf_counter()
             best_traj, cost = planner.plan(state, goal, obstacles, predict_time=predict_time)
             comp_time = time.perf_counter() - tic
@@ -399,7 +408,7 @@ def run_simulation(
                 obs.update(dt)
 
             status = "running"
-            if np.linalg.norm(state - goal) < 1.0:
+            if np.linalg.norm(state - goal) < GOAL_TOLERANCE:
                 status = "goal_reached"
 
             print(
