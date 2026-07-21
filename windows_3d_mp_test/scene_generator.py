@@ -23,6 +23,11 @@ DEFAULT_SINGLE_PILLAR_RADIUS = 1.6
 # This fallback keeps windows_3d_mp_test runnable without importing the full
 # xtd2_mission planner package used by the offline benchmark package.
 FALLBACK_CASES = {
+    "no_obstacle": {
+        "start": [0.0, 0.0],
+        "goal": [12.0, 0.0],
+        "obstacles": [],
+    },
     "forest_gap": {
         "start": [0.0, 0.0],
         "goal": [16.0, 0.0],
@@ -39,6 +44,12 @@ FALLBACK_CASES = {
         "start": [0.0, 0.0],
         "goal": [12.0, 0.0],
         "obstacles": [(4.0, 0.0, DEFAULT_SINGLE_PILLAR_RADIUS, "pillar_1")],
+    },
+    "high_block": {
+        "start": [0.0, 0.0],
+        "goal": [15.0, 0.0],
+        "obstacles": [(7.5, 0.0, 2.0, "high_block_1")],
+        "height": DEFAULT_HEIGHTS["high"],
     },
 }
 
@@ -72,6 +83,7 @@ def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
             f"fallback case {case_name!r} is not available; available: {choices}"
         ) from exc
 
+    scenario_height = float(data.get("height", pillar_height))
     obstacles = []
     for x, y, radius, obstacle_id in data["obstacles"]:
         if case_name == "single_pillar" and pillar_radius is not None:
@@ -81,7 +93,7 @@ def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
                 x=x,
                 y=y,
                 radius=radius,
-                height=pillar_height,
+                height=scenario_height,
                 obstacle_id=obstacle_id,
             )
         )
@@ -101,7 +113,7 @@ def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3
     The XY obstacle distribution is preserved exactly. Only z=0 and obstacle
     height are added, which keeps the existing 2D validation geometry reusable.
     """
-    if case_name == "single_pillar":
+    if case_name in FALLBACK_CASES:
         return _fallback_case(case_name, pillar_height, flight_height, pillar_radius=pillar_radius)
 
     try:
@@ -140,7 +152,15 @@ def load_offline_case(case_name="forest_gap", pillar_height=5.0, flight_height=3
 
 
 def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_radius=None):
-    if name in {"forest_gap", "single_pillar", "narrow_corridor_easy", "narrow_corridor_medium", "narrow_corridor_hard"}:
+    if name in {
+        "no_obstacle",
+        "forest_gap",
+        "single_pillar",
+        "high_block",
+        "narrow_corridor_easy",
+        "narrow_corridor_medium",
+        "narrow_corridor_hard",
+    }:
         return load_offline_case(
             name,
             pillar_height=pillar_height,
