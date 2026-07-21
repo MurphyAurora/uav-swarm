@@ -14,10 +14,11 @@ def _format_debug(debug):
     terms = debug["cost_terms"]
     return (
         f"primitive: vx={velocity[0]:.2f} vy={velocity[1]:.2f} vz={velocity[2]:.2f} "
-        f"height={terms['height_cost']:.3f} "
+        f"goal={terms['goal_cost']:.3f} "
         f"collision={terms['collision_cost']:.3f} "
+        f"height={terms['height_cost']:.3f} "
         f"transition={terms['transition_cost']:.3f} "
-        f"risk={terms['risk_cost']:.3f} "
+        f"top_clearance={terms['top_clearance_cost']:.3f} "
         f"risk_level={terms['obstacle_risk']:.3f}"
     )
 
@@ -42,12 +43,14 @@ def run_simulation(
     goal = scene["goal"].copy()
     obstacles = scene["obstacles"]
 
-    planner = MotionPrimitivePlanner(primitive_dt=dt)
+    planner = MotionPrimitivePlanner(primitive_dt=dt, xy_bounds=scene.get("bounds"))
     history = [state.copy()]
 
     print("scenario:", scene["name"])
     print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
     print("dt:", dt, "predict_time:", predict_time)
+    if scene.get("bounds") is not None:
+        print("xy bounds:", scene["bounds"])
     if obstacles:
         print(
             "first obstacle radius:", round(float(obstacles[0].radius), 3),
