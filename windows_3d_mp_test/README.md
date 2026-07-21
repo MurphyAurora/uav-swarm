@@ -14,6 +14,7 @@
 - top clearance cost for over-obstacle motion
 - deterministic 3D validation scenes
 - lifted 2D benchmark maps as 3D cylinder scenes
+- CSV logs for trajectory and cost diagnostics
 
 ## Structure
 
@@ -93,6 +94,20 @@ python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius
 
 ```powershell
 python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot
+```
+
+同时保存 CSV 日志：
+
+```powershell
+python windows_3d_mp_test\simulation.py --scenario s_curve_easy --pillar-height 3.5 --no-plot --log-file logs\s_curve_easy_3d.csv
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 5 --no-plot --log-file logs\forest_medium_3d.csv
+python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot --log-file logs\test_over_top.csv
+```
+
+CSV 字段包括：
+
+```text
+step,time,x,y,z,vx,vy,vz,total_cost,goal_cost,collision_cost,height_cost,smooth_cost,energy_cost,transition_cost,top_clearance_cost,risk_level,status
 ```
 
 地面动态障碍验证：
