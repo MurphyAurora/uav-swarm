@@ -8,7 +8,7 @@ import numpy as np
 
 from planner import MotionPrimitivePlanner
 from scene_generator import make_scene
-from visualize import plot_result
+from visualize import plot_result, plot_scene
 
 
 LOG_COLUMNS = [
@@ -94,6 +94,17 @@ def _check_feasibility(state, goal, obstacles, bounds, resolution, margin):
         resolution=resolution,
         safety_margin=margin,
     ).evaluate(state, goal, obstacles, bounds=bounds)
+
+
+def _load_scene(scenario, pillar_height, flight_height, pillar_radius, height_range, height_seed):
+    return make_scene(
+        scenario,
+        pillar_height=pillar_height,
+        flight_height=flight_height,
+        pillar_radius=pillar_radius,
+        height_range=height_range,
+        height_seed=height_seed,
+    )
 
 
 def _log_row(writer, step, sim_time, state, cost, debug, status, computation_time=0.0):
@@ -263,6 +274,56 @@ def _print_obstacle_summary(obstacles):
     )
 
 
+def _print_scene_summary(scene, state, goal, obstacles, dt=None, predict_time=None, height_range=None, height_seed=0):
+    print("scenario:", scene["name"])
+    print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
+    if dt is not None and predict_time is not None:
+        print("dt:", dt, "predict_time:", predict_time)
+    if height_range is not None:
+        print("height range:", height_range, "height seed:", height_seed)
+    if scene.get("bounds") is not None:
+        print("xy bounds:", scene["bounds"])
+    _print_obstacle_summary(obstacles)
+
+
+def preview_scene(
+    scenario="forest_gap",
+    pillar_height=5.0,
+    flight_height=3.0,
+    pillar_radius=None,
+    height_range=None,
+    height_seed=0,
+    check_feasibility=False,
+    feasibility_resolution=0.15,
+    feasibility_margin=0.8,
+):
+    scene = _load_scene(scenario, pillar_height, flight_height, pillar_radius, height_range, height_seed)
+    state = scene["start"].copy()
+    goal = scene["goal"].copy()
+    obstacles = scene["obstacles"]
+    _print_scene_summary(scene, state, goal, obstacles, height_range=height_range, height_seed=height_seed)
+
+    if check_feasibility:
+        feasibility = _check_feasibility(
+            state,
+            goal,
+            obstacles,
+            scene.get("bounds"),
+            feasibility_resolution,
+            feasibility_margin,
+        )
+        print(
+            "feasibility:",
+            feasibility["feasible_xy"],
+            "reason:",
+            feasibility["reason"],
+            "xy_min_clearance:",
+            feasibility["xy_min_clearance"],
+        )
+
+    plot_scene(state, goal, obstacles, title=f"Scene preview: {scene['name']}")
+
+
 def run_simulation(
     scenario="forest_gap",
     pillar_height=5.0,
@@ -280,14 +341,7 @@ def run_simulation(
     feasibility_resolution=0.15,
     feasibility_margin=0.8,
 ):
-    scene = make_scene(
-        scenario,
-        pillar_height=pillar_height,
-        flight_height=flight_height,
-        pillar_radius=pillar_radius,
-        height_range=height_range,
-        height_seed=height_seed,
-    )
+    scene = _load_scene(scenario, pillar_height, flight_height, pillar_radius, height_range, height_seed)
     state = scene["start"].copy()
     goal = scene["goal"].copy()
     obstacles = scene["obstacles"]
@@ -307,9 +361,7 @@ def run_simulation(
             feasibility_margin,
         )
 
-    print("scenario:", scene["name"])
-    print("start:", state, "goal:", goal, "obstacles:", len(obstacles))
-    print("dt:", dt, "predict_time:", predict_time)
+    _print_scene_summary(scene, state, goal, obstacles, dt=dt, predict_time=predict_time, height_range=height_range, height_seed=height_seed)
     if feasibility is not None:
         print(
             "feasibility:",
@@ -319,15 +371,10 @@ def run_simulation(
             "xy_min_clearance:",
             feasibility["xy_min_clearance"],
         )
-    if height_range is not None:
-        print("height range:", height_range, "height seed:", height_seed)
     if log_file is not None:
         print("log file:", str(Path(log_file)))
     if summary_file is not None:
         print("summary file:", str(Path(summary_file)))
-    if scene.get("bounds") is not None:
-        print("xy bounds:", scene["bounds"])
-    _print_obstacle_summary(obstacles)
 
     status = "max_steps"
     try:
@@ -393,6 +440,7 @@ def main():
     parser.add_argument("--pillar-radius", type=float, default=None)
     parser.add_argument("--height-range", nargs=2, type=float, default=None, metavar=("MIN", "MAX"))
     parser.add_argument("--height-seed", type=int, default=0)
+    parser.add_argument("--preview-scene", action="store_true")
     parser.add_argument("--check-feasibility", action="store_true")
     parser.add_argument("--feasibility-resolution", type=float, default=0.15)
     parser.add_argument("--feasibility-margin", type=float, default=0.8)
@@ -403,6 +451,21 @@ def main():
     parser.add_argument("--summary-file", default=None)
     parser.add_argument("--no-plot", action="store_true")
     args = parser.parse_args()
+
+    height_range = _parse_height_range(args.height_range)
+    if args.preview_scene:
+        preview_scene(
+            scenario=args.scenario,
+            pillar_height=args.pillar_height,
+            flight_height=args.flight_height,
+            pillar_radius=args.pillar_radius,
+            height_range=height_range,
+            height_seed=args.height_seed,
+            check_feasibility=args.check_feasibility,
+            feasibility_resolution=args.feasibility_resolution,
+            feasibility_margin=args.feasibility_margin,
+        )
+        return
 
     run_simulation(
         scenario=args.scenario,
@@ -415,7 +478,7 @@ def main():
         show_plot=not args.no_plot,
         log_file=args.log_file,
         summary_file=args.summary_file,
-        height_range=_parse_height_range(args.height_range),
+        height_range=height_range,
         height_seed=args.height_seed,
         check_feasibility=args.check_feasibility,
         feasibility_resolution=args.feasibility_resolution,
