@@ -10,11 +10,12 @@
 - short-horizon kinematic rollout
 - spatio-temporal collision checking
 - previous-velocity transition cost
-- risk-aware altitude weight scheduling
+- altitude deviation cost around `z_ref=3`
+- vertical motion cost for `vz` and `delta_vz`
 - top clearance cost for over-obstacle motion
 - deterministic 3D validation scenes
 - lifted 2D benchmark maps as 3D cylinder scenes
-- CSV logs for trajectory and cost diagnostics
+- CSV logs and JSON summaries for trajectory/cost metrics
 
 ## Structure
 
@@ -96,18 +97,24 @@ python windows_3d_mp_test\simulation.py --scenario single_pillar --pillar-radius
 python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot
 ```
 
-同时保存 CSV 日志：
+同时保存 CSV 日志和 JSON 汇总：
 
 ```powershell
-python windows_3d_mp_test\simulation.py --scenario s_curve_easy --pillar-height 3.5 --no-plot --log-file logs\s_curve_easy_3d.csv
-python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 5 --no-plot --log-file logs\forest_medium_3d.csv
-python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot --log-file logs\test_over_top.csv
+python windows_3d_mp_test\simulation.py --scenario s_curve_easy --pillar-height 3.5 --no-plot --log-file logs\s_curve_easy_3d.csv --summary-file logs\s_curve_easy_3d_summary.json
+python windows_3d_mp_test\simulation.py --scenario random_forest_medium --pillar-height 5 --no-plot --log-file logs\forest_medium_3d.csv --summary-file logs\forest_medium_3d_summary.json
+python windows_3d_mp_test\simulation.py --scenario test_over_top --no-plot --log-file logs\test_over_top.csv --summary-file logs\test_over_top_summary.json
 ```
 
 CSV 字段包括：
 
 ```text
-step,time,x,y,z,vx,vy,vz,total_cost,goal_cost,collision_cost,height_cost,smooth_cost,energy_cost,transition_cost,top_clearance_cost,risk_level,status
+step,time,x,y,z,vx,vy,vz,total_cost,goal_cost,collision_cost,altitude_deviation_cost,height_cost,smooth_cost,energy_cost,vertical_motion_cost,transition_cost,top_clearance_cost,minimum_clearance,risk_level,computation_time_ms,status
+```
+
+JSON 汇总指标包括：
+
+```text
+success_rate,collision_rate,path_length,flight_time,minimum_clearance,max_altitude,height_variation,computation_time,avg_computation_time,max_computation_time,status,steps
 ```
 
 地面动态障碍验证：
@@ -145,9 +152,10 @@ Safe trajectory
 ```text
 J = wg*J_goal
   + wc*J_collision
-  + wh*J_altitude
+  + wa*J_altitude_deviation
   + ws*J_smooth
   + we*J_energy
+  + wv*J_vertical_motion
   + wt*J_transition
   + wtop*J_top_clearance
 ```
@@ -156,10 +164,11 @@ J = wg*J_goal
 
 - goal cost: final distance to goal
 - collision cost: cylinder/sphere obstacle clearance over rollout time
-- altitude cost: keep reference height with a risk-aware weight schedule
+- altitude deviation cost: keep `z` near `z_ref=3` and softly penalize too high/low flight
 - smooth cost: rollout smoothness
 - energy cost: velocity and climb/descent effort
-- transition cost: squared difference between current and previous primitive velocity
+- vertical motion cost: penalize `vz` and `delta_vz`
+- transition cost: squared difference between current and previous primitive velocity, with extra vertical-change penalty
 - top clearance cost: when inside the obstacle XY region, enforce `z > obstacle_height + safety_margin`
 
 ## Debug Output
@@ -167,15 +176,15 @@ J = wg*J_goal
 每一步会打印：
 
 ```text
-primitive: vx=... vy=... vz=... goal=... collision=... height=... transition=... top_clearance=... risk_level=...
+primitive: vx=... vy=... vz=... goal=... collision=... altitude=... vertical=... transition=... top_clearance=... min_clearance=... risk_level=...
 ```
 
 判断逻辑：
 
 - `test_side_bypass` 中 `vz` 长期接近 `0`：说明侧绕没有被无意义爬升污染
 - `top_clearance` 高且 `vz` 仍不升：说明越顶安全代价或预测时间还不够
-- `transition` 高且 `vz` 正负切换：说明动作连续性还需要继续加强
-- `max height` 很高但 `top_clearance` 已经低：说明高度上限或能量项需要继续调
+- `vertical` 或 `transition` 高且 `vz` 正负切换：说明动作连续性还需要继续加强
+- `max_altitude` 很高但 `top_clearance` 已经低：说明高度上限或能量项需要继续调
 
 ## Validation Criteria
 
