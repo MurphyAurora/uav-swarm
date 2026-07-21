@@ -19,6 +19,8 @@ class PrimitiveCost:
         low_risk_height_weight=1.0,
         high_risk_height_weight=0.15,
         top_safety_margin=0.8,
+        vertical_speed_limit=0.3,
+        approach_speed_floor=0.5,
         max_climb_height=9.6,
     ):
         self.goal_weight = float(goal_weight)
@@ -34,6 +36,8 @@ class PrimitiveCost:
         self.low_risk_height_weight = float(low_risk_height_weight)
         self.high_risk_height_weight = float(high_risk_height_weight)
         self.top_safety_margin = float(top_safety_margin)
+        self.vertical_speed_limit = float(vertical_speed_limit)
+        self.approach_speed_floor = float(approach_speed_floor)
         self.max_climb_height = float(max_climb_height)
 
     def goal_cost(self, trajectory, goal):
@@ -100,12 +104,7 @@ class PrimitiveCost:
         return False
 
     def obstacle_risk(self, trajectory, obstacles, times=None):
-        """Horizontal obstacle risk used only to modulate altitude stiffness.
-
-        The distance is measured from the cylinder surface in XY. A side-bypass
-        trajectory that has already opened horizontal clearance therefore keeps
-        a strong z=reference penalty instead of being encouraged to climb.
-        """
+        """Horizontal obstacle risk used only to modulate altitude stiffness."""
         if not obstacles:
             return 0.0
         if times is None:
@@ -147,8 +146,23 @@ class PrimitiveCost:
         ceiling_cost = np.mean(over_ceiling ** 2) * 25.0
         return float(cost / max(1, len(trajectory)) + ceiling_cost)
 
+    def _top_required_height(self, obs, t):
+        obs_pos = self._obs_position(obs, t)
+        return float(obs_pos[2] + obs.height + self.top_safety_margin)
+
+    def _inside_over_top_corridor(self, point, obs, t):
+        obs_pos = self._obs_position(obs, t)
+        lateral_distance = abs(point[1] - obs_pos[1])
+        return lateral_distance <= obs.radius + self.safe_distance
+
     def top_clearance_cost(self, trajectory, obstacles, times=None):
-        """Require safe altitude only when the rollout enters obstacle XY range."""
+        """Create an early climb ramp only for trajectories staying in the top corridor.
+
+        A side-bypass candidate moves out of the lateral corridor, so this term
+        fades out and height_cost pulls it back to reference height. A candidate
+        that remains horizontally aligned with the obstacle must start climbing
+        early enough to satisfy the top clearance before entering the cylinder.
+        """
         if not obstacles:
             return 0.0
         if times is None:
@@ -159,12 +173,23 @@ class PrimitiveCost:
             for obs in obstacles:
                 if getattr(obs, "is_flying", False):
                     continue
-                obs_pos = self._obs_position(obs, t)
-                inside_top_region = self._horizontal_distance(point, obs, t) <= obs.radius + self.safe_distance
-                if inside_top_region:
-                    required_z = obs_pos[2] + obs.height + self.top_safety_margin
-                    top_error = max(0.0, required_z - point[2])
-                    cost += top_error * top_error
+                if not self._inside_over_top_corridor(point, obs, t):
+                    continue
+
+                required_z = self._top_required_height(obs, t)
+                climb_height = max(0.0, required_z - self.reference_height)
+                climb_distance = climb_height * self.approach_speed_floor / max(self.vertical_speed_limit, 1e-6)
+                approach_distance = max(climb_distance, obs.radius + self.safe_distance)
+
+                horizontal_clearance = max(0.0, self._horizontal_clearance(point, obs, t))
+                progress = np.clip(1.0 - horizontal_clearance / max(approach_distance, 1e-6), 0.0, 1.0)
+                target_z = self.reference_height + progress * climb_height
+
+                if horizontal_clearance <= self.safe_distance:
+                    target_z = required_z
+
+                top_error = max(0.0, target_z - point[2])
+                cost += top_error * top_error
         return float(cost)
 
     def smooth_cost(self, trajectory):
