@@ -105,22 +105,55 @@ class PrimitiveCost:
                     risk = max(risk, 1.0 - clearance / risk_radius)
         return float(np.clip(risk, 0.0, 1.0))
 
-    def altitude_cost(self, trajectory, obstacles=None, times=None):
-        """Keep z near reference when safe, relax it near obstacle risk.
+    def _point_altitude_target(self, point, obstacles, t):
+        target = self.reference_height
+        risk = 0.0
+        risk_radius = max(self.safe_distance * 4.0, 1e-6)
 
-        Risk reduces the reference-height attraction so the planner is allowed
-        to climb. A soft ceiling still prevents unlimited altitude growth.
-        """
-        risk = self.obstacle_risk(trajectory, obstacles or [], times)
+        for obs in obstacles:
+            obs_pos = self._obs_position(obs, t)
+            clearance = self._clearance(point, obs, t)
+            if clearance < risk_radius:
+                obs_risk = 1.0 if clearance < 0.0 else 1.0 - clearance / risk_radius
+                risk = max(risk, obs_risk)
+
+                if not getattr(obs, "is_flying", False):
+                    top_clearance_height = obs_pos[2] + obs.height + self.safe_distance
+                    if top_clearance_height <= self.max_climb_height:
+                        target = max(target, top_clearance_height)
+
         if risk < self.risk_threshold:
-            effective_weight = 1.0
-        else:
-            effective_weight = max(0.10, 1.0 - 0.90 * risk)
+            return self.reference_height, risk
 
-        reference_error = np.mean((trajectory[:, 2] - self.reference_height) ** 2)
+        blend = np.clip((risk - self.risk_threshold) / (1.0 - self.risk_threshold), 0.0, 1.0)
+        target = (1.0 - blend) * self.reference_height + blend * target
+        return float(target), float(risk)
+
+    def altitude_cost(self, trajectory, obstacles=None, times=None):
+        """Keep z near reference when safe and raise the target near climbable risk.
+
+        Safe flight is attracted to reference_height. Near a cylinder that can be
+        cleared vertically, the reference-height term is relaxed and a blended
+        target is lifted toward obstacle_top + safe_distance. Once the rollout is
+        away from risk, the target returns to reference_height.
+        """
+        obstacles = obstacles or []
+        if times is None:
+            times = np.zeros(len(trajectory))
+
+        cost = 0.0
+        for point, t in zip(trajectory, times):
+            target, risk = self._point_altitude_target(point, obstacles, t)
+            keep_reference_weight = 1.0 if risk < self.risk_threshold else max(0.15, 1.0 - 0.85 * risk)
+            climb_target_weight = max(0.0, risk - self.risk_threshold)
+
+            reference_error = (point[2] - self.reference_height) ** 2
+            target_error = (point[2] - target) ** 2
+            cost += keep_reference_weight * reference_error + climb_target_weight * target_error
+
         over_ceiling = np.maximum(0.0, trajectory[:, 2] - self.max_climb_height)
         ceiling_cost = np.mean(over_ceiling ** 2) * 25.0
-        return float(effective_weight * reference_error + ceiling_cost)
+        return float(cost / max(1, len(trajectory)) + ceiling_cost)
 
     def smooth_cost(self, trajectory):
         if len(trajectory) < 3:
