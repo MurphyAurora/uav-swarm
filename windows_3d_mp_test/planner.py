@@ -16,6 +16,7 @@ class MotionPrimitivePlanner:
         vz_range=(-0.3, 0.3),
         primitive_dt=0.2,
         xy_bounds=None,
+        goal_slowdown_distance=3.0,
     ):
         self.cost = PrimitiveCost(max_climb_height=max_altitude - 0.2)
         self.min_altitude = float(min_altitude)
@@ -25,13 +26,21 @@ class MotionPrimitivePlanner:
         self.vz_range = tuple(float(v) for v in vz_range)
         self.primitive_dt = float(primitive_dt)
         self.xy_bounds = xy_bounds
+        self.goal_slowdown_distance = float(goal_slowdown_distance)
         self.previous_velocity = None
         self.last_debug = None
 
-    def generate_primitives(self, state, horizon=2.0):
+    def _goal_aware_vx_range(self, state, goal):
+        distance_to_goal = float(np.linalg.norm(np.asarray(goal, dtype=float) - np.asarray(state, dtype=float)))
+        if distance_to_goal > self.goal_slowdown_distance:
+            return self.vx_range
+        return (-0.5, min(1.0, self.vx_range[1]))
+
+    def generate_primitives(self, state, goal=None, horizon=2.0):
+        vx_range = self.vx_range if goal is None else self._goal_aware_vx_range(state, goal)
         return generate_velocity_primitives(
             state,
-            vx_range=self.vx_range,
+            vx_range=vx_range,
             vy_range=self.vy_range,
             vz_range=self.vz_range,
             horizon=horizon,
@@ -79,7 +88,7 @@ class MotionPrimitivePlanner:
         self.last_debug = None
 
     def plan(self, state, goal, obstacles, predict_time=2.0, update_previous=True):
-        candidates = self.generate_primitives(state, horizon=predict_time)
+        candidates = self.generate_primitives(state, goal=goal, horizon=predict_time)
 
         best = None
         best_terms = None
