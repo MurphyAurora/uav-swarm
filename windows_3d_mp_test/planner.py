@@ -1,7 +1,7 @@
 import numpy as np
 
 from cost_function import PrimitiveCost
-from primitive import generate_velocity_primitives
+from primitive import generate_goal_directed_velocity_primitives, generate_velocity_primitives
 
 
 class MotionPrimitivePlanner:
@@ -11,8 +11,8 @@ class MotionPrimitivePlanner:
         self,
         min_altitude=0.5,
         max_altitude=9.8,
-        vx_range=(0.5, 1.5),
-        vy_range=(-0.5, 0.5),
+        forward_speed_range=(0.3, 1.4),
+        lateral_speed_range=(-0.45, 0.45),
         vz_range=(-0.3, 0.3),
         primitive_dt=0.2,
         xy_bounds=None,
@@ -21,8 +21,8 @@ class MotionPrimitivePlanner:
         self.cost = PrimitiveCost(max_climb_height=max_altitude - 0.2)
         self.min_altitude = float(min_altitude)
         self.max_altitude = float(max_altitude)
-        self.vx_range = tuple(float(v) for v in vx_range)
-        self.vy_range = tuple(float(v) for v in vy_range)
+        self.forward_speed_range = tuple(float(v) for v in forward_speed_range)
+        self.lateral_speed_range = tuple(float(v) for v in lateral_speed_range)
         self.vz_range = tuple(float(v) for v in vz_range)
         self.primitive_dt = float(primitive_dt)
         self.xy_bounds = xy_bounds
@@ -30,18 +30,28 @@ class MotionPrimitivePlanner:
         self.previous_velocity = None
         self.last_debug = None
 
-    def _goal_aware_vx_range(self, state, goal):
+    def _goal_aware_forward_range(self, state, goal):
         distance_to_goal = float(np.linalg.norm(np.asarray(goal, dtype=float) - np.asarray(state, dtype=float)))
         if distance_to_goal > self.goal_slowdown_distance:
-            return self.vx_range
-        return (-0.5, min(1.0, self.vx_range[1]))
+            return self.forward_speed_range
+        return (0.0, min(0.8, self.forward_speed_range[1]))
 
     def generate_primitives(self, state, goal=None, horizon=2.0):
-        vx_range = self.vx_range if goal is None else self._goal_aware_vx_range(state, goal)
-        return generate_velocity_primitives(
+        if goal is None:
+            return generate_velocity_primitives(
+                state,
+                vx_range=self.forward_speed_range,
+                vy_range=self.lateral_speed_range,
+                vz_range=self.vz_range,
+                horizon=horizon,
+                dt=self.primitive_dt,
+            )
+
+        return generate_goal_directed_velocity_primitives(
             state,
-            vx_range=vx_range,
-            vy_range=self.vy_range,
+            goal,
+            forward_speed_range=self._goal_aware_forward_range(state, goal),
+            lateral_speed_range=self.lateral_speed_range,
             vz_range=self.vz_range,
             horizon=horizon,
             dt=self.primitive_dt,
