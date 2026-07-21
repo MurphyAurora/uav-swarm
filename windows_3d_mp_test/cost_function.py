@@ -7,6 +7,8 @@ class PrimitiveCost:
     def __init__(
         self,
         goal_weight=1.0,
+        progress_weight=12.0,
+        overshoot_weight=40.0,
         collision_weight=80.0,
         altitude_weight=1.6,
         smooth_weight=1.2,
@@ -26,6 +28,8 @@ class PrimitiveCost:
         min_climb_height=0.5,
     ):
         self.goal_weight = float(goal_weight)
+        self.progress_weight = float(progress_weight)
+        self.overshoot_weight = float(overshoot_weight)
         self.collision_weight = float(collision_weight)
         self.altitude_weight = float(altitude_weight)
         self.smooth_weight = float(smooth_weight)
@@ -46,6 +50,22 @@ class PrimitiveCost:
 
     def goal_cost(self, trajectory, goal):
         return float(np.linalg.norm(trajectory[-1] - goal))
+
+    def goal_progress_cost(self, trajectory, goal):
+        current_distance = np.linalg.norm(trajectory[0] - goal)
+        terminal_distance = np.linalg.norm(trajectory[-1] - goal)
+        no_progress = max(0.0, terminal_distance - current_distance)
+        return float(no_progress * no_progress)
+
+    def goal_overshoot_cost(self, trajectory, goal):
+        start_to_goal = goal - trajectory[0]
+        distance = np.linalg.norm(start_to_goal)
+        if distance < 1e-6:
+            return 0.0
+        goal_axis = start_to_goal / distance
+        terminal_beyond_goal = np.dot(trajectory[-1] - goal, goal_axis)
+        overshoot = max(0.0, terminal_beyond_goal)
+        return float(overshoot * overshoot)
 
     def _obs_position(self, obs, t):
         if hasattr(obs, "position_at"):
@@ -234,6 +254,8 @@ class PrimitiveCost:
 
         terms = {
             "goal_cost": self.goal_cost(trajectory, goal),
+            "goal_progress_cost": self.goal_progress_cost(trajectory, goal),
+            "goal_overshoot_cost": self.goal_overshoot_cost(trajectory, goal),
             "collision_cost": self.collision_cost(trajectory, obstacles, times),
             "altitude_deviation_cost": self.altitude_deviation_cost(trajectory, obstacles, times),
             "smooth_cost": self.smooth_cost(trajectory),
@@ -245,6 +267,8 @@ class PrimitiveCost:
         terms["height_cost"] = terms["altitude_deviation_cost"]
         total = (
             self.goal_weight * terms["goal_cost"]
+            + self.progress_weight * terms["goal_progress_cost"]
+            + self.overshoot_weight * terms["goal_overshoot_cost"]
             + self.collision_weight * terms["collision_cost"]
             + self.altitude_weight * terms["altitude_deviation_cost"]
             + self.smooth_weight * terms["smooth_cost"]
