@@ -51,6 +51,19 @@ FALLBACK_CASES = {
         "obstacles": [(7.5, 0.0, 2.0, "high_block_1")],
         "height": DEFAULT_HEIGHTS["high"],
     },
+    "test_side_bypass": {
+        "start": [0.0, 0.0],
+        "goal": [12.0, 0.0],
+        "obstacles": [(5.0, 0.0, 1.0, "side_bypass_pillar")],
+        "height": 3.0,
+    },
+    "test_over_top": {
+        "start": [0.0, 0.0],
+        "goal": [15.0, 0.0],
+        "obstacles": [(7.5, 0.0, 2.0, "over_top_pillar")],
+        "height": 8.0,
+        "bounds": (0.0, 15.5, -1.2, 1.2),
+    },
 }
 
 
@@ -103,7 +116,7 @@ def _fallback_case(case_name, pillar_height, flight_height, pillar_radius=None):
         "start": np.array([data["start"][0], data["start"][1], flight_height], dtype=float),
         "goal": np.array([data["goal"][0], data["goal"][1], flight_height], dtype=float),
         "obstacles": obstacles,
-        "bounds": None,
+        "bounds": data.get("bounds"),
     }
 
 
@@ -157,6 +170,8 @@ def make_scene(name="forest_gap", pillar_height=5.0, flight_height=3.0, pillar_r
         "forest_gap",
         "single_pillar",
         "high_block",
+        "test_side_bypass",
+        "test_over_top",
         "narrow_corridor_easy",
         "narrow_corridor_medium",
         "narrow_corridor_hard",
